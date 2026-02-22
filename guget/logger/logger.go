@@ -67,6 +67,6 @@ func Error(format string, v ...interface{}) {
 	}
 }
 
-func Fatal(v ...interface{}) {
-	stdlog.Fatal(v...)
+func Fatal(format string, v ...interface{}) {
+	stdlog.Fatalf(format, v...)
 }
