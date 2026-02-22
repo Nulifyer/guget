@@ -8,7 +8,7 @@ import (
 type Level int
 
 const (
-	LevelOff Level = iota
+	LevelNone Level = iota
 	LevelError
 	LevelWarn
 	LevelInfo
@@ -16,7 +16,7 @@ const (
 	LevelTrace
 )
 
-var level = LevelOff
+var level = LevelNone
 var colorEnabled = true
 
 func SetLevel(l Level) { level = l }

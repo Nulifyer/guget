@@ -6,11 +6,12 @@
             "type": "go",
             "request": "launch",
             "mode": "debug",
-            "program": "main.go",
+            "program": "${workspaceFolder}/src/guget/main.go",
             "console": "integratedTerminal",
             "internalConsoleOptions": "neverOpen",
             "preLaunchTask": "create-debug-dotnet",
             "postDebugTask": "remove-debug-dotnet",
+            "cwd": "${workspaceFolder}",
             "args": [
                 "-p ./debug-dotnet"
             ]

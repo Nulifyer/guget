@@ -4,12 +4,12 @@
         {
             "label": "create-debug-dotnet",
             "type": "shell",
-            "command": "cp -r test-dotnet debug-dotnet"
+            "command": "cp -r ${workspaceFolder}/test-dotnet ${workspaceFolder}/debug-dotnet"
         },
         {
             "label": "remove-debug-dotnet",
             "type": "shell",
-            "command": "rm -r debug-dotnet"
+            "command": "rm -r ${workspaceFolder}/debug-dotnet"
         }
     ]
 }
