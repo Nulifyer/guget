@@ -1,9 +1,8 @@
 package main
 
 import (
-	"fmt"
 	"os"
-	"strings"
+	"path/filepath"
 
 	// tea "github.com/charmbracelet/bubbletea"
 	"arger"
@@ -11,7 +10,7 @@ import (
 )
 
 // -------------------------------
-// Flag definitions and parsing
+// Setup & CLI Flags
 // --------------------------------
 const (
 	Flag_NoColor    = "no-color"
@@ -33,10 +32,14 @@ func BuildFlags(flags map[string]arger.IParsedFlag) BuiltFlags {
 	}
 }
 
-// -------------------------------
-// Main
-// --------------------------------
-func main() {
+func Init() BuiltFlags {
+	logger.SetColor(false)
+	env_log_level := os.Getenv("LOG_LEVEL")
+	if env_log_level != "" {
+		logger.SetLevel(logger.ParseLevel(env_log_level))
+	}
+
+	// register flags
 	arger.RegisterFlag(arger.Flag[bool]{
 		Name:        Flag_NoColor,
 		Aliases:     []string{"-nc", "--no-color"},
@@ -63,32 +66,27 @@ func main() {
 		Description: "Set the target project directory (defaults to current working directory)",
 	})
 
-	builtFlags := BuildFlags(arger.Parse())
-	fmt.Printf("%v", builtFlags)
+	// build flags
+	parsedFlags, _ := arger.Parse()
+	builtFlags := BuildFlags(parsedFlags)
 
 	// configure logger
-	switch strings.ToLower(builtFlags.Verbosity) {
-	case "none":
-		logger.SetLevel(logger.LevelNone)
-	case "error", "err":
-		logger.SetLevel(logger.LevelError)
-	case "", "warn", "warning":
-		logger.SetLevel(logger.LevelWarn)
-	case "info":
-		logger.SetLevel(logger.LevelInfo)
-	case "debug", "dbg":
-		logger.SetLevel(logger.LevelDebug)
-	case "trace", "trc":
-		logger.SetLevel(logger.LevelTrace)
-	default:
-		logger.Warn("Invalid verbosity level '%s', defaulting to 'warn'", builtFlags.Verbosity)
-		logger.SetLevel(logger.LevelWarn)
-	}
+	logger.SetLevel(logger.ParseLevel(builtFlags.Verbosity))
+	logger.SetColor(!builtFlags.NoColor)
 
-	// test logging
-	logger.Trace("This is a trace message")
-	logger.Debug("This is a debug message")
-	logger.Info("This is an info message")
-	logger.Warn("This is a warning message")
-	logger.Error("This is an error message")
+	return builtFlags
+}
+
+// -------------------------------
+// Main
+// --------------------------------
+func main() {
+	builtFlags := Init() // setup flags and logger
+
+	// get full path
+	fullProjectPath, err := filepath.Abs(builtFlags.ProjectDir)
+	if err != nil {
+		logger.Fatal("Couldn't get absolute path for project directory: %v", err)
+	}
+	logger.Info("Starting GoNugetTui with project directory: %s", fullProjectPath)
 }

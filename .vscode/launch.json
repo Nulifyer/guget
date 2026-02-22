@@ -2,7 +2,27 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Launch Package",
+            "name": "Debug - Debug",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "program": "${workspaceFolder}/guget/main.go",
+            "console": "integratedTerminal",
+            "internalConsoleOptions": "neverOpen",
+            "preLaunchTask": "create-debug-dotnet",
+            "postDebugTask": "remove-debug-dotnet",
+            "cwd": "${workspaceFolder}",
+            "env": {
+                "LOG_LEVEL": "trace"
+            },
+            "args": [
+                "-v", "dbg",
+                "-p", "./debug-dotnet",
+                "--", "--extra-arg1", "value1", "--extra-arg2", "value2", "-p", "./fake-project"
+            ]
+        },
+        {
+            "name": "Debug - Normal",
             "type": "go",
             "request": "launch",
             "mode": "debug",
@@ -13,7 +33,7 @@
             "postDebugTask": "remove-debug-dotnet",
             "cwd": "${workspaceFolder}",
             "args": [
-                "-v", "dbg",
+                "-v", "trc",
                 "-p", "./debug-dotnet",
             ]
         }

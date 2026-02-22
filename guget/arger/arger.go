@@ -206,7 +206,6 @@ func DurationFlag(name string) Flag[time.Duration] {
 func RegisterFlag(f IFlag) {
 	validateFlag(f)
 
-	registeredFlags[f.GetName()] = f
 	for _, alias := range f.GetAliases() {
 		if _, exists := aliasToFlag[alias]; exists {
 			flagError(f, "Alias %s is already registered for another flag", alias)
@@ -217,6 +216,8 @@ func RegisterFlag(f IFlag) {
 		}
 		aliasToFlag[alias] = f
 	}
+	registeredFlags[f.GetName()] = f
+	logger.Debug("Registered flag %s with aliases %v", f.GetName(), f.GetAliases())
 }
 
 func validateFlag(f IFlag) {
@@ -234,33 +235,40 @@ func validateFlag(f IFlag) {
 	}
 }
 
-func Parse() map[string]IParsedFlag {
+func Parse() (map[string]IParsedFlag, []string) {
 	if len(registeredFlags) == 0 && len(os.Args) > 1 {
-		return nil
+		return nil, nil
 	}
 
 	args := os.Args[1:]
+	logger.Trace("Start Parse args: %v", args)
 
 	var (
 		parsedFlags      = make(map[string]IParsedFlag)
 		positionalValues []string
 		lastFlag         IFlag
-		isSwitch         bool
+		extraArgs        []string
+		lastPos          = 0
 	)
 
-	for _, arg := range args {
-		if arg == "--help" || arg == "-h" {
+	for pos, arg := range args {
+		if arg == "--" {
+			if lastPos+2 <= len(args) {
+				extraArgs = append(extraArgs, args[lastPos+2:]...)
+			}
+			break
+		} else if arg == "--help" || arg == "-h" {
 			PrintUsage()
 			os.Exit(0)
 		} else if strings.HasPrefix(arg, "--") || strings.HasPrefix(arg, "-") {
 			if mapped, exists := aliasToFlag[arg]; exists {
 				lastFlag = mapped
-				isSwitch = mapped.GetFlagType() == "bool" && mapped.(*Flag[bool]) != nil
 
 				// handle switch flags directly
 				if _, ok := lastFlag.(Flag[bool]); ok {
 					if lastFlag.(Flag[bool]).Parser == nil {
 						parsedFlags[lastFlag.GetName()] = ParsedFlag[bool]{flag: func() *Flag[bool] { f := lastFlag.(Flag[bool]); return &f }(), Value: true}
+						logger.Debug("Set switch flag %s = true", lastFlag.GetName())
 						lastFlag = nil
 					}
 				}
@@ -268,18 +276,19 @@ func Parse() map[string]IParsedFlag {
 				usageError("Unknown flag: %s", arg)
 			}
 		} else if lastFlag != nil {
+			logger.Trace("Parsing value %s for flag %s", arg, lastFlag.GetName())
 			pf, err := lastFlag.parse(arg)
 			if err != nil {
 				flagError(lastFlag, "Failed to parse value. %s", err.Error())
 			}
 			parsedFlags[lastFlag.GetName()] = pf
+			logger.Debug("Parsed flag %s = %v", lastFlag.GetName(), pf.GetValue())
 			lastFlag = nil
 		} else {
 			positionalValues = append(positionalValues, arg)
 		}
+		lastPos = pos
 	}
-
-	_ = isSwitch
 
 	if lastFlag != nil {
 		flagError(lastFlag, "Flag --%s expects a value but none was provided", lastFlag.GetName())
@@ -290,11 +299,13 @@ func Parse() map[string]IParsedFlag {
 		found := false
 		for _, flag := range registeredFlags {
 			if _, exists := parsedFlags[flag.GetName()]; !exists && flag.GetPositional() {
+				logger.Trace("Parsing positional value %s for flag %s", value, flag.GetName())
 				pf, err := flag.parse(value)
 				if err != nil {
 					flagError(flag, "Failed to parse value. %s", err.Error())
 				}
 				parsedFlags[flag.GetName()] = pf
+				logger.Debug("Assigned positional %s = %v", flag.GetName(), pf.GetValue())
 				found = true
 				break
 			}
@@ -309,6 +320,7 @@ func Parse() map[string]IParsedFlag {
 		if _, exists := parsedFlags[flag.GetName()]; !exists {
 			if def := flag.defaultParsed(); def != nil {
 				parsedFlags[flag.GetName()] = def
+				logger.Debug("Applying default for flag %s = %v", flag.GetName(), def.GetValue())
 			}
 		}
 	}
@@ -325,7 +337,7 @@ func Parse() map[string]IParsedFlag {
 	aliasToFlag = nil
 	registeredFlags = nil
 
-	return parsedFlags
+	return parsedFlags, extraArgs
 }
 
 // -------------------------------
