@@ -1,0 +1,37 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <Authors>https://github.com/Nulifyer</Authors>
+    <Company></Company>
+    <Description>
+    This library is used to create application using a type of SQL database without the need to write queries as strings
+    and maintain a strong set of data models that represent the data. This makes it much easier to develope complex database
+    queries without the need of the developer to perform complex operations and it easier to update the code as all the
+    developer needs to do is update the one data model and all queries will be updated.
+    </Description>
+    <Copyright></Copyright>
+    <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <SignAssembly>false</SignAssembly>
+    <PackageId>SqlLinqer</PackageId>
+    <Product>SqlLinqer</Product>
+    <Version>2.1.0</Version>
+    <AssemblyVersion>$(Package Version)</AssemblyVersion>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <RepositoryUrl>https://github.com/Nulifyer/SqlLinqer</RepositoryUrl>
+    <RepositoryType>GitHub</RepositoryType>
+    <PackageTags>mysql sql csharp postgresql database-connector</PackageTags>
+    <FileVersion>$(Package Version)</FileVersion>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
+  </ItemGroup>
+
+  <ItemGroup>
+      <None Include="README.md" Pack="true" PackagePath="\"/>
+  </ItemGroup>
+
+</Project>

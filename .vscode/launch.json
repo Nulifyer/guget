@@ -9,6 +9,11 @@
             "program": "main.go",
             "console": "integratedTerminal",
             "internalConsoleOptions": "neverOpen",
+            "preLaunchTask": "create-debug-dotnet",
+            "postDebugTask": "remove-debug-dotnet",
+            "args": [
+                "-p ./debug-dotnet"
+            ]
         }
     ]
 }

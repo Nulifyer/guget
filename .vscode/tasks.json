@@ -1,0 +1,15 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "create-debug-dotnet",
+            "type": "shell",
+            "command": "cp -r test-dotnet debug-dotnet"
+        },
+        {
+            "label": "remove-debug-dotnet",
+            "type": "shell",
+            "command": "rm -r debug-dotnet"
+        }
+    ]
+}

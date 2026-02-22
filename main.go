@@ -3,10 +3,14 @@ package main
 // A simple Bubble Tea TUI with a left column list and right detail pane.
 
 import (
+	"flag"
 	"fmt"
 	"log"
+	stdlog "log"
+	"os"
 	"strings"
 
+	logger "./logger"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -16,11 +20,72 @@ type Item struct {
 }
 
 type model struct {
-	items  []Item
-	cursor int
+	items   []Item
+	cursor  int
+	project string
 }
 
+// args
+var (
+	projectDir string
+)
+
 func main() {
+	// Handle optional -v flag which can be either '-v' (debug) or '-v=level'
+	var requestedLevel string
+	// inspect raw args and strip any -v or -v=... entries before flag.Parse
+
+	if len(raw) > 1 {
+		newArgs := []string{raw[0]}
+		for i := 1; i < len(raw); i++ {
+			a := raw[i]
+			if a == "-v" {
+				requestedLevel = "debug"
+				continue
+			}
+			if strings.HasPrefix(a, "-v=") {
+				requestedLevel = strings.TrimPrefix(a, "-v=")
+				continue
+			}
+			newArgs = append(newArgs, a)
+		}
+		os.Args = newArgs
+	}
+
+	flag.StringVar(&projectDir, "p", "", "Path to the project/solution directory")
+	flag.Parse()
+
+	// map requestedLevel to applog.Level
+	switch strings.ToLower(requestedLevel) {
+	case "off":
+		logger.SetLevel(logger.LevelOff)
+	case "error", "err":
+		logger.SetLevel(logger.LevelError)
+	case "", "warn", "warning":
+		logger.SetLevel(logger.LevelWarn)
+	case "info":
+		logger.SetLevel(logger.LevelInfo)
+	case "debug", "dbg":
+		logger.SetLevel(logger.LevelDebug)
+	default:
+		logger.SetLevel(logger.LevelOff)
+	}
+
+	if projectDir == "" {
+		// default to working directory
+		wd, err := os.Getwd()
+		if err != nil {
+			stdlog.Fatal(err)
+		}
+		projectDir = wd
+	}
+
+	csprojFiles, err := findCsprojFiles(projectDir)
+	if err != nil {
+		stdlog.Printf("Found no .csproj files in the specified directory: %v", err)
+	}
+	stdlog.Printf("Found .csproj files: %v\n", csprojFiles)
+
 	items := []Item{
 		{Name: "Full Solution", Active: false},
 		{Name: "Project A", Active: false},
@@ -28,7 +93,7 @@ func main() {
 		{Name: "Package C", Active: false},
 	}
 
-	m := &model{items: items, cursor: 0}
+	m := &model{items: items, cursor: 0, project: projectDir}
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
 		log.Fatal(err)
