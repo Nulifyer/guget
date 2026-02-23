@@ -4,11 +4,13 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"time"
 
 	"logger"
 
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/spinner"
+	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -58,6 +60,23 @@ type writeResultMsg struct {
 
 type restoreResultMsg struct {
 	err error
+}
+
+type searchDebounceMsg struct {
+	id    int
+	query string
+}
+
+type searchResultsMsg struct {
+	results []SearchResult
+	query   string
+	err     error
+}
+
+type packageFetchedMsg struct {
+	info   *PackageInfo
+	source string
+	err    error
 }
 
 // ─────────────────────────────────────────────
@@ -146,11 +165,13 @@ func (r packageRow) statusColor() lipgloss.Color {
 // ─────────────────────────────────────────────
 
 type versionPicker struct {
-	active   bool
-	pkgName  string
-	versions []PackageVersion
-	cursor   int
-	targets  Set[TargetFramework]
+	active        bool
+	pkgName       string
+	versions      []PackageVersion
+	cursor        int
+	targets       Set[TargetFramework]
+	addMode       bool
+	targetProject *ParsedProject
 }
 
 func (vp *versionPicker) selectedVersion() *PackageVersion {
@@ -158,6 +179,24 @@ func (vp *versionPicker) selectedVersion() *PackageVersion {
 		return &vp.versions[vp.cursor]
 	}
 	return nil
+}
+
+// ─────────────────────────────────────────────
+// Package search overlay
+// ─────────────────────────────────────────────
+
+type packageSearch struct {
+	active          bool
+	input           textinput.Model
+	debounceID      int
+	lastQuery       string
+	results         []SearchResult
+	cursor          int
+	loading         bool
+	err             error
+	fetchingVersion bool
+	fetchedInfo     *PackageInfo
+	fetchedSource   string
 }
 
 // ─────────────────────────────────────────────
@@ -170,6 +209,7 @@ type Model struct {
 	focus  focusPanel
 
 	parsedProjects []*ParsedProject
+	nugetServices  []*NugetService
 	results        map[string]nugetResult
 	loading        bool
 	spinner        spinner.Model
@@ -183,6 +223,7 @@ type Model struct {
 	detailView viewport.Model
 
 	picker  versionPicker
+	search  packageSearch
 	noColor bool
 
 	statusLine  string
@@ -190,7 +231,7 @@ type Model struct {
 	restoring   bool
 }
 
-func NewModel(parsedProjects []*ParsedProject, noColor bool) Model {
+func NewModel(parsedProjects []*ParsedProject, nugetServices []*NugetService, noColor bool) Model {
 	if noColor {
 		lipgloss.SetColorProfile(0)
 	}
@@ -229,13 +270,20 @@ func NewModel(parsedProjects []*ParsedProject, noColor bool) Model {
 
 	dv := viewport.New(40, 20)
 
+	ti := textinput.New()
+	ti.Placeholder = "Type a package name…"
+	ti.CharLimit = 100
+	ti.Width = 44
+
 	return Model{
 		parsedProjects: parsedProjects,
+		nugetServices:  nugetServices,
 		loading:        true,
 		spinner:        sp,
 		projectList:    l,
 		detailView:     dv,
 		noColor:        noColor,
+		search:         packageSearch{input: ti},
 	}
 }
 
@@ -291,8 +339,52 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusIsErr = false
 		}
 
+	case searchDebounceMsg:
+		if msg.id == m.search.debounceID && msg.query != "" {
+			m.search.loading = true
+			cmds = append(cmds, m.doSearchCmd(msg.query))
+		}
+
+	case searchResultsMsg:
+		if msg.query == m.search.lastQuery {
+			m.search.loading = false
+			m.search.err = msg.err
+			if msg.err == nil {
+				m.search.results = msg.results
+			}
+			m.search.cursor = 0
+		}
+
+	case packageFetchedMsg:
+		m.search.fetchingVersion = false
+		if msg.err != nil {
+			m.search.err = msg.err
+			break
+		}
+		proj := m.selectedProject()
+		if proj == nil {
+			break
+		}
+		m.search.fetchedInfo = msg.info
+		m.search.fetchedSource = msg.source
+		m.search.active = false
+		m.search.input.Blur()
+		m.picker = versionPicker{
+			active:        true,
+			pkgName:       msg.info.ID,
+			versions:      msg.info.Versions,
+			cursor:        0,
+			targets:       proj.TargetFrameworks,
+			addMode:       true,
+			targetProject: proj,
+		}
+
 	case tea.KeyMsg:
 		m.statusLine = ""
+		if m.search.active {
+			cmds = append(cmds, m.handleSearchKey(msg))
+			return m, tea.Batch(cmds...)
+		}
 		if m.picker.active {
 			cmds = append(cmds, m.handlePickerKey(msg))
 			return m, tea.Batch(cmds...)
@@ -300,7 +392,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, m.handleKey(msg))
 	}
 
-	if !m.picker.active {
+	if !m.picker.active && !m.search.active {
 		switch m.focus {
 		case focusProjects:
 			var cmd tea.Cmd
@@ -373,6 +465,17 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 			return m.triggerRestore()
 		}
 
+	case "/":
+		if m.selectedProject() == nil {
+			m.statusLine = "⚠ Select a specific project to add a package"
+			m.statusIsErr = true
+			return nil
+		}
+		m.search = packageSearch{input: m.search.input}
+		m.search.input.Reset()
+		m.search.active = true
+		return m.search.input.Focus()
+
 	case "enter":
 		if m.focus == focusProjects {
 			m.focus = focusPackages
@@ -385,6 +488,8 @@ func (m *Model) handlePickerKey(msg tea.KeyMsg) tea.Cmd {
 	switch msg.String() {
 	case "esc", "q":
 		m.picker.active = false
+		m.picker.addMode = false
+		m.picker.targetProject = nil
 	case "up", "k":
 		if m.picker.cursor > 0 {
 			m.picker.cursor--
@@ -396,10 +501,75 @@ func (m *Model) handlePickerKey(msg tea.KeyMsg) tea.Cmd {
 	case "enter":
 		if v := m.picker.selectedVersion(); v != nil {
 			m.picker.active = false
+			if m.picker.addMode && m.picker.targetProject != nil {
+				return m.addPackageToProject(m.picker.pkgName, v.SemVer.String(), m.picker.targetProject)
+			}
 			return m.applyVersion(m.picker.pkgName, v.SemVer.String())
 		}
 	}
 	return nil
+}
+
+func (m *Model) handleSearchKey(msg tea.KeyMsg) tea.Cmd {
+	switch msg.String() {
+	case "esc":
+		m.search.active = false
+		m.search.input.Blur()
+		return nil
+
+	case "up", "ctrl+p":
+		if m.search.cursor > 0 {
+			m.search.cursor--
+		}
+		return nil
+
+	case "down", "ctrl+n":
+		if m.search.cursor < len(m.search.results)-1 {
+			m.search.cursor++
+		}
+		return nil
+
+	case "enter":
+		if m.search.fetchingVersion || len(m.search.results) == 0 {
+			return nil
+		}
+		selected := m.search.results[m.search.cursor]
+		// Check if already installed in this project
+		if proj := m.selectedProject(); proj != nil {
+			for ref := range proj.Packages {
+				if strings.EqualFold(ref.Name, selected.ID) {
+					m.statusLine = "⚠ " + selected.ID + " is already in this project"
+					m.statusIsErr = true
+					m.search.active = false
+					m.search.input.Blur()
+					return nil
+				}
+			}
+		}
+		m.search.fetchingVersion = true
+		m.search.err = nil
+		return m.fetchPackageCmd(selected.ID)
+	}
+
+	// Forward all other keys to the textinput
+	var cmd tea.Cmd
+	m.search.input, cmd = m.search.input.Update(msg)
+	newQuery := m.search.input.Value()
+
+	if newQuery == "" {
+		m.search.results = nil
+		m.search.loading = false
+		m.search.debounceID++ // invalidate any in-flight debounce
+		m.search.lastQuery = ""
+		return cmd
+	}
+
+	if newQuery != m.search.lastQuery {
+		m.search.lastQuery = newQuery
+		m.search.loading = true
+		return tea.Batch(cmd, m.searchDebounceCmd(newQuery))
+	}
+	return cmd
 }
 
 // ─────────────────────────────────────────────
@@ -519,6 +689,75 @@ func (m *Model) openVersionPicker() {
 		versions: row.info.Versions,
 		cursor:   0,
 		targets:  row.project.TargetFrameworks,
+	}
+}
+
+func (m *Model) searchDebounceCmd(query string) tea.Cmd {
+	m.search.debounceID++
+	id := m.search.debounceID
+	return tea.Tick(300*time.Millisecond, func(t time.Time) tea.Msg {
+		return searchDebounceMsg{id: id, query: query}
+	})
+}
+
+func (m *Model) doSearchCmd(query string) tea.Cmd {
+	services := m.nugetServices
+	return func() tea.Msg {
+		var lastErr error
+		for _, svc := range services {
+			results, err := svc.Search(query, 20)
+			if err == nil {
+				return searchResultsMsg{results: results, query: query}
+			}
+			lastErr = err
+			logger.Debug("search source [%s] failed: %v", svc.SourceName(), err)
+		}
+		return searchResultsMsg{query: query, err: lastErr}
+	}
+}
+
+func (m *Model) fetchPackageCmd(id string) tea.Cmd {
+	services := m.nugetServices
+	return func() tea.Msg {
+		var lastErr error
+		for _, svc := range services {
+			info, err := svc.SearchExact(id)
+			if err == nil {
+				return packageFetchedMsg{info: info, source: svc.SourceName()}
+			}
+			lastErr = err
+		}
+		return packageFetchedMsg{err: lastErr}
+	}
+}
+
+func (m *Model) addPackageToProject(pkgName, version string, project *ParsedProject) tea.Cmd {
+	project.Packages.Add(PackageReference{Name: pkgName, Version: ParseSemVer(version)})
+	if m.results == nil {
+		m.results = make(map[string]nugetResult)
+	}
+	if m.search.fetchedInfo != nil {
+		m.results[pkgName] = nugetResult{pkg: m.search.fetchedInfo, source: m.search.fetchedSource}
+		m.search.fetchedInfo = nil
+		m.search.fetchedSource = ""
+	}
+	m.rebuildPackageRows()
+	for i, row := range m.packageRows {
+		if strings.EqualFold(row.ref.Name, pkgName) {
+			m.packageCursor = i
+			break
+		}
+	}
+	m.clampOffset()
+	m.refreshDetail()
+	m.focus = focusPackages
+	filePath := project.FilePath
+	return func() tea.Msg {
+		logger.Debug("AddPackageReference: %s %s → %s", pkgName, version, filePath)
+		if err := AddPackageReference(filePath, pkgName, version); err != nil {
+			return writeResultMsg{err: err}
+		}
+		return writeResultMsg{err: nil}
 	}
 }
 
@@ -701,6 +940,10 @@ func (m Model) View() string {
 				m.spinner.View()+" Fetching package information...",
 			),
 		)
+	}
+
+	if m.search.active {
+		return m.renderSearchOverlay()
 	}
 
 	if m.picker.active {
@@ -1043,6 +1286,123 @@ func versionCompatible(v PackageVersion, targets Set[TargetFramework]) bool {
 	return true
 }
 
+func (m Model) renderSearchOverlay() string {
+	w := 56
+	innerW := w - 6 // border (2) + padding (2*2)
+
+	var lines []string
+
+	// Title row
+	title := lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render("Add Package")
+	proj := m.selectedProject()
+	projName := ""
+	if proj != nil {
+		projName = lipgloss.NewStyle().Foreground(colorSubtle).
+			Render("  " + truncate(proj.FileName, innerW-15))
+	}
+	lines = append(lines, title+projName)
+
+	// Text input
+	lines = append(lines, m.search.input.View())
+
+	// Divider
+	lines = append(lines,
+		lipgloss.NewStyle().Foreground(colorBorder).Render(strings.Repeat("─", innerW)),
+	)
+
+	// Body
+	maxVisible := 10
+	switch {
+	case m.search.fetchingVersion:
+		lines = append(lines,
+			m.spinner.View()+" "+
+				lipgloss.NewStyle().Foreground(colorAccent).Render("Fetching package info…"))
+
+	case m.search.loading:
+		lines = append(lines,
+			m.spinner.View()+" "+
+				lipgloss.NewStyle().Foreground(colorSubtle).Render("Searching…"))
+
+	case m.search.err != nil:
+		lines = append(lines,
+			lipgloss.NewStyle().Foreground(colorRed).Render("✗ "+m.search.err.Error()))
+
+	case len(m.search.results) == 0 && m.search.lastQuery != "":
+		lines = append(lines,
+			lipgloss.NewStyle().Foreground(colorMuted).Render("No results found"))
+
+	case len(m.search.results) == 0:
+		lines = append(lines,
+			lipgloss.NewStyle().Foreground(colorMuted).Render("Type to search NuGet…"))
+
+	default:
+		// Build already-installed set for the current project
+		alreadyHas := NewSet[string]()
+		if proj != nil {
+			for ref := range proj.Packages {
+				alreadyHas.Add(strings.ToLower(ref.Name))
+			}
+		}
+
+		start := 0
+		if m.search.cursor >= maxVisible {
+			start = m.search.cursor - maxVisible + 1
+		}
+		end := start + maxVisible
+		if end > len(m.search.results) {
+			end = len(m.search.results)
+		}
+
+		for i := start; i < end; i++ {
+			r := m.search.results[i]
+			selected := i == m.search.cursor
+
+			prefix := "  "
+			idStyle := lipgloss.NewStyle().Foreground(colorText)
+			if selected {
+				prefix = lipgloss.NewStyle().Foreground(colorAccent).Render("▶ ")
+				idStyle = lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
+			}
+
+			pkgID := padRight(idStyle.Render(truncate(r.ID, 34)), 35)
+			ver := lipgloss.NewStyle().Foreground(colorSubtle).Render(truncate(r.Version, 12))
+
+			suffix := ""
+			if alreadyHas.Contains(strings.ToLower(r.ID)) {
+				suffix = " " + lipgloss.NewStyle().Foreground(colorMuted).Render("(installed)")
+			} else if r.Verified {
+				suffix = " " + lipgloss.NewStyle().Foreground(colorGreen).Render("✓")
+			}
+
+			line := prefix + pkgID + ver + suffix
+			if selected {
+				line = lipgloss.NewStyle().
+					Background(colorSurface).
+					Width(innerW).
+					Render(line)
+			}
+			lines = append(lines, line)
+		}
+	}
+
+	// Help line
+	lines = append(lines, "")
+	lines = append(lines,
+		lipgloss.NewStyle().Foreground(colorMuted).
+			Render("↑/↓ navigate · enter select · esc cancel"),
+	)
+
+	box := lipgloss.NewStyle().
+		Width(w).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(colorAccent).
+		Background(colorSurface).
+		Padding(1, 2).
+		Render(strings.Join(lines, "\n"))
+
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
+}
+
 func (m Model) renderPickerOverlay() string {
 	w := 52
 	maxVisible := 16
@@ -1138,6 +1498,7 @@ func (m Model) renderFooter() string {
 		{"r", "pick version"},
 		{"a", "sync all"},
 		{"R", "restore"},
+		{"/", "add pkg"},
 		{"q", "quit"},
 	}
 

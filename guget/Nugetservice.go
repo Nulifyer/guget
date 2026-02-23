@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"logger"
@@ -147,6 +148,21 @@ func (s *NugetService) resolveEndpoints() error {
 	}
 	logger.Debug("[%s] endpoints resolved: search=%s", s.sourceName, s.searchBase)
 	return nil
+}
+
+// Search returns up to take results matching the given query string.
+func (s *NugetService) Search(query string, take int) ([]SearchResult, error) {
+	logger.Debug("[%s] search query=%q take=%d", s.sourceName, query, take)
+	params := url.Values{}
+	params.Set("q", query)
+	params.Set("take", strconv.Itoa(take))
+	params.Set("prerelease", "false")
+	var resp searchResponse
+	if err := s.getJSON(s.searchBase+"?"+params.Encode(), &resp); err != nil {
+		return nil, err
+	}
+	logger.Debug("[%s] search returned %d results", s.sourceName, len(resp.Data))
+	return resp.Data, nil
 }
 
 // SearchExact finds a package by its exact ID (case-insensitive).

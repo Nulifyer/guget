@@ -150,7 +150,7 @@ func main() {
 	}
 
 	// launch TUI — fetching happens as a background cmd
-	m := NewModel(parsedProjects, builtFlags.NoColor)
+	m := NewModel(parsedProjects, nugetServices, builtFlags.NoColor)
 
 	p := tea.NewProgram(
 		m,

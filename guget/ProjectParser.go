@@ -113,3 +113,82 @@ func UpdatePackageVersion(filePath, pkgName, newVersion string) error {
 
 	return os.WriteFile(filePath, []byte(strings.Join(lines, "\n")), 0644)
 }
+
+// AddPackageReference inserts a new <PackageReference Include="pkgName" Version="version" />
+// into a .csproj/.fsproj file without altering any other formatting.
+func AddPackageReference(filePath, pkgName, version string) error {
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", filePath, err)
+	}
+
+	lines := strings.Split(string(data), "\n")
+
+	pkgRefRe        := regexp.MustCompile(`(?i)<PackageReference`)
+	itemGroupOpenRe := regexp.MustCompile(`(?i)<ItemGroup`)
+	itemGroupCloseRe := regexp.MustCompile(`(?i)</ItemGroup>`)
+	projectCloseRe  := regexp.MustCompile(`(?i)</Project>`)
+
+	// Detect indentation from the first existing PackageReference line.
+	indent := "  "
+	for _, line := range lines {
+		if pkgRefRe.MatchString(line) {
+			trimmed := strings.TrimLeft(line, " \t")
+			indent = line[:len(line)-len(trimmed)]
+			break
+		}
+	}
+
+	newLine := indent + fmt.Sprintf(`<PackageReference Include="%s" Version="%s" />`, pkgName, version)
+
+	// Stack-scan to find an ItemGroup that already contains PackageReferences.
+	type igState struct {
+		openLine  int
+		hasPkgRef bool
+	}
+	var stack []igState
+	insertAt := -1
+	for i, line := range lines {
+		if itemGroupOpenRe.MatchString(line) {
+			stack = append(stack, igState{openLine: i})
+		} else if pkgRefRe.MatchString(line) && len(stack) > 0 {
+			stack[len(stack)-1].hasPkgRef = true
+		} else if itemGroupCloseRe.MatchString(line) && len(stack) > 0 {
+			top := stack[len(stack)-1]
+			stack = stack[:len(stack)-1]
+			if top.hasPkgRef {
+				insertAt = i
+				break
+			}
+		}
+	}
+
+	if insertAt >= 0 {
+		// Insert before the closing </ItemGroup>.
+		lines = append(lines[:insertAt], append([]string{newLine}, lines[insertAt:]...)...)
+	} else {
+		// No PackageReference ItemGroup found — create a new one before </Project>.
+		outerIndent := ""
+		if len(indent) >= 2 {
+			outerIndent = indent[:len(indent)-2]
+		}
+		newBlock := []string{
+			outerIndent + "<ItemGroup>",
+			newLine,
+			outerIndent + "</ItemGroup>",
+		}
+		inserted := false
+		for i, line := range lines {
+			if projectCloseRe.MatchString(line) {
+				lines = append(lines[:i], append(newBlock, lines[i:]...)...)
+				inserted = true
+				break
+			}
+		}
+		if !inserted {
+			return fmt.Errorf("could not find insertion point in %s", filePath)
+		}
+	}
+
+	return os.WriteFile(filePath, []byte(strings.Join(lines, "\n")), 0644)
+}
