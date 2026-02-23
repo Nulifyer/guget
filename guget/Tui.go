@@ -1434,7 +1434,7 @@ func (m *Model) removePackage(pkgName string) tea.Cmd {
 
 func (m *Model) handleDepTreeKey(msg tea.KeyMsg) tea.Cmd {
 	switch msg.String() {
-	case "esc":
+	case "esc", "q":
 		m.depTree.active = false
 		return nil
 	default:
