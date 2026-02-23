@@ -554,7 +554,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 
 	case "/":
 		if m.selectedProject() == nil {
-			m.statusLine = "⚠ Select a specific project to add a package"
+			m.statusLine = "⚠ Select project"
 			m.statusIsErr = true
 			return nil
 		}
