@@ -11,7 +11,11 @@ A terminal UI for managing NuGet packages across .NET projects.
 
 `guget` lets you browse, update, and add NuGet packages across all `.csproj` and `.fsproj` files in a directory — without leaving the terminal. It fetches live version data from your configured NuGet sources and shows you at a glance what's out of date.
 
+<div align="center">
+
 ![Screenshot placeholder](docs/screenshot.png)
+
+</div>
 
 ---
 
@@ -39,9 +43,15 @@ A terminal UI for managing NuGet packages across .NET projects.
 
 ## Installation
 
+**Download a pre-built binary** (recommended)
+
+Grab the latest release for your platform from the [Releases page](https://github.com/nulifyer/guget/releases), extract the archive, and place the binary somewhere on your `PATH`.
+
+**Build from source**
+
 ```bash
 git clone https://github.com/nulifyer/guget
-cd GoNugetTui/guget
+cd guget/guget
 go build -o guget        # Linux / macOS
 go build -o guget.exe    # Windows
 ```
