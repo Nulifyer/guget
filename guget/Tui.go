@@ -409,7 +409,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			active:        true,
 			pkgName:       msg.info.ID,
 			versions:      msg.info.Versions,
-			cursor:        0,
+			cursor:        defaultVersionCursor(msg.info.Versions, proj.TargetFrameworks),
 			targets:       proj.TargetFrameworks,
 			addMode:       true,
 			targetProject: proj,
@@ -774,7 +774,7 @@ func (m *Model) openVersionPicker() {
 		active:   true,
 		pkgName:  row.ref.Name,
 		versions: row.info.Versions,
-		cursor:   0,
+		cursor:   defaultVersionCursor(row.info.Versions, row.project.TargetFrameworks),
 		targets:  row.project.TargetFrameworks,
 	}
 }
@@ -1483,6 +1483,18 @@ func versionCompatible(v PackageVersion, targets Set[TargetFramework]) bool {
 		}
 	}
 	return true
+}
+
+// defaultVersionCursor returns the index of the first stable, compatible
+// version in a newest-first sorted slice — the natural default selection.
+// Falls back to 0 if nothing matches.
+func defaultVersionCursor(versions []PackageVersion, targets Set[TargetFramework]) int {
+	for i, v := range versions {
+		if !v.SemVer.IsPreRelease() && versionCompatible(v, targets) {
+			return i
+		}
+	}
+	return 0
 }
 
 func (m Model) renderSourcesOverlay() string {
