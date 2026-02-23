@@ -591,7 +591,7 @@ func (m *Model) handlePickerKey(msg tea.KeyMsg) tea.Cmd {
 			if m.picker.addMode && m.picker.targetProject != nil {
 				return m.addPackageToProject(m.picker.pkgName, v.SemVer.String(), m.picker.targetProject)
 			}
-			return m.applyVersion(m.picker.pkgName, v.SemVer.String())
+			return m.applyVersion(m.picker.pkgName, v.SemVer.String(), m.picker.targetProject)
 		}
 	}
 	return nil
@@ -680,12 +680,16 @@ func (m *Model) updateSelected(useLatest bool) tea.Cmd {
 	if target == nil {
 		return nil
 	}
-	return m.applyVersion(row.ref.Name, target.SemVer.String())
+	return m.applyVersion(row.ref.Name, target.SemVer.String(), m.selectedProject())
 }
 
-func (m *Model) applyVersion(pkgName, version string) tea.Cmd {
+func (m *Model) applyVersion(pkgName, version string, targetProject *ParsedProject) tea.Cmd {
+	projects := m.parsedProjects
+	if targetProject != nil {
+		projects = []*ParsedProject{targetProject}
+	}
 	var toWrite []*ParsedProject
-	for _, p := range m.parsedProjects {
+	for _, p := range projects {
 		updated := NewSet[PackageReference]()
 		changed := false
 		for ref := range p.Packages {
@@ -759,7 +763,8 @@ func (m *Model) updateAllProjects() tea.Cmd {
 	if row.latestCompatible == nil {
 		return nil
 	}
-	return m.applyVersion(row.ref.Name, row.latestCompatible.SemVer.String())
+	// Always syncs all projects regardless of the current project selection.
+	return m.applyVersion(row.ref.Name, row.latestCompatible.SemVer.String(), nil)
 }
 
 func (m *Model) openVersionPicker() {
@@ -771,11 +776,12 @@ func (m *Model) openVersionPicker() {
 		return
 	}
 	m.picker = versionPicker{
-		active:   true,
-		pkgName:  row.ref.Name,
-		versions: row.info.Versions,
-		cursor:   defaultVersionCursor(row.info.Versions, row.project.TargetFrameworks),
-		targets:  row.project.TargetFrameworks,
+		active:        true,
+		pkgName:       row.ref.Name,
+		versions:      row.info.Versions,
+		cursor:        defaultVersionCursor(row.info.Versions, row.project.TargetFrameworks),
+		targets:       row.project.TargetFrameworks, // used for compatibility display only
+		targetProject: m.selectedProject(),          // nil = all projects, specific = scoped
 	}
 }
 
