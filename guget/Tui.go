@@ -61,6 +61,14 @@ const (
 // Messages
 // ─────────────────────────────────────────────
 
+// packageReadyMsg is sent by the background loader for each package as its
+// NuGet metadata resolves, enabling progressive UI updates.
+type packageReadyMsg struct {
+	name   string
+	result nugetResult
+}
+
+// resultsReadyMsg is kept for compatibility but is no longer sent by main.go.
 type resultsReadyMsg struct {
 	results map[string]nugetResult
 }
@@ -236,6 +244,8 @@ type Model struct {
 	nugetServices  []*NugetService
 	results        map[string]nugetResult
 	loading        bool
+	loadingDone    int
+	loadingTotal   int
 	spinner        spinner.Model
 
 	projectList list.Model
@@ -263,7 +273,7 @@ type Model struct {
 	showLogs bool
 }
 
-func NewModel(parsedProjects []*ParsedProject, nugetServices []*NugetService, sources []NugetSource, noColor bool, initialLogLines []string) Model {
+func NewModel(parsedProjects []*ParsedProject, nugetServices []*NugetService, sources []NugetSource, noColor bool, initialLogLines []string, loadingTotal int) Model {
 	if noColor {
 		lipgloss.SetColorProfile(0)
 	}
@@ -308,19 +318,22 @@ func NewModel(parsedProjects []*ParsedProject, nugetServices []*NugetService, so
 	ti.CharLimit = 100
 	ti.Width = 44
 
-	return Model{
+	m := Model{
 		parsedProjects: parsedProjects,
 		nugetServices:  nugetServices,
 		sources:        sources,
-		loading:        true,
-		spinner:        sp,
-		projectList:    l,
-		detailView:     dv,
-		noColor:        noColor,
-		search:         packageSearch{input: ti},
-		logLines:       initialLogLines,
-		logView:        lv,
+		loading:      loadingTotal > 0,
+		loadingTotal: loadingTotal,
+		spinner:      sp,
+		projectList:  l,
+		detailView:   dv,
+		noColor:      noColor,
+		search:       packageSearch{input: ti},
+		logLines:     initialLogLines,
+		logView:      lv,
+		results:      make(map[string]nugetResult, loadingTotal),
 	}
+	return m
 }
 
 // ─────────────────────────────────────────────
@@ -350,9 +363,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.spinner, cmd = m.spinner.Update(msg)
 		cmds = append(cmds, cmd)
 
-	case resultsReadyMsg:
-		m.loading = false
+	case packageReadyMsg:
+		m.results[msg.name] = msg.result
+		m.loadingDone++
+		if m.loadingDone >= m.loadingTotal {
+			m.loading = false
+			m.refreshDetail()
+		}
+		m.rebuildPackageRows()
+
+	case resultsReadyMsg: // fallback: bulk-load all results at once
 		m.results = msg.results
+		m.loadingDone = len(msg.results)
+		m.loading = false
 		m.rebuildPackageRows()
 		m.refreshDetail()
 
@@ -1138,7 +1161,7 @@ func (m Model) View() string {
 		return lipgloss.Place(m.width, m.height,
 			lipgloss.Center, lipgloss.Center,
 			lipgloss.NewStyle().Foreground(colorAccent).Render(
-				m.spinner.View()+" Fetching package information...",
+				fmt.Sprintf("%s Loading packages... (%d/%d)", m.spinner.View(), m.loadingDone, m.loadingTotal),
 			),
 		)
 	}

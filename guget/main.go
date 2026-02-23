@@ -226,8 +226,15 @@ func main() {
 		logger.Fatal("No reachable NuGet sources found")
 	}
 
-	// launch TUI — fetching happens as a background cmd
-	m := NewModel(parsedProjects, nugetServices, sources, builtFlags.NoColor, buf.Lines())
+	// Count distinct packages so the TUI can track loading progress.
+	distinctPackages := NewSet[string]()
+	for _, project := range parsedProjects {
+		for pkg := range project.Packages {
+			distinctPackages.Add(pkg.Name)
+		}
+	}
+
+	m := NewModel(parsedProjects, nugetServices, sources, builtFlags.NoColor, buf.Lines(), distinctPackages.Len())
 
 	p := tea.NewProgram(
 		m,
@@ -249,25 +256,16 @@ func main() {
 		p.Kill()
 	}()
 
-	// fetch packages in background, send results to TUI when done
+	// Fetch package metadata in parallel; send a packageReadyMsg to the TUI
+	// as each one resolves so the loading screen shows live progress.
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				p.Kill() // restore terminal before the process crashes
+				p.Kill()
 				panic(r)
 			}
 		}()
-		distinctPackages := NewSet[string]()
-		for _, project := range parsedProjects {
-			for pkg := range project.Packages {
-				distinctPackages.Add(pkg.Name)
-			}
-		}
-
-		var mu sync.Mutex
 		var wg sync.WaitGroup
-		results := make(map[string]nugetResult, distinctPackages.Len())
-
 		for name := range distinctPackages {
 			wg.Add(1)
 			go func(name string) {
@@ -283,14 +281,13 @@ func main() {
 					}
 					logger.Debug("Source [%s] failed for %s: %v", svc.SourceName(), name, lastErr)
 				}
-				mu.Lock()
-				results[name] = nugetResult{pkg: info, source: sourceName, err: lastErr}
-				mu.Unlock()
+				p.Send(packageReadyMsg{
+					name:   name,
+					result: nugetResult{pkg: info, source: sourceName, err: lastErr},
+				})
 			}(name)
 		}
 		wg.Wait()
-
-		p.Send(resultsReadyMsg{results: results})
 	}()
 
 	if _, err := p.Run(); err != nil {
