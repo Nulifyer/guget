@@ -61,9 +61,18 @@ else
 fi
 
 if git rev-parse "$TAG" >/dev/null 2>&1; then
-    fail "Tag $TAG already exists"
+    warn "Tag ${BOLD}$TAG${RESET} already exists"
+    printf "  ${YELLOW}Overwrite it? (deletes local + remote tag) [y/N]${RESET} "
+    read -r OVERWRITE
+    if [[ ! "$OVERWRITE" =~ ^[yY]$ ]]; then
+        echo -e "\n  ${YELLOW}Aborted.${RESET}\n"
+        exit 0
+    fi
+    OVERWRITE_TAG=true
+else
+    OVERWRITE_TAG=false
+    ok "Tag $TAG is available"
 fi
-ok "Tag $TAG is available"
 
 # ── Git summary ───────────────────────────────────────────────────────────────
 hdr "Commits since last release"
@@ -112,6 +121,13 @@ fi
 # ── Execute ───────────────────────────────────────────────────────────────────
 hdr "Releasing $TAG"
 echo ""
+
+if [[ "$OVERWRITE_TAG" == true ]]; then
+    echo -e "  ${CYAN}→${RESET}  Deleting existing tag ${BOLD}$TAG${RESET}..."
+    git tag -d "$TAG"
+    git push origin --delete "$TAG" 2>/dev/null || true
+    ok "Old tag removed"
+fi
 
 echo -e "  ${CYAN}→${RESET}  Creating tag ${BOLD}$TAG${RESET}..."
 git tag -a "$TAG" -m "Release $TAG"

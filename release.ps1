@@ -79,8 +79,21 @@ if ($Dirty) {
 }
 
 $null = git rev-parse $Tag 2>&1
-if ($LASTEXITCODE -eq 0) { Fail "Tag $Tag already exists" }
-Ok "Tag $Tag is available"
+$OverwriteTag = $false
+if ($LASTEXITCODE -eq 0) {
+    Warn "Tag $Tag already exists"
+    Write-Host "  Overwrite it? (deletes local + remote tag) [y/N] " -NoNewline -ForegroundColor Yellow
+    $Overwrite = Read-Host
+    if ($Overwrite -notmatch '^[yY]$') {
+        Write-Host ""
+        Warn "Aborted."
+        Write-Host ""
+        exit 0
+    }
+    $OverwriteTag = $true
+} else {
+    Ok "Tag $Tag is available"
+}
 
 # ── Git summary ───────────────────────────────────────────────────────────────
 Hdr "Commits since last release"
@@ -150,6 +163,13 @@ if ($Confirm -notmatch '^[yY]$') {
 # ── Execute ───────────────────────────────────────────────────────────────────
 Hdr "Releasing $Tag"
 Write-Host ""
+
+if ($OverwriteTag) {
+    Write-Host "  → Deleting existing tag $Tag..." -ForegroundColor Cyan
+    git tag -d $Tag
+    git push origin --delete $Tag 2>$null
+    Ok "Old tag removed"
+}
 
 Write-Host "  → Creating tag $Tag..." -ForegroundColor Cyan
 git tag -a $Tag -m "Release $Tag"
