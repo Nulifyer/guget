@@ -3,8 +3,10 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"sync"
+	"syscall"
 
 	"arger"
 	"logger"
@@ -146,8 +148,23 @@ func main() {
 		tea.WithMouseCellMotion(),
 	)
 
+	// Restore terminal on SIGINT / SIGTERM so the alt-screen and cursor
+	// are always cleaned up even if the user kills the process externally.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-sigCh
+		p.Kill()
+	}()
+
 	// fetch packages in background, send results to TUI when done
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				p.Kill() // restore terminal before the process crashes
+				panic(r)
+			}
+		}()
 		distinctPackages := NewSet[string]()
 		for _, project := range parsedProjects {
 			for pkg := range project.Packages {
