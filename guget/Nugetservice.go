@@ -205,18 +205,18 @@ func (s *NugetService) resolveEndpoints() error {
 		return fmt.Errorf("fetching service index: %w", err)
 	}
 	for _, r := range idx.Resources {
-		switch r.Type {
-		case "SearchQueryService":
+		logger.Trace("[%s] service index resource: type=%q id=%q", s.sourceName, r.Type, r.ID)
+		switch {
+		// Accept SearchQueryService and any versioned variant (e.g. SearchQueryService/3.0.0-beta).
+		case strings.HasPrefix(r.Type, "SearchQueryService"):
 			if s.searchBase == "" {
 				s.searchBase = r.ID
 			}
-		case "RegistrationsBaseUrl/3.6.0": // semver2 + gzip, most capable
+		// RegistrationsBaseUrl/3.6.0 is the most capable (semver2 + gzip) — always prefer it.
+		// All other variants (unversioned, 3.4.0, unknown) are accepted as fallbacks.
+		case r.Type == "RegistrationsBaseUrl/3.6.0":
 			s.regBase = r.ID
-		case "RegistrationsBaseUrl/3.4.0": // gzip, no semver2
-			if s.regBase == "" {
-				s.regBase = r.ID
-			}
-		case "RegistrationsBaseUrl": // plain fallback
+		case strings.HasPrefix(r.Type, "RegistrationsBaseUrl"):
 			if s.regBase == "" {
 				s.regBase = r.ID
 			}
