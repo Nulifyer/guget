@@ -169,9 +169,3 @@ GoNugetTui/
 - [Bubbletea](https://github.com/charmbracelet/bubbletea) — TUI framework (MVU pattern)
 - [Bubbles](https://github.com/charmbracelet/bubbles) — list, spinner, text input, viewport
 - [Lipgloss](https://github.com/charmbracelet/lipgloss) — terminal styling and layout
-
----
-
-## License
-
-[GPL-3.0](https://www.gnu.org/licenses/gpl-3.0.html) — free to use, modify, and distribute, but any derivative work must also be open source under the same license.
