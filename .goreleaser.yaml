@@ -33,6 +33,7 @@ checksum:
 changelog:
   sort: asc
   use: github
+  format: "{{ .AbbreviatedSHA }} {{ .Message }} ([@{{ .AuthorName }}](https://github.com/{{ .AuthorName }}))"
   filters:
     exclude:
       - "^docs:"
