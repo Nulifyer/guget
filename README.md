@@ -43,9 +43,33 @@ A terminal UI for managing NuGet packages across .NET projects.
 
 ## Installation
 
-**Download a pre-built binary** (recommended)
+**Linux / macOS**
 
-Grab the latest release for your platform from the [Releases page](https://github.com/nulifyer/guget/releases), extract the archive, and place the binary somewhere on your `PATH`.
+```bash
+curl -fsSL https://raw.githubusercontent.com/nulifyer/guget/main/install.sh | bash
+```
+
+Or with wget:
+
+```bash
+wget -qO- https://raw.githubusercontent.com/nulifyer/guget/main/install.sh | bash
+```
+
+Fetches the latest release from GitHub and installs to `/usr/local/bin` if writable, otherwise `~/.local/bin`. Override the install location with `GUGET_INSTALL=/your/path`.
+
+**Windows (PowerShell)**
+
+```powershell
+irm https://raw.githubusercontent.com/nulifyer/guget/main/install.ps1 | iex
+```
+
+Fetches the latest release from GitHub, installs to `%LOCALAPPDATA%\Programs\guget`, and adds it to your user `PATH` automatically. Override the install location with `$env:GUGET_INSTALL`.
+
+> **Windows note:** The binary is not yet code-signed, so Windows SmartScreen may warn on first run. Running from a terminal (PowerShell or cmd) bypasses this.
+
+**Manual download**
+
+Grab the archive for your platform from the [Releases page](https://github.com/nulifyer/guget/releases) and place the binary somewhere on your `PATH`.
 
 **Build from source**
 
