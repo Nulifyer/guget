@@ -940,13 +940,26 @@ func (m Model) renderDetail(row packageRow) string {
 		s.WriteString("\n")
 	}
 
-	// versions
+	// versions — all stable releases + only the latest pre-release
+	var displayVersions []PackageVersion
+	preAdded := false
+	for _, v := range row.info.Versions {
+		if v.SemVer.IsPreRelease() {
+			if !preAdded {
+				displayVersions = append(displayVersions, v)
+				preAdded = true
+			}
+		} else {
+			displayVersions = append(displayVersions, v)
+		}
+	}
+
 	s.WriteString(label("Versions") + "\n")
 	limit := 12
-	for i, v := range row.info.Versions {
+	for i, v := range displayVersions {
 		if i >= limit {
 			s.WriteString(lipgloss.NewStyle().Foreground(colorMuted).
-				Render(fmt.Sprintf("  … and %d more", len(row.info.Versions)-limit)) + "\n")
+				Render(fmt.Sprintf("  … and %d more", len(displayVersions)-limit)) + "\n")
 			break
 		}
 
