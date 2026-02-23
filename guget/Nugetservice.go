@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 
 	"logger"
 )
@@ -93,6 +94,83 @@ type dependencyGroup struct {
 // NugetService
 // ─────────────────────────────────────────────
 
+// authTransport injects Basic Auth into every outgoing request and retries on
+// HTTP 401 by invoking NuGet credential providers (e.g. Azure Artifacts).
+type authTransport struct {
+	base       http.RoundTripper
+	sourceURL  string
+	sourceName string
+	mu         sync.Mutex
+	username   string
+	password   string
+	provOnce   sync.Once // ensures the credential provider is invoked at most once
+}
+
+func newAuthTransport(source NugetSource) *authTransport {
+	return &authTransport{
+		base:       http.DefaultTransport,
+		sourceURL:  source.URL,
+		sourceName: source.Name,
+		username:   source.Username,
+		password:   source.Password,
+	}
+}
+
+func (t *authTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	t.mu.Lock()
+	user, pass := t.username, t.password
+	t.mu.Unlock()
+
+	// Clone so we never mutate the caller's request.
+	req = req.Clone(req.Context())
+	if user != "" {
+		req.SetBasicAuth(user, pass)
+	}
+
+	resp, err := t.base.RoundTrip(req)
+	if err != nil || resp.StatusCode != http.StatusUnauthorized {
+		return resp, err
+	}
+
+	// 401 — ask a credential provider (once per transport lifetime).
+	resp.Body.Close()
+
+	var providerCred *sourceCredential
+	t.provOnce.Do(func() {
+		cred, provErr := fetchFromCredentialProvider(t.sourceURL, t.sourceName)
+		if provErr != nil {
+			logger.Debug("[%s] credential provider: %v", t.sourceName, provErr)
+			return
+		}
+		t.mu.Lock()
+		t.username = cred.Username
+		t.password = cred.Password
+		t.mu.Unlock()
+		providerCred = cred
+	})
+
+	if providerCred == nil {
+		// Provider not available or already tried and failed — surface the 401.
+		return &http.Response{
+			StatusCode: http.StatusUnauthorized,
+			Status:     "401 Unauthorized",
+			Body:       http.NoBody,
+			Header:     make(http.Header),
+		}, nil
+	}
+
+	// Retry with the provider-supplied credentials.
+	req2, err2 := http.NewRequestWithContext(req.Context(), req.Method, req.URL.String(), nil)
+	if err2 != nil {
+		return nil, err2
+	}
+	for k, v := range req.Header {
+		req2.Header[k] = v
+	}
+	req2.SetBasicAuth(providerCred.Username, providerCred.Password)
+	return t.base.RoundTrip(req2)
+}
+
 // NugetService talks to a single NuGet v3 feed.
 type NugetService struct {
 	sourceURL  string
@@ -109,7 +187,7 @@ func NewNugetService(source NugetSource) (*NugetService, error) {
 	svc := &NugetService{
 		sourceURL:  source.URL,
 		sourceName: source.Name,
-		client:     &http.Client{},
+		client:     &http.Client{Transport: newAuthTransport(source)},
 	}
 	if err := svc.resolveEndpoints(); err != nil {
 		return nil, err

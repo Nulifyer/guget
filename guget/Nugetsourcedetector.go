@@ -30,8 +30,10 @@ type packageSource struct {
 // ─────────────────────────────────────────────
 
 type NugetSource struct {
-	Name string
-	URL  string
+	Name     string
+	URL      string
+	Username string // from <packageSourceCredentials> (cleartext or DPAPI-decrypted)
+	Password string
 }
 
 // ─────────────────────────────────────────────
@@ -115,6 +117,9 @@ func sourcesFromNugetConfig(path string) []NugetSource {
 		disabled.Add(strings.ToLower(d.Key))
 	}
 
+	// Parse credentials keyed by normalised source name
+	creds := parseCredentials(data)
+
 	var sources []NugetSource
 	for _, ps := range cfg.PackageSources {
 		if disabled.Contains(strings.ToLower(ps.Key)) {
@@ -122,10 +127,12 @@ func sourcesFromNugetConfig(path string) []NugetSource {
 		}
 		// Only include http/https sources (skip local folder paths)
 		if strings.HasPrefix(ps.Value, "http://") || strings.HasPrefix(ps.Value, "https://") {
-			sources = append(sources, NugetSource{
-				Name: ps.Key,
-				URL:  ps.Value,
-			})
+			s := NugetSource{Name: ps.Key, URL: ps.Value}
+			if c, ok := creds[normalizeCredentialKey(ps.Key)]; ok {
+				s.Username = c.Username
+				s.Password = c.Password
+			}
+			sources = append(sources, s)
 		}
 	}
 	return sources
