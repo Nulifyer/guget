@@ -633,6 +633,12 @@ func (m *Model) handleSearchKey(msg tea.KeyMsg) tea.Cmd {
 				}
 			}
 		}
+		// Use cached info if we already fetched this package (e.g. it's in another project).
+		if cached, ok := m.results[selected.ID]; ok && cached.pkg != nil {
+			return func() tea.Msg {
+				return packageFetchedMsg{info: cached.pkg, source: cached.source}
+			}
+		}
 		m.search.fetchingVersion = true
 		m.search.err = nil
 		return m.fetchPackageCmd(selected.ID)
