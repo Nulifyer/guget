@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -24,8 +25,32 @@ type serviceIndex struct {
 }
 
 type searchResponse struct {
-	TotalHits int            `json:"totalHits"`
+	TotalHits IntOrString    `json:"totalHits"`
 	Data      []SearchResult `json:"data"`
+}
+
+// IntOrString handles feeds (e.g. some Azure DevOps versions) that return
+// totalHits as a JSON string ("42") instead of a number (42).
+type IntOrString int
+
+func (n *IntOrString) UnmarshalJSON(b []byte) error {
+	// Try number first
+	var i int
+	if err := json.Unmarshal(b, &i); err == nil {
+		*n = IntOrString(i)
+		return nil
+	}
+	// Fall back to quoted string
+	var s string
+	if err := json.Unmarshal(b, &s); err != nil {
+		return err
+	}
+	parsed, err := strconv.Atoi(s)
+	if err != nil {
+		return fmt.Errorf("IntOrString: cannot parse %q as int", s)
+	}
+	*n = IntOrString(parsed)
+	return nil
 }
 
 // SearchResult is what comes back from the NuGet search endpoint.
@@ -255,6 +280,13 @@ func (s *NugetService) SearchExact(packageID string) (*PackageInfo, error) {
 
 	var resp searchResponse
 	if err := s.getJSON(s.searchBase+"?"+params.Encode(), &resp); err != nil {
+		// Azure DevOps returns 500 when a package isn't in the private feed
+		// (rather than an empty result set). Treat it as "not found here".
+		var he *httpStatusError
+		if errors.As(err, &he) && he.Code == http.StatusInternalServerError {
+			logger.Debug("[%s] search returned 500 for %q — treating as not found", s.sourceName, packageID)
+			return nil, fmt.Errorf("package %q not found", packageID)
+		}
 		return nil, err
 	}
 
@@ -420,6 +452,17 @@ func (s *StringOrArray) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
+// httpStatusError is returned by getJSON for non-200 responses so callers can
+// inspect the status code and decide whether to treat it as a hard failure.
+type httpStatusError struct {
+	Code int
+	URL  string
+}
+
+func (e *httpStatusError) Error() string {
+	return fmt.Sprintf("HTTP %d for %s", e.Code, e.URL)
+}
+
 func (s *NugetService) getJSON(u string, dst any) error {
 	resp, err := s.client.Get(u)
 	if err != nil {
@@ -427,7 +470,7 @@ func (s *NugetService) getJSON(u string, dst any) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("HTTP %s for %s", resp.Status, u)
+		return &httpStatusError{Code: resp.StatusCode, URL: u}
 	}
 	return json.NewDecoder(resp.Body).Decode(dst)
 }
