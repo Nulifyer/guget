@@ -113,6 +113,9 @@ func parseCredentials(data []byte) map[string]sourceCredential {
 					}
 				}
 				if username != "" || password != "" {
+					if username == "" && password != "" {
+						username = "PAT"
+					}
 					key := normalizeCredentialKey(currentSource)
 					creds[key] = sourceCredential{Username: username, Password: password}
 				}
