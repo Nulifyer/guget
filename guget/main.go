@@ -63,12 +63,14 @@ const (
 	Flag_NoColor    = "no-color"
 	Flag_Verbosity  = "verbosity"
 	Flag_ProjectDir = "project"
+	Flag_Version    = "version"
 )
 
 type BuiltFlags struct {
 	NoColor    bool
 	Verbosity  string
 	ProjectDir string
+	Version    bool
 }
 
 func BuildFlags(flags map[string]arger.IParsedFlag) BuiltFlags {
@@ -76,6 +78,7 @@ func BuildFlags(flags map[string]arger.IParsedFlag) BuiltFlags {
 		NoColor:    arger.Get[bool](flags, Flag_NoColor),
 		Verbosity:  arger.Get[string](flags, Flag_Verbosity),
 		ProjectDir: arger.Get[string](flags, Flag_ProjectDir),
+		Version:    arger.Get[bool](flags, Flag_Version),
 	}
 }
 
@@ -87,6 +90,12 @@ func Init() BuiltFlags {
 		logger.SetLevel(logger.ParseLevel(env_log_level))
 	}
 
+	arger.RegisterFlag(arger.Flag[bool]{
+		Name:        Flag_Version,
+		Aliases:     []string{"-V", "--version"},
+		Default:     arger.Optional(false),
+		Description: "Print the version and exit",
+	})
 	arger.RegisterFlag(arger.Flag[bool]{
 		Name:        Flag_NoColor,
 		Aliases:     []string{"-nc", "--no-color"},
@@ -118,6 +127,11 @@ func Init() BuiltFlags {
 
 	logger.SetLevel(logger.ParseLevel(builtFlags.Verbosity))
 	logger.SetColor(!builtFlags.NoColor)
+
+	if builtFlags.Version {
+		fmt.Printf("guget %s\n", version)
+		os.Exit(0)
+	}
 
 	return builtFlags
 }

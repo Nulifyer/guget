@@ -63,6 +63,9 @@ Usage:
 
     project      -p, --project
                 Set the target project directory (defaults to current working directory)
+
+    version      -V, --version
+                Print the version and exit
 ```
 
 **Examples:**
