@@ -1,11 +1,12 @@
+<div align="center">
+
 # guget
 
-A terminal UI for managing NuGet packages across .NET projects.
-
 ![Go](https://img.shields.io/badge/Go-1.25%2B-00ADD8?style=flat&logo=go)
-![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
+[![Platform](https://img.shields.io/badge/Platform-Linux%20|%20macOS%20|%20Windows-orange.svg)]()
 
----
+A terminal UI for managing NuGet packages across .NET projects.
+</div>
 
 ## Overview
 
