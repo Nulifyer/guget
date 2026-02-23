@@ -4,12 +4,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 
-	// tea "github.com/charmbracelet/bubbletea"
 	"arger"
 	"logger"
+
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 // -------------------------------
@@ -77,27 +77,35 @@ func Init() BuiltFlags {
 	return builtFlags
 }
 
+// ─────────────────────────────────────────────
+// nugetResult (shared between main and tui)
+// ─────────────────────────────────────────────
+
+type nugetResult struct {
+	pkg    *PackageInfo
+	source string
+	err    error
+}
+
 // -------------------------------
 // Main
 // --------------------------------
 func main() {
 	builtFlags := Init()
 
-	// get full path
 	fullProjectPath, err := filepath.Abs(builtFlags.ProjectDir)
 	if err != nil {
 		logger.Fatal("Couldn't get absolute path for project directory: %v", err)
 	}
 	logger.Info("Starting GoNugetTui with project directory: %s", fullProjectPath)
 
-	// find projects
+	// find + parse projects
 	projectFiles, err := FindProjectFiles(fullProjectPath)
 	if err != nil {
 		logger.Fatal("Error finding projects: %v", err)
 	}
 	logger.Info("Found %d project(s)", len(projectFiles))
 
-	// parse projects
 	var parsedProjects []*ParsedProject
 	for _, file := range projectFiles {
 		project, err := ParseCsproj(file)
@@ -107,19 +115,20 @@ func main() {
 		parsedProjects = append(parsedProjects, project)
 	}
 
-	// detect nuget sources from the project root
-	sources := DetectSources(fullProjectPath)
-	logger.Info("Detected %d NuGet source(s):", len(sources))
-	for _, src := range sources {
-		logger.Info("  [%s] %s", src.Name, src.URL)
+	if len(parsedProjects) == 0 {
+		fmt.Println("No .csproj or .fsproj files found in", fullProjectPath)
+		os.Exit(1)
 	}
 
-	// build nuget services for each source
+	// detect nuget sources
+	sources := DetectSources(fullProjectPath)
+	logger.Info("Detected %d NuGet source(s)", len(sources))
+
 	var nugetServices []*NugetService
 	for _, src := range sources {
 		svc, err := NewNugetService(src)
 		if err != nil {
-			logger.Warn("Failed to initialise NuGet source [%s] %s: %v", src.Name, src.URL, err)
+			logger.Warn("Failed to initialise NuGet source [%s]: %v", src.Name, err)
 			continue
 		}
 		nugetServices = append(nugetServices, svc)
@@ -128,96 +137,57 @@ func main() {
 		logger.Fatal("No reachable NuGet sources found")
 	}
 
-	// collect distinct package names across all projects
-	distinctPackages := NewSet[string]()
-	for _, project := range parsedProjects {
-		for pkg := range project.Packages {
-			distinctPackages.Add(pkg.Name)
+	// launch TUI — fetching happens as a background cmd
+	m := NewModel(parsedProjects, builtFlags.NoColor)
+
+	p := tea.NewProgram(
+		m,
+		tea.WithAltScreen(),
+		tea.WithMouseCellMotion(),
+	)
+
+	// fetch packages in background, send results to TUI when done
+	go func() {
+		distinctPackages := NewSet[string]()
+		for _, project := range parsedProjects {
+			for pkg := range project.Packages {
+				distinctPackages.Add(pkg.Name)
+			}
 		}
-	}
-	logger.Info("Fetching info for %d distinct package(s)...", distinctPackages.Len())
 
-	// fetch package info in parallel
-	type nugetResult struct {
-		pkg    *PackageInfo
-		source string
-		err    error
-	}
+		var mu sync.Mutex
+		var wg sync.WaitGroup
+		results := make(map[string]nugetResult, distinctPackages.Len())
 
-	var mu sync.Mutex
-	var wg sync.WaitGroup
-	results := make(map[string]nugetResult, distinctPackages.Len())
-
-	for name := range distinctPackages {
-		wg.Add(1)
-		go func(name string) {
-			defer wg.Done()
-			var info *PackageInfo
-			var sourceName string
-			var lastErr error
-			for _, svc := range nugetServices {
-				info, lastErr = svc.SearchExact(name)
-				if lastErr == nil {
-					sourceName = svc.SourceName()
-					break
+		for name := range distinctPackages {
+			wg.Add(1)
+			go func(name string) {
+				defer wg.Done()
+				var info *PackageInfo
+				var sourceName string
+				var lastErr error
+				for _, svc := range nugetServices {
+					info, lastErr = svc.SearchExact(name)
+					if lastErr == nil {
+						sourceName = svc.SourceName()
+						break
+					}
+					logger.Debug("Source [%s] failed for %s: %v", svc.SourceName(), name, lastErr)
 				}
-				logger.Debug("Source [%s] failed for %s: %v", svc.SourceName(), name, lastErr)
-			}
-			mu.Lock()
-			results[name] = nugetResult{pkg: info, source: sourceName, err: lastErr}
-			mu.Unlock()
-		}(name)
-	}
-	wg.Wait()
-
-	// print results per project
-	for _, project := range parsedProjects {
-		// collect framework display strings
-		var fwStrs []string
-		for fw := range project.TargetFrameworks {
-			fwStrs = append(fwStrs, fw.String())
+				mu.Lock()
+				results[name] = nugetResult{pkg: info, source: sourceName, err: lastErr}
+				mu.Unlock()
+			}(name)
 		}
+		wg.Wait()
 
-		fmt.Printf("\n📦 %s\n", project.FileName)
-		fmt.Printf("   Frameworks: %s\n", strings.Join(fwStrs, ", "))
-		fmt.Println(strings.Repeat("─", 80))
+		p.Send(resultsReadyMsg{results: results})
+	}()
 
-		for pkg := range project.Packages {
-			res := results[pkg.Name]
-			if res.err != nil {
-				fmt.Printf("   %-40s ❌ %v\n", pkg.Name, res.err)
-				continue
-			}
-
-			current := pkg.Version.String()
-
-			// find latest compatible version across all project frameworks
-			latestCompatible := res.pkg.LatestStableForFramework(project.TargetFrameworks)
-
-			// overall latest stable regardless of framework
-			latestStable := res.pkg.LatestStable()
-
-			compStr := versionDisplay(latestCompatible, pkg.Version)
-			stableStr := versionDisplay(latestStable, pkg.Version)
-
-			fmt.Printf("   %-40s current: %-12s  compatible: %-20s  latest: %-20s  [%s]\n",
-				pkg.Name, current, compStr, stableStr, res.source)
-		}
+	if _, err := p.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "TUI error: %v\n", err)
+		os.Exit(1)
 	}
-
-	logger.Trace("done")
-}
-
-// versionDisplay formats a version for output, showing upgrade arrow or checkmark.
-func versionDisplay(v *PackageVersion, current SemVer) string {
-	if v == nil {
-		return "<none>"
-	}
-	ver := v.SemVer.String()
-	if v.SemVer.IsNewerThan(current) {
-		return fmt.Sprintf("⬆  %s", ver)
-	}
-	return fmt.Sprintf("✅ %s", ver)
 }
 
 // -------------------------------
@@ -234,8 +204,5 @@ func FindProjectFiles(rootDir string) ([]string, error) {
 		}
 		return nil
 	})
-	if err != nil {
-		return nil, err
-	}
-	return projects, nil
+	return projects, err
 }
