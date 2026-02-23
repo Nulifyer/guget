@@ -625,7 +625,7 @@ func (m *Model) handleSearchKey(msg tea.KeyMsg) tea.Cmd {
 		if proj := m.selectedProject(); proj != nil {
 			for ref := range proj.Packages {
 				if strings.EqualFold(ref.Name, selected.ID) {
-					m.statusLine = "⚠ " + selected.ID + " is already in this project"
+					m.statusLine = "⚠ " + selected.ID + " is in project"
 					m.statusIsErr = true
 					m.search.active = false
 					m.search.input.Blur()
