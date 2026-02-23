@@ -123,7 +123,7 @@ func (t *authTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 
 	// Clone so we never mutate the caller's request.
 	req = req.Clone(req.Context())
-	if user != "" {
+	if user != "" || pass != "" {
 		req.SetBasicAuth(user, pass)
 	}
 
