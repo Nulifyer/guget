@@ -213,12 +213,44 @@ func invokeProvider(providerPath, sourceURL string) (*sourceCredential, error) {
 	// Credential providers sometimes emit informational lines to stdout before
 	// the JSON payload (e.g. "INFO: ..."). Find the first '{' to locate the JSON.
 	jsonStart := bytes.IndexByte(out, '{')
-	if jsonStart < 0 {
-		return nil, fmt.Errorf("parsing provider output: no JSON object found in output")
+	if jsonStart >= 0 {
+		var resp credentialProviderResponse
+		if err := json.Unmarshal(out[jsonStart:], &resp); err != nil {
+			return nil, fmt.Errorf("parsing provider output: %w", err)
+		}
+		return &sourceCredential{Username: resp.Username, Password: resp.Password}, nil
 	}
-	var resp credentialProviderResponse
-	if err := json.Unmarshal(out[jsonStart:], &resp); err != nil {
-		return nil, fmt.Errorf("parsing provider output: %w", err)
+
+	// Fallback: some providers emit credentials as log lines instead of JSON, e.g.:
+	//   [Information] [CredentialProvider]Username: VssSessionToken
+	//   [Information] [CredentialProvider]Password: abc123
+	cred := parseLogLineCredentials(out)
+	if cred != nil {
+		return cred, nil
 	}
-	return &sourceCredential{Username: resp.Username, Password: resp.Password}, nil
+
+	return nil, fmt.Errorf("parsing provider output: no JSON object or recognisable credential lines found in output")
+}
+
+// parseLogLineCredentials handles providers that write credentials as log lines rather
+// than JSON, e.g.:
+//
+//	[Information] [CredentialProvider]Username: VssSessionToken
+//	[Information] [CredentialProvider]Password: abc123
+//
+// Returns nil if no credential lines are found.
+func parseLogLineCredentials(out []byte) *sourceCredential {
+	var username, password string
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		if i := strings.Index(line, "]Username: "); i >= 0 {
+			username = strings.TrimSpace(line[i+len("]Username: "):])
+		} else if i := strings.Index(line, "]Password: "); i >= 0 {
+			password = strings.TrimSpace(line[i+len("]Password: "):])
+		}
+	}
+	if username == "" && password == "" {
+		return nil
+	}
+	return &sourceCredential{Username: username, Password: password}
 }
