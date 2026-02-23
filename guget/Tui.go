@@ -32,6 +32,7 @@ var (
 	colorYellow  = lipgloss.Color("#d29922")
 	colorRed     = lipgloss.Color("#f85149")
 	colorPurple  = lipgloss.Color("#bc8cff")
+	colorCyan    = lipgloss.Color("#56d7c2")
 )
 
 // ─────────────────────────────────────────────
@@ -1565,7 +1566,7 @@ func colorizeLogLine(line string) string {
 	case strings.HasPrefix(line, "[TRACE]"):
 		return lipgloss.NewStyle().Foreground(colorMuted).Render(line)
 	case strings.HasPrefix(line, "[DEBUG]"):
-		return lipgloss.NewStyle().Foreground(colorSubtle).Render(line)
+		return lipgloss.NewStyle().Foreground(colorCyan).Render(line)
 	case strings.HasPrefix(line, "[INFO]"):
 		return lipgloss.NewStyle().Foreground(colorGreen).Render(line)
 	case strings.HasPrefix(line, "[WARN]"):
