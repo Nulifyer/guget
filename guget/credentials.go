@@ -210,8 +210,14 @@ func invokeProvider(providerPath, sourceURL string) (*sourceCredential, error) {
 	if err != nil {
 		return nil, fmt.Errorf("provider exited non-zero: %w", err)
 	}
+	// Credential providers sometimes emit informational lines to stdout before
+	// the JSON payload (e.g. "INFO: ..."). Find the first '{' to locate the JSON.
+	jsonStart := bytes.IndexByte(out, '{')
+	if jsonStart < 0 {
+		return nil, fmt.Errorf("parsing provider output: no JSON object found in output")
+	}
 	var resp credentialProviderResponse
-	if err := json.Unmarshal(out, &resp); err != nil {
+	if err := json.Unmarshal(out[jsonStart:], &resp); err != nil {
 		return nil, fmt.Errorf("parsing provider output: %w", err)
 	}
 	return &sourceCredential{Username: resp.Username, Password: resp.Password}, nil
