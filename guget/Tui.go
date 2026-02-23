@@ -35,6 +35,15 @@ var (
 )
 
 // ─────────────────────────────────────────────
+// Log panel dimensions
+// ─────────────────────────────────────────────
+
+const (
+	logPanelLines       = 6
+	logPanelOuterHeight = logPanelLines + 4 // border(2) + title(1) + divider(1)
+)
+
+// ─────────────────────────────────────────────
 // Panel focus
 // ─────────────────────────────────────────────
 
@@ -44,6 +53,7 @@ const (
 	focusProjects focusPanel = iota
 	focusPackages
 	focusDetail
+	focusLog
 )
 
 // ─────────────────────────────────────────────
@@ -77,6 +87,10 @@ type packageFetchedMsg struct {
 	info   *PackageInfo
 	source string
 	err    error
+}
+
+type logLineMsg struct {
+	line string
 }
 
 // ─────────────────────────────────────────────
@@ -229,9 +243,13 @@ type Model struct {
 	statusLine  string
 	statusIsErr bool
 	restoring   bool
+
+	logLines []string
+	logView  viewport.Model
+	showLogs bool
 }
 
-func NewModel(parsedProjects []*ParsedProject, nugetServices []*NugetService, noColor bool) Model {
+func NewModel(parsedProjects []*ParsedProject, nugetServices []*NugetService, noColor bool, initialLogLines []string) Model {
 	if noColor {
 		lipgloss.SetColorProfile(0)
 	}
@@ -269,6 +287,7 @@ func NewModel(parsedProjects []*ParsedProject, nugetServices []*NugetService, no
 	l.SetFilteringEnabled(false)
 
 	dv := viewport.New(40, 20)
+	lv := viewport.New(80, logPanelLines)
 
 	ti := textinput.New()
 	ti.Placeholder = "Type a package name…"
@@ -284,6 +303,8 @@ func NewModel(parsedProjects []*ParsedProject, nugetServices []*NugetService, no
 		detailView:     dv,
 		noColor:        noColor,
 		search:         packageSearch{input: ti},
+		logLines:       initialLogLines,
+		logView:        lv,
 	}
 }
 
@@ -379,6 +400,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			targetProject: proj,
 		}
 
+	case logLineMsg:
+		m.logLines = append(m.logLines, msg.line)
+		m.updateLogView()
+
 	case tea.KeyMsg:
 		m.statusLine = ""
 		if m.search.active {
@@ -409,6 +434,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			var cmd tea.Cmd
 			m.detailView, cmd = m.detailView.Update(msg)
 			cmds = append(cmds, cmd)
+		case focusLog:
+			if m.showLogs {
+				var cmd tea.Cmd
+				m.logView, cmd = m.logView.Update(msg)
+				cmds = append(cmds, cmd)
+			}
 		}
 	}
 
@@ -421,10 +452,28 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		return tea.Quit
 
 	case "tab":
-		m.focus = (m.focus + 1) % 3
+		if m.showLogs {
+			m.focus = (m.focus + 1) % 4
+		} else {
+			m.focus = (m.focus + 1) % 3
+		}
 
 	case "shift+tab":
-		m.focus = (m.focus + 2) % 3
+		if m.showLogs {
+			m.focus = (m.focus + 3) % 4
+		} else {
+			m.focus = (m.focus + 2) % 3
+		}
+
+	case "l":
+		m.showLogs = !m.showLogs
+		if !m.showLogs && m.focus == focusLog {
+			m.focus = focusPackages
+		}
+		if m.showLogs {
+			m.updateLogView()
+		}
+		m.relayout()
 
 	case "up", "k":
 		if m.focus == focusPackages && m.packageCursor > 0 {
@@ -616,7 +665,7 @@ func (m *Model) applyVersion(pkgName, version string) tea.Cmd {
 	m.rebuildPackageRows()
 	m.refreshDetail()
 
-	logger.Debug("applyVersion: %s → %s (%d file(s) to write)", pkgName, version, len(toWrite))
+	logger.Info("applyVersion: %s → %s (%d file(s) to write)", pkgName, version, len(toWrite))
 	if len(toWrite) == 0 {
 		return nil
 	}
@@ -657,7 +706,7 @@ func runDotnetRestore(projects []*ParsedProject) tea.Cmd {
 				logger.Warn("restore failed for %s: %v\n%s", p.FilePath, err, strings.TrimSpace(string(out)))
 				lastErr = fmt.Errorf("%w\n%s", err, strings.TrimSpace(string(out)))
 			} else {
-				logger.Debug("restore succeeded for %s", p.FileName)
+				logger.Info("restore succeeded for %s", p.FileName)
 			}
 		}
 		return restoreResultMsg{err: lastErr}
@@ -710,7 +759,7 @@ func (m *Model) doSearchCmd(query string) tea.Cmd {
 				return searchResultsMsg{results: results, query: query}
 			}
 			lastErr = err
-			logger.Debug("search source [%s] failed: %v", svc.SourceName(), err)
+			logger.Warn("search source [%s] failed: %v", svc.SourceName(), err)
 		}
 		return searchResultsMsg{query: query, err: lastErr}
 	}
@@ -753,7 +802,7 @@ func (m *Model) addPackageToProject(pkgName, version string, project *ParsedProj
 	m.focus = focusPackages
 	filePath := project.FilePath
 	return func() tea.Msg {
-		logger.Debug("AddPackageReference: %s %s → %s", pkgName, version, filePath)
+		logger.Info("AddPackageReference: %s %s → %s", pkgName, version, filePath)
 		if err := AddPackageReference(filePath, pkgName, version); err != nil {
 			return writeResultMsg{err: err}
 		}
@@ -903,15 +952,28 @@ func (m *Model) clampOffset() {
 	}
 }
 
+func (m *Model) bodyOuterHeight() int {
+	h := m.height - 4
+	if m.showLogs {
+		h -= logPanelOuterHeight
+	}
+	return imax(4, h)
+}
+
 func (m *Model) packageListHeight() int {
-	return imax(1, m.height-8)
+	return imax(1, m.bodyOuterHeight()-4)
 }
 
 func (m *Model) relayout() {
 	leftW, _, rightW := m.panelWidths()
-	m.projectList.SetSize(leftW-2, m.height-6)
+	innerH := m.bodyOuterHeight() - 2
+	m.projectList.SetSize(leftW-2, innerH)
 	m.detailView.Width = rightW - 4
-	m.detailView.Height = m.height - 6
+	m.detailView.Height = innerH
+	if m.showLogs {
+		m.logView.Width = m.width - 6
+		m.logView.Height = logPanelLines
+	}
 }
 
 func (m *Model) panelWidths() (left, mid, right int) {
@@ -958,11 +1020,12 @@ func (m Model) View() string {
 
 	body := lipgloss.JoinHorizontal(lipgloss.Top, left, mid, right)
 
-	return lipgloss.JoinVertical(lipgloss.Left,
-		m.renderHeader(),
-		body,
-		m.renderFooter(),
-	)
+	parts := []string{m.renderHeader(), body}
+	if m.showLogs {
+		parts = append(parts, m.renderLogPanel())
+	}
+	parts = append(parts, m.renderFooter())
+	return lipgloss.JoinVertical(lipgloss.Left, parts...)
 }
 
 func (m Model) renderHeader() string {
@@ -988,7 +1051,7 @@ func (m Model) renderProjectPanel(w int) string {
 		borderColor = colorAccent
 	}
 	return lipgloss.NewStyle().
-		Width(w).Height(m.height - 4).
+		Width(w).Height(m.bodyOuterHeight()).
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(borderColor).
 		Render(m.projectList.View())
@@ -1102,7 +1165,7 @@ func (m Model) renderPackagePanel(w int) string {
 	content := strings.Join(lines, "\n")
 
 	return lipgloss.NewStyle().
-		Width(w).Height(m.height-4).
+		Width(w).Height(m.bodyOuterHeight()).
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(borderColor).
 		Padding(0, 1).
@@ -1121,7 +1184,7 @@ func (m Model) renderDetailPanel(w int) string {
 	content := lipgloss.JoinVertical(lipgloss.Left, title, divider, m.detailView.View())
 
 	return lipgloss.NewStyle().
-		Width(w).Height(m.height-4).
+		Width(w).Height(m.bodyOuterHeight()).
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(borderColor).
 		Padding(0, 1).
@@ -1488,6 +1551,50 @@ func (m Model) renderPickerOverlay() string {
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
 }
 
+func (m *Model) updateLogView() {
+	var colored []string
+	for _, line := range m.logLines {
+		colored = append(colored, colorizeLogLine(line))
+	}
+	m.logView.SetContent(strings.Join(colored, "\n"))
+	m.logView.GotoBottom()
+}
+
+func colorizeLogLine(line string) string {
+	switch {
+	case strings.HasPrefix(line, "[TRACE]"):
+		return lipgloss.NewStyle().Foreground(colorMuted).Render(line)
+	case strings.HasPrefix(line, "[DEBUG]"):
+		return lipgloss.NewStyle().Foreground(colorSubtle).Render(line)
+	case strings.HasPrefix(line, "[INFO]"):
+		return lipgloss.NewStyle().Foreground(colorGreen).Render(line)
+	case strings.HasPrefix(line, "[WARN]"):
+		return lipgloss.NewStyle().Foreground(colorYellow).Render(line)
+	case strings.HasPrefix(line, "[ERROR]"), strings.HasPrefix(line, "[FATAL]"):
+		return lipgloss.NewStyle().Foreground(colorRed).Render(line)
+	default:
+		return lipgloss.NewStyle().Foreground(colorText).Render(line)
+	}
+}
+
+func (m Model) renderLogPanel() string {
+	borderColor := colorBorder
+	if m.focus == focusLog {
+		borderColor = colorAccent
+	}
+
+	title := lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render("Logs")
+	divider := lipgloss.NewStyle().Foreground(colorBorder).Render(strings.Repeat("─", m.width-6))
+	content := lipgloss.JoinVertical(lipgloss.Left, title, divider, m.logView.View())
+
+	return lipgloss.NewStyle().
+		Width(m.width).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(borderColor).
+		Padding(0, 1).
+		Render(content)
+}
+
 func (m Model) renderFooter() string {
 	type kv struct{ k, v string }
 	keys := []kv{
@@ -1499,6 +1606,7 @@ func (m Model) renderFooter() string {
 		{"a", "sync all"},
 		{"R", "restore"},
 		{"/", "add pkg"},
+		{"l", "logs"},
 		{"q", "quit"},
 	}
 

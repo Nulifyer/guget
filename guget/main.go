@@ -2,9 +2,11 @@ package main
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 
@@ -13,6 +15,44 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 )
+
+// ─────────────────────────────────────────────
+// logBuffer — thread-safe in-memory log sink
+// ─────────────────────────────────────────────
+
+type logBuffer struct {
+	mu    sync.Mutex
+	lines []string
+	send  func(tea.Msg)
+}
+
+func (b *logBuffer) Write(p []byte) (int, error) {
+	line := strings.TrimRight(string(p), "\n\r")
+	if line == "" {
+		return len(p), nil
+	}
+	b.mu.Lock()
+	b.lines = append(b.lines, line)
+	send := b.send
+	b.mu.Unlock()
+	if send != nil {
+		// Use a goroutine so callers on the Bubbletea event loop goroutine
+		// (e.g. logger calls inside Update) don't deadlock p.Send's channel.
+		go send(logLineMsg{line: line})
+	} else {
+		// Before the TUI starts, mirror to stderr so fatal errors are visible.
+		fmt.Fprintln(os.Stderr, line)
+	}
+	return len(p), nil
+}
+
+func (b *logBuffer) Lines() []string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	cp := make([]string, len(b.lines))
+	copy(cp, b.lines)
+	return cp
+}
 
 // -------------------------------
 // Setup & CLI Flags
@@ -39,6 +79,7 @@ func BuildFlags(flags map[string]arger.IParsedFlag) BuiltFlags {
 
 func Init() BuiltFlags {
 	logger.SetColor(false)
+	logger.SetLevel(logger.LevelWarn)
 	env_log_level := os.Getenv("LOG_LEVEL")
 	if env_log_level != "" {
 		logger.SetLevel(logger.ParseLevel(env_log_level))
@@ -95,6 +136,12 @@ type nugetResult struct {
 func main() {
 	builtFlags := Init()
 
+	// Redirect logger to an in-memory buffer immediately so that all startup
+	// logs are captured for the TUI log panel. Before p.Send is wired up,
+	// Write also mirrors to stderr so fatal errors are still visible.
+	buf := &logBuffer{}
+	logger.SetOutput(buf)
+
 	fullProjectPath, err := filepath.Abs(builtFlags.ProjectDir)
 	if err != nil {
 		logger.Fatal("Couldn't get absolute path for project directory: %v", err)
@@ -118,7 +165,7 @@ func main() {
 	}
 
 	if len(parsedProjects) == 0 {
-		fmt.Println("No .csproj or .fsproj files found in", fullProjectPath)
+		logger.Warn("No .csproj or .fsproj files found in: %s", fullProjectPath)
 		os.Exit(1)
 	}
 
@@ -139,24 +186,19 @@ func main() {
 		logger.Fatal("No reachable NuGet sources found")
 	}
 
-	// Redirect logger to a temp file so output doesn't corrupt the TUI.
-	// The path is printed before the alt-screen takes over so the user can tail it.
-	if level := logger.ParseLevel(builtFlags.Verbosity); level > logger.LevelNone {
-		if logFile, err := os.CreateTemp("", "guget-*.log"); err == nil {
-			fmt.Fprintf(os.Stderr, "Logging to %s\n", logFile.Name())
-			logger.SetOutput(logFile)
-			defer logFile.Close()
-		}
-	}
-
 	// launch TUI — fetching happens as a background cmd
-	m := NewModel(parsedProjects, nugetServices, builtFlags.NoColor)
+	m := NewModel(parsedProjects, nugetServices, builtFlags.NoColor, buf.Lines())
 
 	p := tea.NewProgram(
 		m,
 		tea.WithAltScreen(),
 		tea.WithMouseCellMotion(),
 	)
+
+	// Wire up live log forwarding to the TUI now that the program exists.
+	buf.mu.Lock()
+	buf.send = p.Send
+	buf.mu.Unlock()
 
 	// Restore terminal on SIGINT / SIGTERM so the alt-screen and cursor
 	// are always cleaned up even if the user kills the process externally.

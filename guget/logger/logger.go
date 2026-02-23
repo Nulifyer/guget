@@ -20,8 +20,8 @@ const (
 
 var level = LevelNone
 var colorEnabled = false
-var outWriter io.Writer  // nil = use os.Stdout / os.Stderr per-level defaults
-var errWriter io.Writer  // nil = use os.Stderr
+var outWriter io.Writer // nil = use os.Stdout / os.Stderr per-level defaults
+var errWriter io.Writer // nil = use os.Stderr
 
 // SetOutput redirects all log output (including error-level) to w.
 // Pass nil to restore the default os.Stdout / os.Stderr behaviour.
@@ -39,7 +39,7 @@ func ParseLevel(levelStr string) Level {
 		return LevelNone
 	case "error", "err":
 		return LevelError
-	case "", "warn", "warning":
+	case "warn", "warning":
 		return LevelWarn
 	case "info":
 		return LevelInfo
@@ -48,7 +48,7 @@ func ParseLevel(levelStr string) Level {
 	case "trace", "trc":
 		return LevelTrace
 	default:
-		return LevelWarn
+		return LevelInfo
 	}
 }
 
