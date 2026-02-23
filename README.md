@@ -24,12 +24,16 @@ A terminal UI for managing NuGet packages across .NET projects.
 
 - **Browse projects** — scans recursively for `.csproj` / `.fsproj` files
 - **Live version status** — fetches latest versions from NuGet v3 API
+- **Vulnerability & deprecation tracking** — surfaces CVE advisories and deprecated status per package version, with severity-coloured indicators in the list, detail panel, and version picker
 - **Update packages** — bump to the latest compatible or latest stable version
-- **Version picker** — choose any specific version with target-framework indicators
+- **Version picker** — choose any specific version with target-framework and vulnerability indicators
+- **Dependency tree** — `t` shows a package's declared dependencies; `T` runs `dotnet list --include-transitive` and displays the full transitive tree with status icons
 - **Add packages** — search NuGet and add new package references
 - **Bulk sync** — apply a compatible version across all projects at once
 - **Restore** — run `dotnet restore` without leaving the TUI
 - **Log panel** — real-time internal logs, toggleable with `l`
+- **Sources panel** — view configured NuGet sources, toggleable with `s`
+- **Help overlay** — full keybinding reference, press `?`
 - **Multi-source** — respects `NuGet.config` and global NuGet source configuration
 
 ---
@@ -138,7 +142,11 @@ guget -v debug
 | `R` | Run `dotnet restore` |
 | `/` | Search NuGet and add a new package |
 | `d` | Remove selected package (prompts for confirmation) |
+| `t` | Show declared dependency tree for the selected package |
+| `T` | Show full transitive dependency tree for the selected project |
 | `l` | Toggle log panel |
+| `s` | Toggle sources panel |
+| `?` | Toggle keybinding help |
 
 ### Search Overlay (`/`)
 
@@ -164,10 +172,12 @@ guget -v debug
 
 | Icon | Meaning |
 |------|---------|
-| `✓` | Up to date |
-| `↑` | Newer **compatible** version available |
-| `⬆` | Newer **stable** version available |
+| `⚠` | Installed version has known **CVE vulnerabilities** |
 | `✗` | Error fetching version info |
+| `↑` | Newer **compatible** version available |
+| `⬆` | Newer **stable** version available (beyond compatible) |
+| `~` | Package is **deprecated** in the registry |
+| `✓` | Up to date |
 
 ---
 
