@@ -204,21 +204,19 @@ func (s *NugetService) resolveEndpoints() error {
 	if err := s.getJSON(s.sourceURL, &idx); err != nil {
 		return fmt.Errorf("fetching service index: %w", err)
 	}
+	var searchVer, regVer SemVer
 	for _, r := range idx.Resources {
 		logger.Trace("[%s] service index resource: type=%q id=%q", s.sourceName, r.Type, r.ID)
 		switch {
-		// Accept SearchQueryService and any versioned variant (e.g. SearchQueryService/3.0.0-beta).
 		case strings.HasPrefix(r.Type, "SearchQueryService"):
-			if s.searchBase == "" {
+			if v := resourceTypeVersion(r.Type); s.searchBase == "" || v.IsNewerThan(searchVer) {
 				s.searchBase = r.ID
+				searchVer = v
 			}
-		// RegistrationsBaseUrl/3.6.0 is the most capable (semver2 + gzip) — always prefer it.
-		// All other variants (unversioned, 3.4.0, unknown) are accepted as fallbacks.
-		case r.Type == "RegistrationsBaseUrl/3.6.0":
-			s.regBase = r.ID
 		case strings.HasPrefix(r.Type, "RegistrationsBaseUrl"):
-			if s.regBase == "" {
+			if v := resourceTypeVersion(r.Type); s.regBase == "" || v.IsNewerThan(regVer) {
 				s.regBase = r.ID
+				regVer = v
 			}
 		}
 	}
@@ -461,6 +459,16 @@ func normFramework(raw string) string {
 		return strings.TrimPrefix(low, ".")
 	}
 	return low
+}
+
+// resourceTypeVersion parses the version suffix from a NuGet service index resource type,
+// e.g. "SearchQueryService/3.0.0-beta" → SemVer{3,0,0,"beta"}.
+// Unversioned types (e.g. "SearchQueryService") return a zero SemVer.
+func resourceTypeVersion(resourceType string) SemVer {
+	if idx := strings.IndexByte(resourceType, '/'); idx >= 0 {
+		return ParseSemVer(resourceType[idx+1:])
+	}
+	return SemVer{}
 }
 
 func sortVersionsDesc(vs []PackageVersion) {
