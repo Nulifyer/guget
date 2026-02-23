@@ -167,7 +167,7 @@ func main() {
 	if err != nil {
 		logger.Fatal("Couldn't get absolute path for project directory: %v", err)
 	}
-	logger.Info("Starting GoNugetTui with project directory: %s", fullProjectPath)
+	logger.Info("Starting guget with project directory: %s", fullProjectPath)
 
 	// find + parse projects
 	projectFiles, err := FindProjectFiles(fullProjectPath)
