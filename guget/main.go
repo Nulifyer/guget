@@ -139,6 +139,16 @@ func main() {
 		logger.Fatal("No reachable NuGet sources found")
 	}
 
+	// Redirect logger to a temp file so output doesn't corrupt the TUI.
+	// The path is printed before the alt-screen takes over so the user can tail it.
+	if level := logger.ParseLevel(builtFlags.Verbosity); level > logger.LevelNone {
+		if logFile, err := os.CreateTemp("", "guget-*.log"); err == nil {
+			fmt.Fprintf(os.Stderr, "Logging to %s\n", logFile.Name())
+			logger.SetOutput(logFile)
+			defer logFile.Close()
+		}
+	}
+
 	// launch TUI — fetching happens as a background cmd
 	m := NewModel(parsedProjects, builtFlags.NoColor)
 

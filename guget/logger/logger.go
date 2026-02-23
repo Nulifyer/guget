@@ -2,6 +2,7 @@ package logger
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"strings"
 )
@@ -19,6 +20,16 @@ const (
 
 var level = LevelNone
 var colorEnabled = false
+var outWriter io.Writer  // nil = use os.Stdout / os.Stderr per-level defaults
+var errWriter io.Writer  // nil = use os.Stderr
+
+// SetOutput redirects all log output (including error-level) to w.
+// Pass nil to restore the default os.Stdout / os.Stderr behaviour.
+// Color codes are suppressed when a custom writer is set.
+func SetOutput(w io.Writer) {
+	outWriter = w
+	errWriter = w
+}
 
 func SetLevel(l Level) { level = l }
 func SetColor(f bool)  { colorEnabled = f }
@@ -51,57 +62,75 @@ const (
 	colorGrey   = "\x1b[90m"
 )
 
+func stdOut() io.Writer {
+	if outWriter != nil {
+		return outWriter
+	}
+	return os.Stdout
+}
+
+func stdErr() io.Writer {
+	if errWriter != nil {
+		return errWriter
+	}
+	return os.Stderr
+}
+
+func useColor() bool {
+	return colorEnabled && outWriter == nil
+}
+
 func Trace(format string, v ...interface{}) {
 	if level >= LevelTrace {
-		if colorEnabled {
-			fmt.Fprintf(os.Stdout, "%s[TRACE]%s %s\n", colorGrey, colorReset, fmt.Sprintf(format, v...))
+		if useColor() {
+			fmt.Fprintf(stdOut(), "%s[TRACE]%s %s\n", colorGrey, colorReset, fmt.Sprintf(format, v...))
 		} else {
-			fmt.Fprintf(os.Stdout, "[TRACE] %s\n", fmt.Sprintf(format, v...))
+			fmt.Fprintf(stdOut(), "[TRACE] %s\n", fmt.Sprintf(format, v...))
 		}
 	}
 }
 
 func Debug(format string, v ...interface{}) {
 	if level >= LevelDebug {
-		if colorEnabled {
-			fmt.Fprintf(os.Stdout, "%s[DEBUG]%s %s\n", colorCyan, colorReset, fmt.Sprintf(format, v...))
+		if useColor() {
+			fmt.Fprintf(stdOut(), "%s[DEBUG]%s %s\n", colorCyan, colorReset, fmt.Sprintf(format, v...))
 		} else {
-			fmt.Fprintf(os.Stdout, "[DEBUG] %s\n", fmt.Sprintf(format, v...))
+			fmt.Fprintf(stdOut(), "[DEBUG] %s\n", fmt.Sprintf(format, v...))
 		}
 	}
 }
 
 func Info(format string, v ...interface{}) {
 	if level >= LevelInfo {
-		if colorEnabled {
-			fmt.Fprintf(os.Stdout, "%s[INFO]%s %s\n", colorGreen, colorReset, fmt.Sprintf(format, v...))
+		if useColor() {
+			fmt.Fprintf(stdOut(), "%s[INFO]%s %s\n", colorGreen, colorReset, fmt.Sprintf(format, v...))
 		} else {
-			fmt.Fprintf(os.Stdout, "[INFO] %s\n", fmt.Sprintf(format, v...))
+			fmt.Fprintf(stdOut(), "[INFO] %s\n", fmt.Sprintf(format, v...))
 		}
 	}
 }
 
 func Warn(format string, v ...interface{}) {
 	if level >= LevelWarn {
-		if colorEnabled {
-			fmt.Fprintf(os.Stderr, "%s[WARN]%s %s\n", colorYellow, colorReset, fmt.Sprintf(format, v...))
+		if useColor() {
+			fmt.Fprintf(stdErr(), "%s[WARN]%s %s\n", colorYellow, colorReset, fmt.Sprintf(format, v...))
 		} else {
-			fmt.Fprintf(os.Stderr, "[WARN] %s\n", fmt.Sprintf(format, v...))
+			fmt.Fprintf(stdErr(), "[WARN] %s\n", fmt.Sprintf(format, v...))
 		}
 	}
 }
 
 func Error(format string, v ...interface{}) {
 	if level >= LevelError {
-		if colorEnabled {
-			fmt.Fprintf(os.Stderr, "%s[ERROR]%s %s\n", colorRed, colorReset, fmt.Sprintf(format, v...))
+		if useColor() {
+			fmt.Fprintf(stdErr(), "%s[ERROR]%s %s\n", colorRed, colorReset, fmt.Sprintf(format, v...))
 		} else {
-			fmt.Fprintf(os.Stderr, "[ERROR] %s\n", fmt.Sprintf(format, v...))
+			fmt.Fprintf(stdErr(), "[ERROR] %s\n", fmt.Sprintf(format, v...))
 		}
 	}
 }
 
 func Fatal(format string, v ...interface{}) {
-	fmt.Fprintf(os.Stderr, "%s[FATAL]%s %s\n", colorRed, colorReset, fmt.Sprintf(format, v...))
+	fmt.Fprintf(stdErr(), "%s[FATAL]%s %s\n", colorRed, colorReset, fmt.Sprintf(format, v...))
 	os.Exit(1)
 }
