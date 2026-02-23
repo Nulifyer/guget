@@ -18,6 +18,7 @@
             "args": [
                 "-v", "dbg",
                 "-p", "./debug-dotnet",
+                "-lf", "./guget.log.txt",
                 "--", "--extra-arg1", "value1", "--extra-arg2", "value2", "-p", "./fake-project"
             ]
         },

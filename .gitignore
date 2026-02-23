@@ -35,3 +35,4 @@ go.work.sum
 **/obj
 **/debug-dotnet
 .claude
+*.log.txt
