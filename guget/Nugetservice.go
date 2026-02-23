@@ -108,6 +108,10 @@ type registrationLeafWrapper struct {
 type registrationLeaf struct {
 	ID               string            `json:"id"`
 	Version          string            `json:"version"`
+	Description      string            `json:"description"`
+	Authors          StringOrArray     `json:"authors"`
+	Tags             StringOrArray     `json:"tags"`
+	Listed           *bool             `json:"listed"`
 	DependencyGroups []dependencyGroup `json:"dependencyGroups"`
 }
 
@@ -246,12 +250,14 @@ func (s *NugetService) resolveEndpoints() error {
 		}
 	}
 	if s.searchBase == "" {
-		return fmt.Errorf("SearchQueryService not found in service index")
+		// Not fatal — exact lookups use the registration index directly.
+		// Interactive search will be unavailable for this source.
+		logger.Warn("[%s] SearchQueryService not found in service index — search unavailable", s.sourceName)
 	}
 	if s.regBase == "" {
 		return fmt.Errorf("RegistrationsBaseUrl not found in service index")
 	}
-	logger.Debug("[%s] endpoints resolved: search=%s", s.sourceName, s.searchBase)
+	logger.Debug("[%s] endpoints resolved: search=%s reg=%s", s.sourceName, s.searchBase, s.regBase)
 	return nil
 }
 
@@ -270,56 +276,32 @@ func (s *NugetService) Search(query string, take int) ([]SearchResult, error) {
 	return resp.Data, nil
 }
 
-// SearchExact finds a package by its exact ID (case-insensitive).
+// SearchExact looks up a package by its exact ID using the registration index
+// directly. This avoids the search API entirely, which is more reliable across
+// feed types (e.g. Azure DevOps returns HTTP 500 from its search endpoint for
+// packages not in the feed, whereas the registration endpoint returns 404).
 func (s *NugetService) SearchExact(packageID string) (*PackageInfo, error) {
-	logger.Debug("[%s] searching for %q", s.sourceName, packageID)
-	params := url.Values{}
-	params.Set("q", packageID)
-	params.Set("take", "10") // small window; exact-ID match is identified by strings.EqualFold below
-	params.Set("prerelease", "false")
+	logger.Debug("[%s] looking up %q via registration index", s.sourceName, packageID)
+	regURL := fmt.Sprintf("%s%s/index.json", s.regBase, strings.ToLower(packageID))
 
-	var resp searchResponse
-	if err := s.getJSON(s.searchBase+"?"+params.Encode(), &resp); err != nil {
-		// Azure DevOps returns 500 when a package isn't in the private feed
-		// (rather than an empty result set). Treat it as "not found here".
+	var regIdx registrationIndex
+	if err := s.getJSON(regURL, &regIdx); err != nil {
 		var he *httpStatusError
-		if errors.As(err, &he) && he.Code == http.StatusInternalServerError {
-			logger.Debug("[%s] search returned 500 for %q — treating as not found", s.sourceName, packageID)
+		if errors.As(err, &he) && he.Code == http.StatusNotFound {
+			logger.Debug("[%s] %q not found (404)", s.sourceName, packageID)
 			return nil, fmt.Errorf("package %q not found", packageID)
 		}
 		return nil, err
 	}
 
-	for _, r := range resp.Data {
-		if strings.EqualFold(r.ID, packageID) {
-			logger.Debug("[%s] found %q (latest=%s)", s.sourceName, packageID, r.Version)
-			return s.enrichResult(r)
-		}
-	}
-	logger.Debug("[%s] %q not found", s.sourceName, packageID)
-	return nil, fmt.Errorf("package %q not found", packageID)
-}
-
-// enrichResult fetches registration data to build full PackageInfo.
-func (s *NugetService) enrichResult(r SearchResult) (*PackageInfo, error) {
-	regURL := fmt.Sprintf("%s%s/index.json", s.regBase, strings.ToLower(r.ID))
-
-	var regIdx registrationIndex
-	if err := s.getJSON(regURL, &regIdx); err != nil {
-		return nil, fmt.Errorf("fetching registration: %w", err)
-	}
-
-	// Build a version → downloads lookup from search results
-	dlLookup := make(map[string]int, len(r.Versions))
-	for _, v := range r.Versions {
-		dlLookup[v.Version] = v.Downloads
-	}
-
 	var versions []PackageVersion
+	var latestLeaf *registrationLeaf       // newest version overall (for fallback metadata)
+	var latestStableLeaf *registrationLeaf // newest stable version (preferred for metadata)
+
 	for _, page := range regIdx.Items {
 		items := page.Items
 		if len(items) == 0 {
-			// Page not inlined — fetch it separately
+			// Page not inlined — fetch it separately.
 			var fullPage registrationPage
 			if err := s.getJSON(page.ID, &fullPage); err != nil {
 				return nil, fmt.Errorf("fetching page %s: %w", page.ID, err)
@@ -327,8 +309,21 @@ func (s *NugetService) enrichResult(r SearchResult) (*PackageInfo, error) {
 			items = fullPage.Items
 		}
 
-		for _, leaf := range items {
-			ce := leaf.CatalogEntry
+		for i := range items {
+			ce := &items[i].CatalogEntry
+			// Skip explicitly unlisted packages.
+			if ce.Listed != nil && !*ce.Listed {
+				continue
+			}
+			sv := ParseSemVer(ce.Version)
+			if latestLeaf == nil || sv.IsNewerThan(ParseSemVer(latestLeaf.Version)) {
+				latestLeaf = ce
+			}
+			if !sv.IsPreRelease() {
+				if latestStableLeaf == nil || sv.IsNewerThan(ParseSemVer(latestStableLeaf.Version)) {
+					latestStableLeaf = ce
+				}
+			}
 			seen := NewSet[string]()
 			var frameworks []TargetFramework
 			for _, dg := range ce.DependencyGroups {
@@ -339,36 +334,43 @@ func (s *NugetService) enrichResult(r SearchResult) (*PackageInfo, error) {
 				}
 			}
 			versions = append(versions, PackageVersion{
-				SemVer:     ParseSemVer(ce.Version),
-				Downloads:  dlLookup[ce.Version],
+				SemVer:     sv,
 				Frameworks: frameworks,
 			})
 		}
 	}
 
-	logger.Debug("[%s] enriched %q: %d versions across %d registration page(s)", s.sourceName, r.ID, len(versions), len(regIdx.Items))
+	if len(versions) == 0 || latestLeaf == nil {
+		logger.Debug("[%s] %q has no listed versions", s.sourceName, packageID)
+		return nil, fmt.Errorf("package %q not found", packageID)
+	}
 
-	// Sort newest → oldest
 	sortVersionsDesc(versions)
 
+	// Prefer stable-version metadata; fall back to the overall latest.
+	meta := latestStableLeaf
+	if meta == nil {
+		meta = latestLeaf
+	}
+
 	authors := NewSet[string]()
-	for _, a := range r.Authors {
+	for _, a := range meta.Authors {
 		authors.Add(a)
 	}
 	tags := NewSet[string]()
-	for _, t := range r.Tags {
+	for _, t := range meta.Tags {
 		tags.Add(t)
 	}
 
+	logger.Debug("[%s] found %q: %d versions, latest stable=%s", s.sourceName, packageID, len(versions), meta.Version)
+
 	return &PackageInfo{
-		ID:             r.ID,
-		LatestVersion:  r.Version,
-		Description:    r.Description,
-		Authors:        authors,
-		Tags:           tags,
-		TotalDownloads: r.TotalDownloads,
-		Verified:       r.Verified,
-		Versions:       versions,
+		ID:            meta.ID,
+		LatestVersion: meta.Version,
+		Description:   meta.Description,
+		Authors:       authors,
+		Tags:          tags,
+		Versions:      versions,
 	}, nil
 }
 
