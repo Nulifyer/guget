@@ -251,6 +251,9 @@ type Model struct {
 	confirm confirmRemove
 	noColor bool
 
+	sources     []NugetSource
+	showSources bool
+
 	statusLine  string
 	statusIsErr bool
 	restoring   bool
@@ -260,7 +263,7 @@ type Model struct {
 	showLogs bool
 }
 
-func NewModel(parsedProjects []*ParsedProject, nugetServices []*NugetService, noColor bool, initialLogLines []string) Model {
+func NewModel(parsedProjects []*ParsedProject, nugetServices []*NugetService, sources []NugetSource, noColor bool, initialLogLines []string) Model {
 	if noColor {
 		lipgloss.SetColorProfile(0)
 	}
@@ -308,6 +311,7 @@ func NewModel(parsedProjects []*ParsedProject, nugetServices []*NugetService, no
 	return Model{
 		parsedProjects: parsedProjects,
 		nugetServices:  nugetServices,
+		sources:        sources,
 		loading:        true,
 		spinner:        sp,
 		projectList:    l,
@@ -417,6 +421,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		m.statusLine = ""
+		if m.showSources {
+			switch msg.String() {
+			case "esc", "s", "q":
+				m.showSources = false
+			}
+			return m, tea.Batch(cmds...)
+		}
 		if m.search.active {
 			cmds = append(cmds, m.handleSearchKey(msg))
 			return m, tea.Batch(cmds...)
@@ -489,6 +500,9 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 			m.updateLogView()
 		}
 		m.relayout()
+
+	case "s":
+		m.showSources = !m.showSources
 
 	case "up", "k":
 		if m.focus == focusPackages && m.packageCursor > 0 {
@@ -1126,6 +1140,10 @@ func (m Model) View() string {
 		return m.renderConfirmOverlay()
 	}
 
+	if m.showSources {
+		return m.renderSourcesOverlay()
+	}
+
 	leftW, midW, rightW := m.panelWidths()
 
 	left := m.renderProjectPanel(leftW)
@@ -1463,6 +1481,56 @@ func versionCompatible(v PackageVersion, targets Set[TargetFramework]) bool {
 	return true
 }
 
+func (m Model) renderSourcesOverlay() string {
+	w := 62
+	innerW := w - 6 // border (2) + padding (2*2)
+
+	var lines []string
+	lines = append(lines,
+		lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render("NuGet Sources"),
+	)
+	lines = append(lines,
+		lipgloss.NewStyle().Foreground(colorBorder).Render(strings.Repeat("─", innerW)),
+	)
+
+	if len(m.sources) == 0 {
+		lines = append(lines,
+			lipgloss.NewStyle().Foreground(colorMuted).Render("No sources detected"),
+		)
+	} else {
+		for _, src := range m.sources {
+			nameStyle := lipgloss.NewStyle().Foreground(colorText).Bold(true)
+			name := nameStyle.Render(truncate(src.Name, innerW-18))
+			auth := ""
+			if src.Username != "" {
+				auth = "  " + lipgloss.NewStyle().Foreground(colorGreen).Render("✓ authenticated")
+			}
+			lines = append(lines, name+auth)
+			lines = append(lines,
+				"  "+lipgloss.NewStyle().Foreground(colorSubtle).Render(truncate(src.URL, innerW-2)),
+			)
+			lines = append(lines, "")
+		}
+	}
+
+	lines = append(lines,
+		lipgloss.NewStyle().Foreground(colorBorder).Render(strings.Repeat("─", innerW)),
+	)
+	lines = append(lines,
+		lipgloss.NewStyle().Foreground(colorMuted).Render("esc / s  close"),
+	)
+
+	box := lipgloss.NewStyle().
+		Width(w).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(colorAccent).
+		Background(colorSurface).
+		Padding(1, 2).
+		Render(strings.Join(lines, "\n"))
+
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
+}
+
 func (m Model) renderSearchOverlay() string {
 	w := 56
 	innerW := w - 6 // border (2) + padding (2*2)
@@ -1720,6 +1788,7 @@ func (m Model) renderFooter() string {
 		{"/", "add pkg"},
 		{"d", "del pkg"},
 		{"l", "logs"},
+		{"s", "sources"},
 		{"q", "quit"},
 	}
 
