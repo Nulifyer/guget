@@ -45,17 +45,14 @@ A terminal UI for managing NuGet packages across .NET projects.
 
 **Linux / macOS**
 
+Installs to `/usr/local/bin` if writable, otherwise `~/.local/bin`. Override the install location with `GUGET_INSTALL=/your/path`.
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/nulifyer/guget/main/install.sh | bash
 ```
-
-Or with wget:
-
 ```bash
 wget -qO- https://raw.githubusercontent.com/nulifyer/guget/main/install.sh | bash
 ```
-
-Fetches the latest release from GitHub and installs to `/usr/local/bin` if writable, otherwise `~/.local/bin`. Override the install location with `GUGET_INSTALL=/your/path`.
 
 **Windows (PowerShell)**
 

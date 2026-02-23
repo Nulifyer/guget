@@ -38,8 +38,12 @@ try {
     $UserPath = [Environment]::GetEnvironmentVariable("PATH", "User")
     if ($UserPath -notlike "*$InstallDir*") {
         [Environment]::SetEnvironmentVariable("PATH", "$UserPath;$InstallDir", "User")
-        Write-Host "Added $InstallDir to your PATH. Restart your terminal for it to take effect."
+        Write-Host "Added $InstallDir to your PATH."
     }
+
+    # Refresh PATH in the current session so guget is usable immediately.
+    $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH", "Machine") + ";" +
+                [System.Environment]::GetEnvironmentVariable("PATH", "User")
 
     Write-Host "Installed to $InstallDir\guget.exe"
     Write-Host "Done! Run 'guget --version' to verify."

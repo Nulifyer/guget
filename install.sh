@@ -88,9 +88,14 @@ case ":$PATH:" in
     if ! grep -qF "$INSTALL_DIR" "$PROFILE" 2>/dev/null; then
       printf '\n# Added by guget installer\n%s\n' "$LINE" >> "$PROFILE"
       echo "Added $INSTALL_DIR to PATH in $PROFILE"
-      echo "Restart your terminal or run: source $PROFILE"
     fi
     ;;
 esac
+
+# Export into the current shell session.
+# When sourced (. <(curl -fsSL ...)) this takes effect immediately.
+# When run as a subshell (curl ... | bash) it has no effect on the parent,
+# but the profile update above ensures guget is available in new terminals.
+export PATH="$INSTALL_DIR:$PATH"
 
 echo "Done! Run 'guget --version' to verify."
