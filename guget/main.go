@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"os/signal"
@@ -65,6 +66,7 @@ const (
 	Flag_Verbosity  = "verbosity"
 	Flag_ProjectDir = "project"
 	Flag_Version    = "version"
+	Flag_LogFile    = "log-file"
 )
 
 type BuiltFlags struct {
@@ -72,6 +74,7 @@ type BuiltFlags struct {
 	Verbosity  string
 	ProjectDir string
 	Version    bool
+	LogFile    string
 }
 
 func BuildFlags(flags map[string]arger.IParsedFlag) BuiltFlags {
@@ -80,6 +83,7 @@ func BuildFlags(flags map[string]arger.IParsedFlag) BuiltFlags {
 		Verbosity:  arger.Get[string](flags, Flag_Verbosity),
 		ProjectDir: arger.Get[string](flags, Flag_ProjectDir),
 		Version:    arger.Get[bool](flags, Flag_Version),
+		LogFile:    arger.Get[string](flags, Flag_LogFile),
 	}
 }
 
@@ -125,6 +129,12 @@ func initCLI() BuiltFlags {
 		},
 		Description: "Set the target project directory (defaults to current working directory)",
 	})
+	arger.RegisterFlag(arger.Flag[string]{
+		Name:        Flag_LogFile,
+		Aliases:     []string{"-lf", "--log-file"},
+		Default:     arger.Optional(""),
+		Description: "Write all log output to this file (in addition to the TUI log panel)",
+	})
 
 	parsedFlags, _ := arger.Parse()
 	builtFlags := BuildFlags(parsedFlags)
@@ -161,7 +171,16 @@ func main() {
 	// logs are captured for the TUI log panel. Before p.Send is wired up,
 	// Write also mirrors to stderr so fatal errors are still visible.
 	buf := &logBuffer{}
-	logger.SetOutput(buf)
+	if builtFlags.LogFile != "" {
+		f, err := os.Create(builtFlags.LogFile)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to open log file %q: %v\n", builtFlags.LogFile, err)
+			os.Exit(1)
+		}
+		logger.SetOutput(io.MultiWriter(buf, f))
+	} else {
+		logger.SetOutput(buf)
+	}
 
 	fullProjectPath, err := filepath.Abs(builtFlags.ProjectDir)
 	if err != nil {
