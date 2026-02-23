@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"logger"
 )
 
 const defaultNugetSource = "https://api.nuget.org/v3/index.json"
@@ -128,8 +130,10 @@ func DetectSources(projectDir string) []NugetSource {
 func sourcesFromNugetConfig(path string) ([]NugetSource, bool) {
 	data, err := os.ReadFile(path)
 	if err != nil {
+		logger.Trace("sourcesFromNugetConfig: skipping %q (%v)", path, err)
 		return nil, false
 	}
+	logger.Trace("sourcesFromNugetConfig: reading %q", path)
 
 	var cfg nugetConfig
 	if err := xml.Unmarshal(data, &cfg); err != nil {
@@ -148,10 +152,12 @@ func sourcesFromNugetConfig(path string) ([]NugetSource, bool) {
 
 	// Parse credentials keyed by normalised source name
 	creds := parseCredentials(data)
+	logger.Trace("sourcesFromNugetConfig: %q — %d credential block(s), cleared=%v", path, len(creds), cleared)
 
 	var sources []NugetSource
 	for _, ps := range cfg.PackageSources {
 		if disabled.Contains(strings.ToLower(ps.Key)) {
+			logger.Trace("sourcesFromNugetConfig: [%s] skipped (disabled)", ps.Key)
 			continue
 		}
 		// Only include http/https sources (skip local folder paths)
@@ -160,8 +166,13 @@ func sourcesFromNugetConfig(path string) ([]NugetSource, bool) {
 			if c, ok := creds[normalizeCredentialKey(ps.Key)]; ok {
 				s.Username = c.Username
 				s.Password = c.Password
+				logger.Trace("sourcesFromNugetConfig: [%s] credentials matched (username=%q, password=%d chars)", ps.Key, c.Username, len(c.Password))
+			} else {
+				logger.Trace("sourcesFromNugetConfig: [%s] no credentials found (lookup key=%q)", ps.Key, normalizeCredentialKey(ps.Key))
 			}
 			sources = append(sources, s)
+		} else {
+			logger.Trace("sourcesFromNugetConfig: [%s] skipped (not http/https: %q)", ps.Key, ps.Value)
 		}
 	}
 	return sources, cleared

@@ -231,25 +231,32 @@ func invokeProvider(providerPath, sourceURL string) (*sourceCredential, error) {
 	if err != nil {
 		return nil, fmt.Errorf("provider exited non-zero: %w", err)
 	}
+	logger.Trace("invokeProvider: %s produced %d bytes of output", filepath.Base(providerPath), len(out))
+
 	// Credential providers sometimes emit informational lines to stdout before
 	// the JSON payload (e.g. "INFO: ..."). Find the first '{' to locate the JSON.
 	jsonStart := bytes.IndexByte(out, '{')
 	if jsonStart >= 0 {
+		logger.Trace("invokeProvider: JSON found at offset %d (preamble: %d bytes)", jsonStart, jsonStart)
 		var resp credentialProviderResponse
 		if err := json.Unmarshal(out[jsonStart:], &resp); err != nil {
 			return nil, fmt.Errorf("parsing provider output: %w", err)
 		}
+		logger.Trace("invokeProvider: JSON parsed OK (username=%q, password=%d chars)", resp.Username, len(resp.Password))
 		return &sourceCredential{Username: resp.Username, Password: resp.Password}, nil
 	}
 
 	// Fallback: some providers emit credentials as log lines instead of JSON, e.g.:
 	//   [Information] [CredentialProvider]Username: VssSessionToken
 	//   [Information] [CredentialProvider]Password: abc123
+	logger.Trace("invokeProvider: no JSON found, trying log-line parse")
 	cred := parseLogLineCredentials(out)
 	if cred != nil {
+		logger.Trace("invokeProvider: log-line parse OK (username=%q, password=%d chars)", cred.Username, len(cred.Password))
 		return cred, nil
 	}
 
+	logger.Trace("invokeProvider: raw output: %q", string(out))
 	return nil, fmt.Errorf("parsing provider output: no JSON object or recognisable credential lines found in output")
 }
 

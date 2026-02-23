@@ -124,7 +124,10 @@ func (t *authTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	// Clone so we never mutate the caller's request.
 	req = req.Clone(req.Context())
 	if user != "" || pass != "" {
+		logger.Trace("[%s] sending Basic Auth (username=%q, password=%d chars)", t.sourceName, user, len(pass))
 		req.SetBasicAuth(user, pass)
+	} else {
+		logger.Trace("[%s] no credentials available, sending unauthenticated request", t.sourceName)
 	}
 
 	resp, err := t.base.RoundTrip(req)
@@ -133,6 +136,7 @@ func (t *authTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 
 	// 401 — ask a credential provider (once per transport lifetime).
+	logger.Trace("[%s] got 401, invoking credential provider", t.sourceName)
 	resp.Body.Close()
 
 	var providerCred *sourceCredential
