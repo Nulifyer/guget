@@ -758,7 +758,8 @@ func (m Model) renderPackagePanel(w int) string {
 			padRight(hStyle.Render("Package"), 33)+
 			padRight(hStyle.Render("Current"), 19)+
 			padRight(hStyle.Render("Compatible"), 13)+
-			hStyle.Render("Latest"),
+			padRight(hStyle.Render("Latest"), 14)+
+			hStyle.Render("Source"),
 	)
 	lines = append(lines,
 		lipgloss.NewStyle().Foreground(colorBorder).Render(strings.Repeat("─", w-4)),
@@ -822,14 +823,18 @@ func (m Model) renderPackagePanel(w int) string {
 				latestColor = colorGreen
 			}
 		}
-		latest := lipgloss.NewStyle().Foreground(latestColor).Render(rawLatest)
+		latest := padRight(lipgloss.NewStyle().Foreground(latestColor).Render(rawLatest), 14)
+
+		// source
+		src := truncate(row.source, 16)
+		source := lipgloss.NewStyle().Foreground(colorMuted).Render(src)
 
 		prefix := "  "
 		if selected && focused {
 			prefix = lipgloss.NewStyle().Foreground(colorAccent).Render("▶ ")
 		}
 
-		line := prefix + icon + " " + name + current + comp + latest
+		line := prefix + icon + " " + name + current + comp + latest + source
 
 		if selected && focused {
 			line = lipgloss.NewStyle().
