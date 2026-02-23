@@ -61,6 +61,7 @@ func normalizeCredentialKey(name string) string {
 func parseCredentials(data []byte) map[string]sourceCredential {
 	creds := make(map[string]sourceCredential)
 	dec := xml.NewDecoder(bytes.NewReader(data))
+	logger.Trace("parseCredentials: parsing %d bytes", len(data))
 
 	inSection := false
 	var currentSource string
@@ -79,6 +80,7 @@ func parseCredentials(data []byte) map[string]sourceCredential {
 			case inSection && currentSource == "":
 				// The element name IS the source name.
 				currentSource = t.Name.Local
+				logger.Trace("parseCredentials: found credential block for source %q", currentSource)
 			case inSection && currentSource != "" && t.Name.Local == "add":
 				var key, value string
 				for _, attr := range t.Attr {
@@ -92,10 +94,13 @@ func parseCredentials(data []byte) map[string]sourceCredential {
 				switch strings.ToLower(key) {
 				case "username":
 					username = value
+					logger.Trace("parseCredentials: [%s] username = %q", currentSource, username)
 				case "cleartextpassword":
 					clearPass = value
+					logger.Trace("parseCredentials: [%s] ClearTextPassword present (%d chars)", currentSource, len(clearPass))
 				case "password":
 					encPass = value // DPAPI-encrypted (Windows)
+					logger.Trace("parseCredentials: [%s] encrypted Password present (%d chars)", currentSource, len(encPass))
 				}
 			}
 
@@ -115,9 +120,13 @@ func parseCredentials(data []byte) map[string]sourceCredential {
 				if username != "" || password != "" {
 					if username == "" && password != "" {
 						username = "PAT"
+						logger.Trace("parseCredentials: [%s] no username set, defaulting to %q", currentSource, username)
 					}
 					key := normalizeCredentialKey(currentSource)
+					logger.Trace("parseCredentials: [%s] stored credential under key %q (username=%q, password=%d chars)", currentSource, key, username, len(password))
 					creds[key] = sourceCredential{Username: username, Password: password}
+				} else {
+					logger.Trace("parseCredentials: [%s] no credentials found in block", currentSource)
 				}
 				// Reset state for next source element
 				currentSource = ""
@@ -160,17 +169,22 @@ func findCredentialProviders() []string {
 
 	// 1. Explicit env var (semicolon on Windows, colon on Unix)
 	if envPaths := os.Getenv("NUGET_CREDENTIALPROVIDER_PLUGIN_PATHS"); envPaths != "" {
+		logger.Trace("findCredentialProviders: NUGET_CREDENTIALPROVIDER_PLUGIN_PATHS=%q", envPaths)
 		for _, dir := range strings.Split(envPaths, string(os.PathListSeparator)) {
 			providers = append(providers, findProvidersInDir(dir)...)
 		}
+	} else {
+		logger.Trace("findCredentialProviders: NUGET_CREDENTIALPROVIDER_PLUGIN_PATHS not set")
 	}
 
 	// 2. Standard per-user plugin directory
 	if home, err := os.UserHomeDir(); err == nil {
 		dir := filepath.Join(home, ".nuget", "plugins", "netcore")
+		logger.Trace("findCredentialProviders: scanning standard dir %q", dir)
 		providers = append(providers, findProvidersInDir(dir)...)
 	}
 
+	logger.Trace("findCredentialProviders: found %d provider(s)", len(providers))
 	return providers
 }
 
@@ -179,6 +193,7 @@ func findCredentialProviders() []string {
 func findProvidersInDir(dir string) []string {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
+		logger.Trace("findProvidersInDir: cannot read %q: %v", dir, err)
 		return nil
 	}
 	var providers []string
@@ -192,7 +207,10 @@ func findProvidersInDir(dir string) []string {
 		}
 		exePath := filepath.Join(dir, entry.Name(), exeName)
 		if _, err := os.Stat(exePath); err == nil {
+			logger.Trace("findProvidersInDir: found provider %q", exePath)
 			providers = append(providers, exePath)
+		} else {
+			logger.Trace("findProvidersInDir: expected exe not found at %q: %v", exePath, err)
 		}
 	}
 	return providers
