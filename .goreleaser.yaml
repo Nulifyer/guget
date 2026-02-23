@@ -34,7 +34,7 @@ changelog:
   sort: asc
   use: github
   abbrev: 7
-  format: "{{ .SHA }} {{ .Message }} ([@{{ .Author.Username }}](https://github.com/{{ .Author.Username }}))"
+  format: "{{ .SHA }} {{ .Message }}{{ if .Logins }} ({{ .Logins | englishJoin }}){{ end }}"
   filters:
     exclude:
       - "^docs:"
