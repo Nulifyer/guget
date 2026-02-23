@@ -1599,14 +1599,13 @@ func (m Model) renderLogPanel() string {
 func (m Model) renderFooter() string {
 	type kv struct{ k, v string }
 	keys := []kv{
-		{"tab", "focus"},
-		{"↑↓", "navigate"},
-		{"u", "update compat"},
-		{"U", "update latest"},
+		{"tab/↑↓", "focus/navigate"},
+		{"u/U", "update compat/latest"},
 		{"r", "pick version"},
-		{"a", "sync all"},
+		{"a", "update all"},
 		{"R", "restore"},
 		{"/", "add pkg"},
+		{"d", "del pkg"},
 		{"l", "logs"},
 		{"q", "quit"},
 	}
