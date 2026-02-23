@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+
+	"logger"
 )
 
 // ─────────────────────────────────────────────
@@ -143,11 +145,13 @@ func (s *NugetService) resolveEndpoints() error {
 	if s.regBase == "" {
 		return fmt.Errorf("RegistrationsBaseUrl not found in service index")
 	}
+	logger.Debug("[%s] endpoints resolved: search=%s", s.sourceName, s.searchBase)
 	return nil
 }
 
 // SearchExact finds a package by its exact ID (case-insensitive).
 func (s *NugetService) SearchExact(packageID string) (*PackageInfo, error) {
+	logger.Debug("[%s] searching for %q", s.sourceName, packageID)
 	params := url.Values{}
 	params.Set("q", packageID)
 	params.Set("take", "10")
@@ -160,9 +164,11 @@ func (s *NugetService) SearchExact(packageID string) (*PackageInfo, error) {
 
 	for _, r := range resp.Data {
 		if strings.EqualFold(r.ID, packageID) {
+			logger.Debug("[%s] found %q (latest=%s)", s.sourceName, packageID, r.Version)
 			return s.enrichResult(r)
 		}
 	}
+	logger.Debug("[%s] %q not found", s.sourceName, packageID)
 	return nil, fmt.Errorf("package %q not found", packageID)
 }
 
@@ -211,6 +217,8 @@ func (s *NugetService) enrichResult(r SearchResult) (*PackageInfo, error) {
 			})
 		}
 	}
+
+	logger.Debug("[%s] enriched %q: %d versions across %d registration page(s)", s.sourceName, r.ID, len(versions), len(regIdx.Items))
 
 	// Sort newest → oldest
 	sortVersionsDesc(versions)

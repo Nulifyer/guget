@@ -5,6 +5,8 @@ import (
 	"os/exec"
 	"strings"
 
+	"logger"
+
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -444,12 +446,15 @@ func (m *Model) applyVersion(pkgName, version string) tea.Cmd {
 	m.rebuildPackageRows()
 	m.refreshDetail()
 
+	logger.Debug("applyVersion: %s → %s (%d file(s) to write)", pkgName, version, len(toWrite))
 	if len(toWrite) == 0 {
 		return nil
 	}
 	return func() tea.Msg {
 		for _, p := range toWrite {
+			logger.Debug("writing %s to %s", pkgName, p.FilePath)
 			if err := UpdatePackageVersion(p.FilePath, pkgName, version); err != nil {
+				logger.Warn("write failed for %s: %v", p.FilePath, err)
 				return writeResultMsg{err: err}
 			}
 		}
@@ -475,9 +480,14 @@ func runDotnetRestore(projects []*ParsedProject) tea.Cmd {
 			if p.FilePath == "" {
 				continue
 			}
+			logger.Debug("dotnet restore: %s", p.FilePath)
 			cmd := exec.Command("dotnet", "restore", p.FilePath)
-			if out, err := cmd.CombinedOutput(); err != nil {
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				logger.Warn("restore failed for %s: %v\n%s", p.FilePath, err, strings.TrimSpace(string(out)))
 				lastErr = fmt.Errorf("%w\n%s", err, strings.TrimSpace(string(out)))
+			} else {
+				logger.Debug("restore succeeded for %s", p.FileName)
 			}
 		}
 		return restoreResultMsg{err: lastErr}
