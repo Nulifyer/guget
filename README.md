@@ -115,6 +115,7 @@ guget -v debug
 | `a` | Sync compatible version across **all** projects |
 | `R` | Run `dotnet restore` |
 | `/` | Search NuGet and add a new package |
+| `d` | Remove selected package (prompts for confirmation) |
 | `l` | Toggle log panel |
 
 ### Search Overlay (`/`)

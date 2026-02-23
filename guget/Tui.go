@@ -215,6 +215,15 @@ type packageSearch struct {
 }
 
 // ─────────────────────────────────────────────
+// Confirm remove overlay
+// ─────────────────────────────────────────────
+
+type confirmRemove struct {
+	active  bool
+	pkgName string
+}
+
+// ─────────────────────────────────────────────
 // Model
 // ─────────────────────────────────────────────
 
@@ -239,6 +248,7 @@ type Model struct {
 
 	picker  versionPicker
 	search  packageSearch
+	confirm confirmRemove
 	noColor bool
 
 	statusLine  string
@@ -415,10 +425,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, m.handlePickerKey(msg))
 			return m, tea.Batch(cmds...)
 		}
+		if m.confirm.active {
+			cmds = append(cmds, m.handleConfirmKey(msg))
+			return m, tea.Batch(cmds...)
+		}
 		cmds = append(cmds, m.handleKey(msg))
 	}
 
-	if !m.picker.active && !m.search.active {
+	if !m.picker.active && !m.search.active && !m.confirm.active {
 		switch m.focus {
 		case focusProjects:
 			var cmd tea.Cmd
@@ -513,6 +527,14 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 	case "R":
 		if !m.restoring {
 			return m.triggerRestore()
+		}
+
+	case "d":
+		if m.focus == focusPackages && m.packageCursor < len(m.packageRows) {
+			m.confirm = confirmRemove{
+				active:  true,
+				pkgName: m.packageRows[m.packageCursor].ref.Name,
+			}
 		}
 
 	case "/":
@@ -811,6 +833,93 @@ func (m *Model) addPackageToProject(pkgName, version string, project *ParsedProj
 	}
 }
 
+func (m *Model) handleConfirmKey(msg tea.KeyMsg) tea.Cmd {
+	switch msg.String() {
+	case "esc", "n", "q":
+		m.confirm.active = false
+	case "enter", "y":
+		m.confirm.active = false
+		return m.removePackage(m.confirm.pkgName)
+	}
+	return nil
+}
+
+func (m *Model) removePackage(pkgName string) tea.Cmd {
+	targetProject := m.selectedProject() // nil = all projects
+	var toWrite []*ParsedProject
+	for _, p := range m.parsedProjects {
+		if targetProject != nil && p != targetProject {
+			continue
+		}
+		for ref := range p.Packages {
+			if strings.EqualFold(ref.Name, pkgName) {
+				p.Packages.Remove(ref)
+				if p.FilePath != "" {
+					toWrite = append(toWrite, p)
+				}
+				break
+			}
+		}
+	}
+
+	// Clean up results cache if the package is gone from every project.
+	stillExists := false
+	for _, p := range m.parsedProjects {
+		for ref := range p.Packages {
+			if strings.EqualFold(ref.Name, pkgName) {
+				stillExists = true
+				break
+			}
+		}
+		if stillExists {
+			break
+		}
+	}
+	if !stillExists {
+		delete(m.results, pkgName)
+	}
+
+	m.rebuildPackageRows()
+	if m.packageCursor >= len(m.packageRows) && len(m.packageRows) > 0 {
+		m.packageCursor = len(m.packageRows) - 1
+	}
+	m.clampOffset()
+	m.refreshDetail()
+
+	logger.Info("removePackage: %s (%d file(s) to write)", pkgName, len(toWrite))
+	if len(toWrite) == 0 {
+		return nil
+	}
+	return func() tea.Msg {
+		for _, p := range toWrite {
+			logger.Debug("RemovePackageReference: %s from %s", pkgName, p.FilePath)
+			if err := RemovePackageReference(p.FilePath, pkgName); err != nil {
+				logger.Warn("remove failed for %s: %v", p.FilePath, err)
+				return writeResultMsg{err: err}
+			}
+		}
+		return writeResultMsg{err: nil}
+	}
+}
+
+func (m Model) renderConfirmOverlay() string {
+	w := 48
+	lines := []string{
+		lipgloss.NewStyle().Foreground(colorRed).Bold(true).Render("Remove package?"),
+		lipgloss.NewStyle().Foreground(colorSubtle).Render(m.confirm.pkgName),
+		"",
+		lipgloss.NewStyle().Foreground(colorMuted).Render("enter / y confirm  ·  esc / n cancel"),
+	}
+	box := lipgloss.NewStyle().
+		Width(w).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(colorRed).
+		Background(colorSurface).
+		Padding(1, 2).
+		Render(strings.Join(lines, "\n"))
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
+}
+
 // ─────────────────────────────────────────────
 // Data helpers
 // ─────────────────────────────────────────────
@@ -1011,6 +1120,10 @@ func (m Model) View() string {
 
 	if m.picker.active {
 		return m.renderPickerOverlay()
+	}
+
+	if m.confirm.active {
+		return m.renderConfirmOverlay()
 	}
 
 	leftW, midW, rightW := m.panelWidths()
