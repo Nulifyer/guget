@@ -15,9 +15,11 @@ const defaultNugetSource = "https://api.nuget.org/v3/index.json"
 // ─────────────────────────────────────────────
 
 type nugetConfig struct {
-	XMLName         xml.Name        `xml:"configuration"`
-	PackageSources  []packageSource `xml:"packageSources>add"`
-	DisabledSources []packageSource `xml:"disabledPackageSources>add"`
+	XMLName              xml.Name        `xml:"configuration"`
+	PackageSources       []packageSource `xml:"packageSources>add"`
+	PackageSourcesClear  []struct{}      `xml:"packageSources>clear"`       // <clear /> stops inheritance
+	DisabledSources      []packageSource `xml:"disabledPackageSources>add"`
+	DisabledSourcesClear []struct{}      `xml:"disabledPackageSources>clear"`
 }
 
 type packageSource struct {
@@ -42,6 +44,8 @@ type NugetSource struct {
 
 // DetectSources finds all NuGet sources relevant to the given project directory.
 // Sources are collected in priority order: solution/project → parents → user → machine.
+// A <clear /> element inside <packageSources> stops inheritance: no lower-priority
+// configs contribute sources beyond that point.
 // Duplicates (by URL) are removed. Falls back to nuget.org if nothing is found.
 func DetectSources(projectDir string) []NugetSource {
 	seen := NewSet[string]()
@@ -55,20 +59,35 @@ func DetectSources(projectDir string) []NugetSource {
 		}
 	}
 
+	// addConfig adds sources from a config file and returns true if a <clear/>
+	// was found (meaning lower-priority configs should be ignored).
+	addConfig := func(path string) bool {
+		srcs, cleared := sourcesFromNugetConfig(path)
+		for _, s := range srcs {
+			add(s)
+		}
+		return cleared
+	}
+
 	// 1. Walk from projectDir up to root, collecting nuget.config + Directory.Build.props
+	cleared := false
 	dir := projectDir
 	for {
-		for _, s := range sourcesFromNugetConfig(filepath.Join(dir, "nuget.config")) {
-			add(s)
+		if addConfig(filepath.Join(dir, "nuget.config")) {
+			cleared = true
 		}
-		for _, s := range sourcesFromNugetConfig(filepath.Join(dir, "NuGet.Config")) {
-			add(s)
+		if addConfig(filepath.Join(dir, "NuGet.Config")) {
+			cleared = true
 		}
-		for _, s := range sourcesFromNugetConfig(filepath.Join(dir, ".nuget", "NuGet.Config")) {
-			add(s)
+		if addConfig(filepath.Join(dir, ".nuget", "NuGet.Config")) {
+			cleared = true
 		}
 		for _, s := range sourcesFromBuildProps(filepath.Join(dir, "Directory.Build.props")) {
 			add(s)
+		}
+
+		if cleared {
+			break // <clear/> found — do not inherit from parent dirs, user, or machine
 		}
 
 		parent := filepath.Dir(dir)
@@ -78,14 +97,16 @@ func DetectSources(projectDir string) []NugetSource {
 		dir = parent
 	}
 
-	// 2. User-level config
-	for _, s := range sourcesFromNugetConfig(userNugetConfigPath()) {
-		add(s)
+	// 2. User-level config (skipped if any config declared <clear/>)
+	if !cleared {
+		if addConfig(userNugetConfigPath()) {
+			cleared = true
+		}
 	}
 
-	// 3. Machine-level config
-	for _, s := range sourcesFromNugetConfig(machineNugetConfigPath()) {
-		add(s)
+	// 3. Machine-level config (skipped if any config declared <clear/>)
+	if !cleared {
+		addConfig(machineNugetConfigPath())
 	}
 
 	// 4. Fallback to nuget.org
@@ -100,21 +121,34 @@ func DetectSources(projectDir string) []NugetSource {
 // Parsers
 // ─────────────────────────────────────────────
 
-func sourcesFromNugetConfig(path string) []NugetSource {
+// sourcesFromNugetConfig parses a NuGet.Config file and returns its sources.
+// The second return value is true when a <clear /> element was found inside
+// <packageSources>, which means no lower-priority configs should contribute
+// further sources (NuGet inheritance stops at that point).
+func sourcesFromNugetConfig(path string) ([]NugetSource, bool) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil
+		return nil, false
 	}
 
 	var cfg nugetConfig
 	if err := xml.Unmarshal(data, &cfg); err != nil {
-		return nil
+		return nil, false
 	}
 
-	// Build disabled set for fast lookup
+	cleared := len(cfg.PackageSourcesClear) > 0
+
+	// Build disabled set; a <clear/> in disabledPackageSources resets it too.
 	disabled := NewSet[string]()
-	for _, d := range cfg.DisabledSources {
-		disabled.Add(strings.ToLower(d.Key))
+	if len(cfg.DisabledSourcesClear) == 0 {
+		for _, d := range cfg.DisabledSources {
+			disabled.Add(strings.ToLower(d.Key))
+		}
+	} else {
+		// Only the entries in THIS file apply after the clear.
+		for _, d := range cfg.DisabledSources {
+			disabled.Add(strings.ToLower(d.Key))
+		}
 	}
 
 	// Parse credentials keyed by normalised source name
@@ -135,7 +169,7 @@ func sourcesFromNugetConfig(path string) []NugetSource {
 			sources = append(sources, s)
 		}
 	}
-	return sources
+	return sources, cleared
 }
 
 func sourcesFromBuildProps(path string) []NugetSource {
