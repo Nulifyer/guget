@@ -485,6 +485,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		}
 
 	case "shift+tab":
+		// Reverse-cycle: adding (n-1) mod n is equivalent to subtracting 1 without going negative.
 		if m.showLogs {
 			m.focus = (m.focus + 3) % 4
 		} else {
@@ -1077,6 +1078,7 @@ func (m *Model) clampOffset() {
 }
 
 func (m *Model) bodyOuterHeight() int {
+	// 4 = header row (1) + header border (1) + footer border (1) + footer row (1)
 	h := m.height - 4
 	if m.showLogs {
 		h -= logPanelOuterHeight
@@ -1085,6 +1087,7 @@ func (m *Model) bodyOuterHeight() int {
 }
 
 func (m *Model) packageListHeight() int {
+	// 4 = rounded border (2) + column header row (1) + divider row (1)
 	return imax(1, m.bodyOuterHeight()-4)
 }
 
@@ -1199,7 +1202,8 @@ func (m Model) renderPackagePanel(w int) string {
 	visibleH := m.packageListHeight()
 	var lines []string
 
-	// header
+	// Column widths (visible chars): icon+gap=3, Package=33, Current=19
+	// (10 ver + space + 8 warn), Compatible=13, Latest=14, Source=remainder.
 	hStyle := lipgloss.NewStyle().Foreground(colorSubtle).Bold(true)
 	lines = append(lines,
 		"  "+
@@ -1409,7 +1413,7 @@ func (m Model) renderDetail(row packageRow) string {
 	}
 
 	s.WriteString(label("Versions") + "\n")
-	limit := 12
+	const limit = 12 // max version rows shown before a "… and N more" line
 	for i, v := range displayVersions {
 		if i >= limit {
 			s.WriteString(lipgloss.NewStyle().Foreground(colorMuted).
@@ -1875,13 +1879,6 @@ func formatDownloads(n int) string {
 
 func imax(a, b int) int {
 	if a > b {
-		return a
-	}
-	return b
-}
-
-func imin(a, b int) int {
-	if a < b {
 		return a
 	}
 	return b

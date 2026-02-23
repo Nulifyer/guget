@@ -33,6 +33,8 @@ func SetOutput(w io.Writer) {
 
 func SetLevel(l Level) { level = l }
 func SetColor(f bool)  { colorEnabled = f }
+
+// ParseLevel converts a string to a Level. Unrecognised strings return LevelInfo.
 func ParseLevel(levelStr string) Level {
 	switch strings.ToLower(levelStr) {
 	case "none":
@@ -76,6 +78,9 @@ func stdErr() io.Writer {
 	return os.Stderr
 }
 
+// useColor returns true only when color is enabled AND output has not been
+// redirected. A custom writer (e.g. the TUI log buffer) receives plain text
+// so the TUI can apply its own styling.
 func useColor() bool {
 	return colorEnabled && outWriter == nil
 }
@@ -130,6 +135,7 @@ func Error(format string, v ...interface{}) {
 	}
 }
 
+// Fatal always prints to stderr and exits, regardless of the current log level.
 func Fatal(format string, v ...interface{}) {
 	fmt.Fprintf(stdErr(), "%s[FATAL]%s %s\n", colorRed, colorReset, fmt.Sprintf(format, v...))
 	os.Exit(1)

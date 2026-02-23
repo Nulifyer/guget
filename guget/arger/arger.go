@@ -14,9 +14,9 @@ import (
 var registeredFlags = make(map[string]IFlag)
 var aliasToFlag = make(map[string]IFlag)
 
-// -------------------------------
-// IFlag - interface for all flag types
-// --------------------------------
+// ─────────────────────────────────────────────
+// IFlag — interface for all flag types
+// ─────────────────────────────────────────────
 
 type IFlag interface {
 	GetName() string
@@ -31,18 +31,18 @@ type IFlag interface {
 	defaultParsed() IParsedFlag
 }
 
-// -------------------------------
-// IParsedFlag - interface for all parsed flag types
-// --------------------------------
+// ─────────────────────────────────────────────
+// IParsedFlag — interface for all parsed flag types
+// ─────────────────────────────────────────────
 
 type IParsedFlag interface {
 	GetValue() any
 	GetFlag() IFlag
 }
 
-// -------------------------------
-// Flag - generic flag type
-// --------------------------------
+// ─────────────────────────────────────────────
+// Flag — generic flag type
+// ─────────────────────────────────────────────
 
 type Flag[T any] struct {
 	Name           string
@@ -121,9 +121,9 @@ func (f Flag[T]) defaultParsed() IParsedFlag {
 	return nil
 }
 
-// -------------------------------
-// ParsedFlag - generic parsed flag type
-// --------------------------------
+// ─────────────────────────────────────────────
+// ParsedFlag — generic parsed flag type
+// ─────────────────────────────────────────────
 
 type ParsedFlag[T any] struct {
 	flag  *Flag[T]
@@ -134,9 +134,9 @@ func (pf ParsedFlag[T]) GetValue() any  { return pf.Value }
 func (pf ParsedFlag[T]) GetFlag() IFlag { return pf.flag }
 func (pf ParsedFlag[T]) As() T          { return pf.Value }
 
-// -------------------------------
+// ─────────────────────────────────────────────
 // Built-in flag constructors
-// --------------------------------
+// ─────────────────────────────────────────────
 
 func StringFlag(name string) Flag[string] {
 	return Flag[string]{
@@ -199,9 +199,9 @@ func DurationFlag(name string) Flag[time.Duration] {
 	}
 }
 
-// -------------------------------
+// ─────────────────────────────────────────────
 // Register & Parse
-// --------------------------------
+// ─────────────────────────────────────────────
 
 func RegisterFlag(f IFlag) {
 	validateFlag(f)
@@ -340,9 +340,9 @@ func Parse() (map[string]IParsedFlag, []string) {
 	return parsedFlags, extraArgs
 }
 
-// -------------------------------
+// ─────────────────────────────────────────────
 // Usage / Help
-// --------------------------------
+// ─────────────────────────────────────────────
 
 func PrintUsage() {
 	fmt.Println("Usage:")
@@ -418,9 +418,9 @@ func wrapText(s string, maxWidth int) []string {
 	return out
 }
 
-// -------------------------------
-// Helper functions
-// --------------------------------
+// ─────────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────────
 func Optional[T any](v T) *T { return &v }
 
 func usageError(format string, args ...any) {

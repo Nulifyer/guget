@@ -56,9 +56,10 @@ func (b *logBuffer) Lines() []string {
 	return cp
 }
 
-// -------------------------------
-// Setup & CLI Flags
-// --------------------------------
+// ─────────────────────────────────────────────
+// CLI flags
+// ─────────────────────────────────────────────
+
 const (
 	Flag_NoColor    = "no-color"
 	Flag_Verbosity  = "verbosity"
@@ -82,12 +83,15 @@ func BuildFlags(flags map[string]arger.IParsedFlag) BuiltFlags {
 	}
 }
 
-func Init() BuiltFlags {
+// initCLI registers CLI flags, parses os.Args, and returns the resolved flag values.
+// Named initCLI (not Init) to avoid confusion with Model.Init() in the same package.
+func initCLI() BuiltFlags {
 	logger.SetColor(false)
 	logger.SetLevel(logger.LevelWarn)
-	env_log_level := os.Getenv("LOG_LEVEL")
-	if env_log_level != "" {
-		logger.SetLevel(logger.ParseLevel(env_log_level))
+	// Allow LOG_LEVEL env var to override the pre-parse default; --verbose will
+	// override it again after flags are parsed below.
+	if envLogLevel := os.Getenv("LOG_LEVEL"); envLogLevel != "" {
+		logger.SetLevel(logger.ParseLevel(envLogLevel))
 	}
 
 	arger.RegisterFlag(arger.Flag[bool]{
@@ -146,11 +150,12 @@ type nugetResult struct {
 	err    error
 }
 
-// -------------------------------
+// ─────────────────────────────────────────────
 // Main
-// --------------------------------
+// ─────────────────────────────────────────────
+
 func main() {
-	builtFlags := Init()
+	builtFlags := initCLI()
 
 	// Redirect logger to an in-memory buffer immediately so that all startup
 	// logs are captured for the TUI log panel. Before p.Send is wired up,
@@ -275,9 +280,10 @@ func main() {
 	}
 }
 
-// -------------------------------
+// ─────────────────────────────────────────────
 // Helper Functions
-// --------------------------------
+// ─────────────────────────────────────────────
+
 func FindProjectFiles(rootDir string) ([]string, error) {
 	ignoreDirs := []string{
 		// Node / front-end

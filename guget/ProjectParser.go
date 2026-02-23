@@ -82,8 +82,7 @@ func ParseCsproj(filePath string) (*ParsedProject, error) {
 	return result, nil
 }
 
-var versionAttrRe = regexp.MustCompile(`(Version\s*=\s*")[^"]*(")`);
-
+var versionAttrRe = regexp.MustCompile(`(Version\s*=\s*")[^"]*(")`)
 // RemovePackageReference removes a <PackageReference> line for pkgName from a
 // .csproj/.fsproj file without altering any other formatting.
 func RemovePackageReference(filePath, pkgName string) error {
@@ -96,7 +95,7 @@ func RemovePackageReference(filePath, pkgName string) error {
 
 	lines := strings.Split(string(data), "\n")
 	changed := false
-	out := lines[:0]
+	out := lines[:0] // reuse the backing array in-place to avoid an extra allocation
 	for _, line := range lines {
 		if pkgNameRe.MatchString(line) {
 			changed = true
@@ -110,7 +109,8 @@ func RemovePackageReference(filePath, pkgName string) error {
 	}
 
 	return os.WriteFile(filePath, []byte(strings.Join(out, "\n")), 0644)
-};
+}
+
 
 // UpdatePackageVersion rewrites the Version attribute for a specific
 // PackageReference in a .csproj/.fsproj file without altering any other

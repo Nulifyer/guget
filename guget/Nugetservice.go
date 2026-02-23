@@ -248,7 +248,7 @@ func (s *NugetService) SearchExact(packageID string) (*PackageInfo, error) {
 	logger.Debug("[%s] searching for %q", s.sourceName, packageID)
 	params := url.Values{}
 	params.Set("q", packageID)
-	params.Set("take", "10")
+	params.Set("take", "10") // small window; exact-ID match is identified by strings.EqualFold below
 	params.Set("prerelease", "false")
 
 	var resp searchResponse
@@ -348,8 +348,10 @@ func (p *PackageInfo) LatestStable() *PackageVersion {
 	return nil
 }
 
-// LatestStableForFramework returns the newest stable version compatible with the given framework.
-// Falls back to LatestStable if no framework-specific match is found.
+// LatestStableForFramework returns the newest stable version whose declared
+// target frameworks are compatible with all of the project's targets.
+// Returns nil if no compatible stable version exists (callers fall back to
+// LatestStable themselves for display purposes).
 func (p *PackageInfo) LatestStableForFramework(targets Set[TargetFramework]) *PackageVersion {
 	for i := range p.Versions {
 		v := &p.Versions[i]
@@ -428,7 +430,11 @@ func (s *NugetService) getJSON(u string, dst any) error {
 	return json.NewDecoder(resp.Body).Decode(dst)
 }
 
-// normFramework cleans up the raw targetFramework string from the API.
+// normFramework normalises a raw targetFramework string from the NuGet
+// registration API into the short form expected by ParseTargetFramework
+// (e.g. ".NETFramework4.6.2" → "net462", ".NETStandard2.0" → "netstandard2.0").
+// An empty string returns "any", which ParseTargetFramework maps to FamilyUnknown
+// with Raw=="any" — IsCompatibleWith treats that as compatible with everything.
 func normFramework(raw string) string {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {

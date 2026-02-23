@@ -138,17 +138,12 @@ func sourcesFromNugetConfig(path string) ([]NugetSource, bool) {
 
 	cleared := len(cfg.PackageSourcesClear) > 0
 
-	// Build disabled set; a <clear/> in disabledPackageSources resets it too.
+	// Build the disabled-sources set from this file only. Inherited disabled
+	// sources are not tracked here; each config file is parsed independently
+	// and the caller controls inheritance via the cleared flag.
 	disabled := NewSet[string]()
-	if len(cfg.DisabledSourcesClear) == 0 {
-		for _, d := range cfg.DisabledSources {
-			disabled.Add(strings.ToLower(d.Key))
-		}
-	} else {
-		// Only the entries in THIS file apply after the clear.
-		for _, d := range cfg.DisabledSources {
-			disabled.Add(strings.ToLower(d.Key))
-		}
+	for _, d := range cfg.DisabledSources {
+		disabled.Add(strings.ToLower(d.Key))
 	}
 
 	// Parse credentials keyed by normalised source name
