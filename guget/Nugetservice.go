@@ -72,21 +72,26 @@ type searchVersion struct {
 
 // PackageVersion is an enriched version with semver + framework info.
 type PackageVersion struct {
-	SemVer     SemVer
-	Downloads  int
-	Frameworks []TargetFramework // target frameworks this version supports
+	SemVer          SemVer
+	Downloads       int
+	Frameworks      []TargetFramework      // target frameworks this version supports
+	Vulnerabilities []PackageVulnerability // CVE advisories for this specific version
+	DependencyGroups []dependencyGroup     // declared dependencies, for dep tree overlay
 }
 
 // PackageInfo is the full picture of a package.
 type PackageInfo struct {
-	ID             string
-	LatestVersion  string
-	Description    string
-	Authors        Set[string]
-	Tags           Set[string]
-	TotalDownloads int
-	Verified       bool
-	Versions       []PackageVersion // sorted newest → oldest
+	ID                 string
+	LatestVersion      string
+	Description        string
+	Authors            Set[string]
+	Tags               Set[string]
+	TotalDownloads     int
+	Verified           bool
+	Versions           []PackageVersion // sorted newest → oldest
+	Deprecated         bool
+	DeprecationMessage string
+	AlternatePackageID string
 }
 
 // registrationIndex is returned by the RegistrationsBaseUrl endpoint.
@@ -106,17 +111,53 @@ type registrationLeafWrapper struct {
 }
 
 type registrationLeaf struct {
-	ID               string            `json:"id"`
-	Version          string            `json:"version"`
-	Description      string            `json:"description"`
-	Authors          StringOrArray     `json:"authors"`
-	Tags             StringOrArray     `json:"tags"`
-	Listed           *bool             `json:"listed"`
-	DependencyGroups []dependencyGroup `json:"dependencyGroups"`
+	ID               string                 `json:"id"`
+	Version          string                 `json:"version"`
+	Description      string                 `json:"description"`
+	Authors          StringOrArray          `json:"authors"`
+	Tags             StringOrArray          `json:"tags"`
+	Listed           *bool                  `json:"listed"`
+	DependencyGroups []dependencyGroup      `json:"dependencyGroups"`
+	Vulnerabilities  []PackageVulnerability `json:"vulnerabilities"`
+	Deprecation      *deprecationRaw        `json:"deprecation"`
 }
 
 type dependencyGroup struct {
-	TargetFramework string `json:"targetFramework"` // e.g. ".NETStandard2.0", "net6.0"
+	TargetFramework string              `json:"targetFramework"` // e.g. ".NETStandard2.0", "net6.0"
+	Dependencies    []packageDependency `json:"dependencies"`
+}
+
+type packageDependency struct {
+	ID    string `json:"id"`
+	Range string `json:"range"`
+}
+
+// PackageVulnerability holds CVE advisory info for a specific package version.
+type PackageVulnerability struct {
+	AdvisoryURL string      `json:"advisoryUrl"`
+	Severity    IntOrString `json:"severity"` // 0=low 1=moderate 2=high 3=critical
+}
+
+// SeverityLabel returns a human-readable severity string.
+func (v PackageVulnerability) SeverityLabel() string {
+	switch int(v.Severity) {
+	case 3:
+		return "critical"
+	case 2:
+		return "high"
+	case 1:
+		return "moderate"
+	default:
+		return "low"
+	}
+}
+
+type deprecationRaw struct {
+	Message          string   `json:"message"`
+	Reasons          []string `json:"reasons"`
+	AlternatePackage struct {
+		ID string `json:"id"`
+	} `json:"alternatePackage"`
 }
 
 // ─────────────────────────────────────────────
@@ -334,8 +375,10 @@ func (s *NugetService) SearchExact(packageID string) (*PackageInfo, error) {
 				}
 			}
 			versions = append(versions, PackageVersion{
-				SemVer:     sv,
-				Frameworks: frameworks,
+				SemVer:           sv,
+				Frameworks:       frameworks,
+				Vulnerabilities:  ce.Vulnerabilities,
+				DependencyGroups: ce.DependencyGroups,
 			})
 		}
 	}
@@ -364,14 +407,61 @@ func (s *NugetService) SearchExact(packageID string) (*PackageInfo, error) {
 
 	logger.Debug("[%s] found %q: %d versions, latest stable=%s", s.sourceName, packageID, len(versions), meta.Version)
 
-	return &PackageInfo{
+	pkg := &PackageInfo{
 		ID:            meta.ID,
 		LatestVersion: meta.Version,
 		Description:   meta.Description,
 		Authors:       authors,
 		Tags:          tags,
 		Versions:      versions,
-	}, nil
+	}
+	if meta.Deprecation != nil {
+		pkg.Deprecated = true
+		pkg.DeprecationMessage = meta.Deprecation.Message
+		pkg.AlternatePackageID = meta.Deprecation.AlternatePackage.ID
+	}
+
+	// Augment with download counts from the search endpoint (best-effort;
+	// the registration API does not include download statistics).
+	if sr := s.fetchSearchResult(packageID); sr != nil {
+		pkg.TotalDownloads = sr.TotalDownloads
+		pkg.Verified = sr.Verified
+		dlMap := make(map[string]int, len(sr.Versions))
+		for _, v := range sr.Versions {
+			dlMap[v.Version] = v.Downloads
+		}
+		for i := range pkg.Versions {
+			if d, ok := dlMap[pkg.Versions[i].SemVer.Raw]; ok {
+				pkg.Versions[i].Downloads = d
+			}
+		}
+	}
+
+	return pkg, nil
+}
+
+// fetchSearchResult queries the search endpoint for an exact package ID match
+// and returns the first result whose ID matches (case-insensitive). Returns nil
+// if the search endpoint is unavailable or the package is not found.
+func (s *NugetService) fetchSearchResult(packageID string) *SearchResult {
+	if s.searchBase == "" {
+		return nil
+	}
+	params := url.Values{}
+	params.Set("q", packageID)
+	params.Set("take", "1")
+	params.Set("prerelease", "true")
+	var resp searchResponse
+	if err := s.getJSON(s.searchBase+"?"+params.Encode(), &resp); err != nil {
+		logger.Debug("[%s] download fetch failed for %q: %v", s.sourceName, packageID, err)
+		return nil
+	}
+	for i := range resp.Data {
+		if strings.EqualFold(resp.Data[i].ID, packageID) {
+			return &resp.Data[i]
+		}
+	}
+	return nil
 }
 
 // LatestStable returns the newest non-pre-release version.

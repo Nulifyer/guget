@@ -102,6 +102,24 @@ type logLineMsg struct {
 	line string
 }
 
+type depTreeReadyMsg struct {
+	content string
+	err     error
+}
+
+// ─────────────────────────────────────────────
+// Dependency tree overlay
+// ─────────────────────────────────────────────
+
+type depTreeOverlay struct {
+	active  bool
+	loading bool // true while dotnet list is running (T key)
+	content string
+	err     error
+	vp      viewport.Model
+	title   string
+}
+
 // ─────────────────────────────────────────────
 // Project list item
 // ─────────────────────────────────────────────
@@ -145,9 +163,14 @@ type packageRow struct {
 	latestStable     *PackageVersion
 	diverged         bool
 	oldest           SemVer
+	vulnerable       bool // installed version has ≥1 known vulnerability
+	deprecated       bool // package is deprecated in the registry
 }
 
 func (r packageRow) statusIcon() string {
+	if r.vulnerable {
+		return "⚠"
+	}
 	if r.err != nil {
 		return "✗"
 	}
@@ -162,10 +185,16 @@ func (r packageRow) statusIcon() string {
 		}
 		return "↑"
 	}
+	if r.deprecated {
+		return "~"
+	}
 	return "✓"
 }
 
 func (r packageRow) statusColor() lipgloss.Color {
+	if r.vulnerable {
+		return colorRed
+	}
 	if r.err != nil {
 		return colorRed
 	}
@@ -178,6 +207,9 @@ func (r packageRow) statusColor() lipgloss.Color {
 			r.latestStable.SemVer.IsNewerThan(r.latestCompatible.SemVer) {
 			return colorPurple
 		}
+		return colorYellow
+	}
+	if r.deprecated {
 		return colorYellow
 	}
 	return colorGreen
@@ -259,10 +291,12 @@ type Model struct {
 	picker  versionPicker
 	search  packageSearch
 	confirm confirmRemove
+	depTree depTreeOverlay
 	noColor bool
 
 	sources     []NugetSource
 	showSources bool
+	showHelp    bool
 
 	statusLine  string
 	statusIsErr bool
@@ -322,16 +356,16 @@ func NewModel(parsedProjects []*ParsedProject, nugetServices []*NugetService, so
 		parsedProjects: parsedProjects,
 		nugetServices:  nugetServices,
 		sources:        sources,
-		loading:      loadingTotal > 0,
-		loadingTotal: loadingTotal,
-		spinner:      sp,
-		projectList:  l,
-		detailView:   dv,
-		noColor:      noColor,
-		search:       packageSearch{input: ti},
-		logLines:     initialLogLines,
-		logView:      lv,
-		results:      make(map[string]nugetResult, loadingTotal),
+		loading:        loadingTotal > 0,
+		loadingTotal:   loadingTotal,
+		spinner:        sp,
+		projectList:    l,
+		detailView:     dv,
+		noColor:        noColor,
+		search:         packageSearch{input: ti},
+		logLines:       initialLogLines,
+		logView:        lv,
+		results:        make(map[string]nugetResult, loadingTotal),
 	}
 	return m
 }
@@ -442,12 +476,31 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.logLines = append(m.logLines, msg.line)
 		m.updateLogView()
 
+	case depTreeReadyMsg:
+		m.depTree.loading = false
+		m.depTree.err = msg.err
+		if msg.err == nil {
+			m.depTree.content = m.renderParsedDotnetList(parseDotnetListOutput(msg.content))
+		}
+		m.depTree.vp.SetContent(m.buildDepTreeContent())
+
 	case tea.KeyMsg:
 		m.statusLine = ""
+		if m.depTree.active {
+			cmds = append(cmds, m.handleDepTreeKey(msg))
+			return m, tea.Batch(cmds...)
+		}
 		if m.showSources {
 			switch msg.String() {
 			case "esc", "s", "q":
 				m.showSources = false
+			}
+			return m, tea.Batch(cmds...)
+		}
+		if m.showHelp {
+			switch msg.String() {
+			case "esc", "?", "q":
+				m.showHelp = false
 			}
 			return m, tea.Batch(cmds...)
 		}
@@ -528,6 +581,9 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 	case "s":
 		m.showSources = !m.showSources
 
+	case "?":
+		m.showHelp = !m.showHelp
+
 	case "up", "k":
 		if m.focus == focusPackages && m.packageCursor > 0 {
 			m.packageCursor--
@@ -566,6 +622,14 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		if !m.restoring {
 			return m.triggerRestore()
 		}
+
+	case "t":
+		if m.focus == focusPackages {
+			return m.openDepTree()
+		}
+
+	case "T":
+		return m.openTransitiveDepTree()
 
 	case "d":
 		if m.focus == focusPackages && m.packageCursor < len(m.packageRows) {
@@ -784,6 +848,422 @@ func runDotnetRestore(projects []*ParsedProject) tea.Cmd {
 	}
 }
 
+func runDepTreeCmd(project *ParsedProject) tea.Cmd {
+	return func() tea.Msg {
+		cmd := exec.Command("dotnet", "list", project.FilePath, "package", "--include-transitive")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			return depTreeReadyMsg{err: fmt.Errorf("dotnet list: %w\n%s", err, strings.TrimSpace(string(out)))}
+		}
+		return depTreeReadyMsg{content: string(out)}
+	}
+}
+
+func (m *Model) openDepTree() tea.Cmd {
+	if m.packageCursor >= len(m.packageRows) {
+		return nil
+	}
+	row := m.packageRows[m.packageCursor]
+	if row.info == nil {
+		return nil
+	}
+	// Find the installed version's dependency groups.
+	var installedVer *PackageVersion
+	for i := range row.info.Versions {
+		if row.info.Versions[i].SemVer.String() == row.ref.Version.String() {
+			installedVer = &row.info.Versions[i]
+			break
+		}
+	}
+	overlayW, overlayH := m.depTreeOverlaySize()
+	vp := viewport.New(overlayW-6, overlayH-8)
+	vp.SetContent(m.formatDepGroups(installedVer))
+	m.depTree = depTreeOverlay{
+		active:  true,
+		title:   row.ref.Name + " " + row.ref.Version.String(),
+		content: vp.View(),
+		vp:      vp,
+	}
+	return nil
+}
+
+func (m *Model) openTransitiveDepTree() tea.Cmd {
+	proj := m.selectedProject()
+	if proj == nil {
+		m.statusLine = "⚠ Select a project first"
+		m.statusIsErr = true
+		return nil
+	}
+	overlayW, overlayH := m.depTreeOverlaySize()
+	vp := viewport.New(overlayW-6, overlayH-8)
+	m.depTree = depTreeOverlay{
+		active:  true,
+		loading: true,
+		title:   proj.FileName + " (transitive packages)",
+		vp:      vp,
+	}
+	return runDepTreeCmd(proj)
+}
+
+func (m Model) depTreeOverlaySize() (w, h int) {
+	w = m.width * 80 / 100
+	if w < 40 {
+		w = 40
+	}
+	h = m.height * 80 / 100
+	if h < 10 {
+		h = 10
+	}
+	return
+}
+
+// formatVersionRange converts NuGet version range notation to a readable form.
+// e.g. "[8.0.0, )" → ">= 8.0.0",  "[1.0, 2.0)" → ">= 1.0 < 2.0",  "[1.0.0]" → "1.0.0"
+func formatVersionRange(r string) string {
+	r = strings.TrimSpace(r)
+	if r == "" {
+		return "any"
+	}
+	if len(r) < 2 {
+		return r
+	}
+	startInclusive := r[0] == '['
+	endInclusive := r[len(r)-1] == ']'
+
+	// Exact version: [1.0.0] with no comma
+	if startInclusive && endInclusive && !strings.Contains(r, ",") {
+		return strings.Trim(r, "[]")
+	}
+
+	inner := r[1 : len(r)-1]
+	parts := strings.SplitN(inner, ",", 2)
+	if len(parts) != 2 {
+		return r // not a recognised range — return as-is
+	}
+	low := strings.TrimSpace(parts[0])
+	high := strings.TrimSpace(parts[1])
+
+	var result strings.Builder
+	if low != "" {
+		if startInclusive {
+			result.WriteString(">= ")
+		} else {
+			result.WriteString("> ")
+		}
+		result.WriteString(low)
+	}
+	if high != "" {
+		if result.Len() > 0 {
+			result.WriteString(" ")
+		}
+		if endInclusive {
+			result.WriteString("<= ")
+		} else {
+			result.WriteString("< ")
+		}
+		result.WriteString(high)
+	}
+	if result.Len() == 0 {
+		return "any"
+	}
+	return result.String()
+}
+
+func (m *Model) formatDepGroups(v *PackageVersion) string {
+	if v == nil || len(v.DependencyGroups) == 0 {
+		return lipgloss.NewStyle().Foreground(colorMuted).Render("(no dependency information available)")
+	}
+	// Compute max dependency name width for column alignment.
+	maxNameW := 20
+	for _, dg := range v.DependencyGroups {
+		for _, dep := range dg.Dependencies {
+			if w := lipgloss.Width(dep.ID); w > maxNameW {
+				maxNameW = w
+			}
+		}
+	}
+	maxNameW += 2
+
+	var sb strings.Builder
+	for _, dg := range v.DependencyGroups {
+		fw := dg.TargetFramework
+		if fw == "" {
+			fw = "any"
+		}
+		sb.WriteString(lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render("["+fw+"]") + "\n")
+		if len(dg.Dependencies) == 0 {
+			sb.WriteString(lipgloss.NewStyle().Foreground(colorMuted).Render("  (no dependencies)") + "\n")
+		} else {
+			for _, dep := range dg.Dependencies {
+				icon, iconColor := " ", colorMuted
+				if row := m.rowByName(dep.ID); row != nil {
+					icon, iconColor = row.statusIcon(), row.statusColor()
+				}
+				rangeStr := formatVersionRange(dep.Range)
+				sb.WriteString("  " + lipgloss.NewStyle().Foreground(iconColor).Render(icon) + " ")
+				sb.WriteString(lipgloss.NewStyle().Foreground(colorText).Render(padRight(dep.ID, maxNameW)) +
+					lipgloss.NewStyle().Foreground(colorSubtle).Render(rangeStr) + "\n")
+			}
+		}
+		sb.WriteString("\n")
+	}
+	return sb.String()
+}
+
+func (m Model) rowByName(name string) *packageRow {
+	for i := range m.packageRows {
+		if strings.EqualFold(m.packageRows[i].ref.Name, name) {
+			return &m.packageRows[i]
+		}
+	}
+	return nil
+}
+
+func (m *Model) buildDepTreeContent() string {
+	if m.depTree.err != nil {
+		return lipgloss.NewStyle().Foreground(colorRed).Render("Error: " + m.depTree.err.Error())
+	}
+	if m.depTree.loading {
+		return "Loading…"
+	}
+	return m.depTree.content
+}
+
+// ── dotnet list output parser ──────────────────────────────────────────────
+
+type dotnetListPkg struct {
+	Name      string
+	Requested string // empty for transitive packages
+	Resolved  string
+}
+
+type dotnetListFramework struct {
+	Name       string
+	TopLevel   []dotnetListPkg
+	Transitive []dotnetListPkg
+}
+
+type dotnetListProject struct {
+	Name       string
+	Frameworks []dotnetListFramework
+}
+
+func parseDotnetListOutput(raw string) []dotnetListProject {
+	lines := strings.Split(strings.ReplaceAll(raw, "\r\n", "\n"), "\n")
+	var projects []dotnetListProject
+	var curProj *dotnetListProject
+	var curFW *dotnetListFramework
+	inTransitive := false
+
+	for _, line := range lines {
+		stripped := strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(stripped, "Project '"):
+			name := stripped
+			if i := strings.Index(stripped, "'"); i >= 0 {
+				rest := stripped[i+1:]
+				if j := strings.Index(rest, "'"); j >= 0 {
+					name = rest[:j]
+				}
+			}
+			projects = append(projects, dotnetListProject{Name: name})
+			curProj = &projects[len(projects)-1]
+			curFW = nil
+			inTransitive = false
+
+		case strings.HasPrefix(stripped, "[") &&
+			(strings.HasSuffix(stripped, "]:") || strings.HasSuffix(stripped, "]")):
+			if curProj == nil {
+				continue
+			}
+			fw := strings.TrimSuffix(stripped, ":")
+			curProj.Frameworks = append(curProj.Frameworks, dotnetListFramework{Name: fw})
+			curFW = &curProj.Frameworks[len(curProj.Frameworks)-1]
+			inTransitive = false
+
+		case strings.Contains(stripped, "Top-level"):
+			inTransitive = false
+
+		case strings.Contains(stripped, "Transitive"):
+			inTransitive = true
+
+		case strings.HasPrefix(stripped, ">"):
+			if curFW == nil {
+				continue
+			}
+			// Rejoin interval tokens split by whitespace, e.g. "[2.0.3," ")" → "[2.0.3, )"
+			fields := rejoinIntervals(strings.Fields(strings.TrimSpace(strings.TrimPrefix(stripped, ">"))))
+			if len(fields) == 0 {
+				continue
+			}
+			pkg := dotnetListPkg{Name: fields[0]}
+			rest := fields[1:]
+			// Skip the "(A)" auto-referenced marker emitted by dotnet list.
+			if len(rest) > 0 && rest[0] == "(A)" {
+				rest = rest[1:]
+			}
+			if inTransitive {
+				if len(rest) >= 1 {
+					pkg.Resolved = rest[0]
+				}
+				curFW.Transitive = append(curFW.Transitive, pkg)
+			} else {
+				if len(rest) >= 1 {
+					pkg.Requested = rest[0]
+				}
+				if len(rest) >= 2 {
+					pkg.Resolved = rest[1]
+				}
+				curFW.TopLevel = append(curFW.TopLevel, pkg)
+			}
+		}
+	}
+	return projects
+}
+
+// rejoinIntervals merges fields that are parts of a split NuGet interval
+// notation, e.g. ["[2.0.3,", ")"] → ["[2.0.3, )"].
+func rejoinIntervals(fields []string) []string {
+	var result []string
+	for i := 0; i < len(fields); i++ {
+		f := fields[i]
+		if (strings.HasPrefix(f, "[") || strings.HasPrefix(f, "(")) &&
+			!strings.HasSuffix(f, ")") && !strings.HasSuffix(f, "]") {
+			for i+1 < len(fields) {
+				i++
+				f += " " + fields[i]
+				if strings.HasSuffix(f, ")") || strings.HasSuffix(f, "]") {
+					break
+				}
+			}
+		}
+		result = append(result, f)
+	}
+	return result
+}
+
+func (m Model) renderParsedDotnetList(projects []dotnetListProject) string {
+	// Compute max package name width across all frameworks so the version
+	// column starts at the same position regardless of name length.
+	maxNameW := 20
+	for _, proj := range projects {
+		for _, fw := range proj.Frameworks {
+			for _, pkg := range fw.TopLevel {
+				if w := lipgloss.Width(pkg.Name); w > maxNameW {
+					maxNameW = w
+				}
+			}
+			for _, pkg := range fw.Transitive {
+				if w := lipgloss.Width(pkg.Name); w > maxNameW {
+					maxNameW = w
+				}
+			}
+		}
+	}
+	maxNameW += 2 // breathing room
+
+	var sb strings.Builder
+	for pi, proj := range projects {
+		if pi > 0 {
+			sb.WriteString("\n")
+		}
+		sb.WriteString(lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render("◈ "+proj.Name) + "\n")
+		for _, fw := range proj.Frameworks {
+			sb.WriteString("\n" + lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render(fw.Name) + "\n")
+			if len(fw.TopLevel) > 0 {
+				sb.WriteString(lipgloss.NewStyle().Foreground(colorSubtle).Render("  top-level") + "\n")
+				for _, pkg := range fw.TopLevel {
+					icon, iconColor := " ", colorMuted
+					if row := m.rowByName(pkg.Name); row != nil {
+						icon, iconColor = row.statusIcon(), row.statusColor()
+					}
+					sb.WriteString("  " + lipgloss.NewStyle().Foreground(iconColor).Render(icon) + " ")
+					sb.WriteString(lipgloss.NewStyle().Foreground(colorText).Render(padRight(pkg.Name, maxNameW)))
+					// Only show Requested when it is a specific pinned version
+					// (not a range like "[2.0.3, )") that differs from Resolved.
+					isRange := strings.ContainsAny(pkg.Requested, "[]()")
+					showReq := pkg.Requested != "" && !isRange && pkg.Requested != pkg.Resolved
+					if showReq {
+						sb.WriteString(lipgloss.NewStyle().Foreground(colorMuted).Render(padRight(pkg.Requested, 14)))
+					} else {
+						sb.WriteString(strings.Repeat(" ", 14))
+					}
+					if pkg.Resolved != "" {
+						c := colorMuted
+						if showReq {
+							c = colorYellow
+						}
+						sb.WriteString(lipgloss.NewStyle().Foreground(c).Render(pkg.Resolved))
+					}
+					sb.WriteString("\n")
+				}
+			}
+			if len(fw.Transitive) > 0 {
+				sb.WriteString("\n" + lipgloss.NewStyle().Foreground(colorSubtle).Render("  transitive") + "\n")
+				for _, pkg := range fw.Transitive {
+					icon, iconColor := " ", colorMuted
+					if row := m.rowByName(pkg.Name); row != nil {
+						icon, iconColor = row.statusIcon(), row.statusColor()
+					}
+					sb.WriteString("  " + lipgloss.NewStyle().Foreground(iconColor).Render(icon) + " ")
+					sb.WriteString(lipgloss.NewStyle().Foreground(colorSubtle).Render(padRight(pkg.Name, maxNameW)))
+					if pkg.Resolved != "" {
+						sb.WriteString(lipgloss.NewStyle().Foreground(colorMuted).Render(formatVersionRange(pkg.Resolved)))
+					}
+					sb.WriteString("\n")
+				}
+			}
+			if len(fw.TopLevel) == 0 && len(fw.Transitive) == 0 {
+				sb.WriteString("  " + lipgloss.NewStyle().Foreground(colorMuted).Render("(no packages)") + "\n")
+			}
+		}
+	}
+	return sb.String()
+}
+
+func (m Model) renderDepTreeOverlay() string {
+	overlayW, overlayH := m.depTreeOverlaySize()
+	innerW := overlayW - 6
+
+	var lines []string
+	lines = append(lines,
+		lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render(m.depTree.title),
+	)
+	lines = append(lines,
+		lipgloss.NewStyle().Foreground(colorBorder).Render(strings.Repeat("─", innerW)),
+	)
+
+	if m.depTree.loading {
+		lines = append(lines,
+			m.spinner.View()+" "+
+				lipgloss.NewStyle().Foreground(colorSubtle).Render("Loading dependency tree…"),
+		)
+		// pad to fill viewport height
+		vpH := overlayH - 8
+		for i := 1; i < vpH; i++ {
+			lines = append(lines, "")
+		}
+	} else {
+		lines = append(lines, m.depTree.vp.View())
+	}
+
+	lines = append(lines,
+		lipgloss.NewStyle().Foreground(colorBorder).Render(strings.Repeat("─", innerW)),
+	)
+	lines = append(lines,
+		lipgloss.NewStyle().Foreground(colorMuted).Render("esc close · ↑/↓ scroll"),
+	)
+
+	box := lipgloss.NewStyle().
+		Width(overlayW).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(colorAccent).
+		Padding(1, 2).
+		Render(strings.Join(lines, "\n"))
+
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
+}
+
 func (m *Model) updateAllProjects() tea.Cmd {
 	if m.packageCursor >= len(m.packageRows) {
 		return nil
@@ -952,6 +1432,18 @@ func (m *Model) removePackage(pkgName string) tea.Cmd {
 	}
 }
 
+func (m *Model) handleDepTreeKey(msg tea.KeyMsg) tea.Cmd {
+	switch msg.String() {
+	case "esc":
+		m.depTree.active = false
+		return nil
+	default:
+		var cmd tea.Cmd
+		m.depTree.vp, cmd = m.depTree.vp.Update(msg)
+		return cmd
+	}
+}
+
 func (m Model) renderConfirmOverlay() string {
 	w := 48
 	lines := []string{
@@ -1034,6 +1526,13 @@ func (m *Model) rebuildPackageRows() {
 			if res.pkg != nil {
 				row.latestCompatible = res.pkg.LatestStableForFramework(g.project.TargetFrameworks)
 				row.latestStable = res.pkg.LatestStable()
+				row.deprecated = res.pkg.Deprecated
+				for _, v := range res.pkg.Versions {
+					if v.SemVer.String() == newest.String() {
+						row.vulnerable = len(v.Vulnerabilities) > 0
+						break
+					}
+				}
 			}
 			rows = append(rows, row)
 		}
@@ -1050,6 +1549,13 @@ func (m *Model) rebuildPackageRows() {
 			if res.pkg != nil {
 				row.latestCompatible = res.pkg.LatestStableForFramework(sel.TargetFrameworks)
 				row.latestStable = res.pkg.LatestStable()
+				row.deprecated = res.pkg.Deprecated
+				for _, v := range res.pkg.Versions {
+					if v.SemVer.String() == ref.Version.String() {
+						row.vulnerable = len(v.Vulnerabilities) > 0
+						break
+					}
+				}
 			}
 			rows = append(rows, row)
 		}
@@ -1078,14 +1584,20 @@ func sortPackageRowsByStatus(rows []packageRow) {
 		if r.err != nil {
 			return 0
 		}
+		if r.vulnerable {
+			return 1
+		}
 		check := r.latestCompatible
 		if check == nil {
 			check = r.latestStable
 		}
 		if check != nil && check.SemVer.IsNewerThan(r.ref.Version) {
-			return 1
+			return 2
 		}
-		return 2
+		if r.deprecated {
+			return 3
+		}
+		return 4
 	}
 	for i := 1; i < len(rows); i++ {
 		for j := i; j > 0 && priority(rows[j]) < priority(rows[j-1]); j-- {
@@ -1113,8 +1625,8 @@ func (m *Model) clampOffset() {
 }
 
 func (m *Model) bodyOuterHeight() int {
-	// 4 = header row (1) + header border (1) + footer border (1) + footer row (1)
-	h := m.height - 4
+	// 5 = header row (1) + header border (1) + footer border (1) + status row (1) + keybinds row (1)
+	h := m.height - 5
 	if m.showLogs {
 		h -= logPanelOuterHeight
 	}
@@ -1166,6 +1678,10 @@ func (m Model) View() string {
 		)
 	}
 
+	if m.depTree.active {
+		return m.renderDepTreeOverlay()
+	}
+
 	if m.search.active {
 		return m.renderSearchOverlay()
 	}
@@ -1180,6 +1696,10 @@ func (m Model) View() string {
 
 	if m.showSources {
 		return m.renderSourcesOverlay()
+	}
+
+	if m.showHelp {
+		return m.renderHelpOverlay()
 	}
 
 	leftW, midW, rightW := m.panelWidths()
@@ -1273,14 +1793,14 @@ func (m Model) renderPackagePanel(w int) string {
 		}
 		name := padRight(nameStyle.Render(rawName), 33)
 
-		// current (19 chars wide: 10 version + space + optional 8 warn)
+		// current (19 chars wide: 10 version + space + optional range)
 		rawCurrent := truncate(row.ref.Version.String(), 10)
 		var current string
 		if row.diverged {
-			ver := lipgloss.NewStyle().Foreground(colorYellow).Render(rawCurrent)
-			warn := lipgloss.NewStyle().Foreground(colorRed).Render(
-				"⚠ " + truncate(row.oldest.String(), 6))
-			current = padRight(ver+" "+warn, 19)
+			low := lipgloss.NewStyle().Foreground(colorSubtle).Render(truncate(row.oldest.String(), 6))
+			sep := lipgloss.NewStyle().Foreground(colorMuted).Render("–")
+			high := lipgloss.NewStyle().Foreground(colorYellow).Render(truncate(rawCurrent, 10))
+			current = padRight(low+sep+high, 19)
 		} else {
 			current = padRight(
 				lipgloss.NewStyle().Foreground(colorSubtle).Render(rawCurrent), 19)
@@ -1408,6 +1928,47 @@ func (m Model) renderDetail(row packageRow) string {
 		s.WriteString(value(strings.Join(authors, ", ")) + "\n\n")
 	}
 
+	// vulnerabilities in the installed version
+	if row.vulnerable {
+		var vulns []PackageVulnerability
+		for _, v := range row.info.Versions {
+			if v.SemVer.String() == row.ref.Version.String() {
+				vulns = v.Vulnerabilities
+				break
+			}
+		}
+		if len(vulns) > 0 {
+			s.WriteString(lipgloss.NewStyle().Foreground(colorRed).Bold(true).Render("Vulnerabilities") + "\n")
+			for _, vuln := range vulns {
+				sev := vuln.SeverityLabel()
+				var sevColor lipgloss.Color
+				switch sev {
+				case "critical", "high":
+					sevColor = colorRed
+				case "moderate":
+					sevColor = colorYellow
+				default:
+					sevColor = colorText
+				}
+				sevStr := lipgloss.NewStyle().Foreground(sevColor).Bold(true).Render(sev)
+				s.WriteString("  " + sevStr + "  " + vuln.AdvisoryURL + "\n")
+			}
+			s.WriteString("\n")
+		}
+	}
+
+	// deprecation
+	if row.info.Deprecated {
+		s.WriteString(lipgloss.NewStyle().Foreground(colorYellow).Bold(true).Render("Deprecated") + "\n")
+		if row.info.DeprecationMessage != "" {
+			s.WriteString(value(wordWrap(row.info.DeprecationMessage, w)) + "\n")
+		}
+		if row.info.AlternatePackageID != "" {
+			s.WriteString(label("Use instead: ") + value(row.info.AlternatePackageID) + "\n")
+		}
+		s.WriteString("\n")
+	}
+
 	// downloads
 	s.WriteString(label("Downloads") + "\n")
 	s.WriteString(value(formatDownloads(row.info.TotalDownloads)) + "\n\n")
@@ -1417,7 +1978,7 @@ func (m Model) renderDetail(row packageRow) string {
 	s.WriteString(lipgloss.NewStyle().Foreground(colorSubtle).Render(row.source) + "\n\n")
 
 	// diverged project breakdown
-	if row.diverged {
+	if row.diverged || m.selectedProject() == nil {
 		s.WriteString(label("Project versions") + "\n")
 		for _, p := range m.parsedProjects {
 			for ref := range p.Packages {
@@ -1448,18 +2009,40 @@ func (m Model) renderDetail(row packageRow) string {
 	}
 
 	s.WriteString(label("Versions") + "\n")
-	const limit = 12 // max version rows shown before a "… and N more" line
-	for i, v := range displayVersions {
-		if i >= limit {
-			s.WriteString(lipgloss.NewStyle().Foreground(colorMuted).
-				Render(fmt.Sprintf("  … and %d more", len(displayVersions)-limit)) + "\n")
-			break
-		}
+	const limit = 12 // max version rows shown before "… and N more"
 
+	// Identify versions that must always appear even if beyond the limit:
+	// 1. The currently installed version.
+	// 2. The latest non-pre-release patch in the same major.minor series.
+	installedStr := row.ref.Version.String()
+	curMajor, curMinor := row.ref.Version.Major, row.ref.Version.Minor
+	latestPatchStr := ""
+	for _, v := range displayVersions {
+		if v.SemVer.Major == curMajor && v.SemVer.Minor == curMinor && !v.SemVer.IsPreRelease() {
+			latestPatchStr = v.SemVer.String()
+			break // displayVersions is newest-first
+		}
+	}
+
+	pinnedSeen := NewSet[string]()
+	var pinnedAfter []PackageVersion
+	for i, v := range displayVersions {
+		if i < limit {
+			continue
+		}
+		vs := v.SemVer.String()
+		isPinned := vs == installedStr || (latestPatchStr != "" && vs == latestPatchStr)
+		if isPinned && !pinnedSeen.Contains(vs) {
+			pinnedSeen.Add(vs)
+			pinnedAfter = append(pinnedAfter, v)
+		}
+	}
+
+	renderVRow := func(v PackageVersion) {
 		marker := "  "
 		vStyle := lipgloss.NewStyle().Foreground(colorSubtle)
 
-		isCurrent := v.SemVer.String() == row.ref.Version.String()
+		isCurrent := v.SemVer.String() == installedStr
 		isCompat := row.latestCompatible != nil && v.SemVer.String() == row.latestCompatible.SemVer.String()
 		isLatest := row.latestStable != nil && v.SemVer.String() == row.latestStable.SemVer.String()
 
@@ -1483,8 +2066,24 @@ func (m Model) renderDetail(row packageRow) string {
 			extras += lipgloss.NewStyle().Foreground(colorMuted).
 				Render(fmt.Sprintf(" (%s)", formatDownloads(v.Downloads)))
 		}
-
 		s.WriteString(vStyle.Render(marker+v.SemVer.String()) + extras + "\n")
+	}
+
+	for i, v := range displayVersions {
+		if i >= limit {
+			break
+		}
+		renderVRow(v)
+	}
+	if len(displayVersions) > limit {
+		hidden := len(displayVersions) - limit - len(pinnedAfter)
+		if hidden > 0 {
+			s.WriteString(lipgloss.NewStyle().Foreground(colorMuted).
+				Render(fmt.Sprintf("  … and %d more", hidden)) + "\n")
+		}
+		for _, pv := range pinnedAfter {
+			renderVRow(pv)
+		}
 	}
 
 	// frameworks
@@ -1530,6 +2129,111 @@ func defaultVersionCursor(versions []PackageVersion, targets Set[TargetFramework
 		}
 	}
 	return 0
+}
+
+func (m Model) renderHelpOverlay() string {
+	type section struct {
+		title string
+		rows  [][2]string // [key, description]
+	}
+	sections := []section{
+		{
+			title: "Navigation",
+			rows: [][2]string{
+				{"tab / shift+tab", "cycle focus between panels"},
+				{"↑ / ↓  or  j / k", "move up / down in list"},
+				{"enter", "switch focus to packages panel"},
+			},
+		},
+		{
+			title: "Package actions  (packages panel)",
+			rows: [][2]string{
+				{"u", "update to latest compatible version"},
+				{"U", "update to absolute latest version"},
+				{"r", "pick a specific version from the list"},
+				{"a", "update all packages across all projects"},
+				{"d", "delete selected package from project"},
+				{"t", "show declared dependency tree for package"},
+			},
+		},
+		{
+			title: "Project actions",
+			rows: [][2]string{
+				{"T", "show full transitive dependency tree"},
+				{"R", "run dotnet restore"},
+				{"/", "search NuGet and add a package"},
+			},
+		},
+		{
+			title: "Version picker  (r)",
+			rows: [][2]string{
+				{"↑ / ↓  or  j / k", "move cursor"},
+				{"enter", "apply selected version"},
+				{"esc / q", "close picker"},
+			},
+		},
+		{
+			title: "Dependency tree  (t / T)",
+			rows: [][2]string{
+				{"↑ / ↓  or  j / k", "scroll content"},
+				{"esc", "close panel"},
+			},
+		},
+		{
+			title: "View toggles",
+			rows: [][2]string{
+				{"l", "toggle log panel"},
+				{"s", "toggle sources panel"},
+				{"?", "toggle this help"},
+				{"q / ctrl+c", "quit"},
+			},
+		},
+	}
+
+	keyStyle := lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
+	titleStyle := lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
+	descStyle := lipgloss.NewStyle().Foreground(colorSubtle)
+	dimStyle := lipgloss.NewStyle().Foreground(colorBorder)
+
+	// Compute key column width across all sections.
+	maxKeyW := 0
+	for _, sec := range sections {
+		for _, row := range sec.rows {
+			if w := lipgloss.Width(row[0]); w > maxKeyW {
+				maxKeyW = w
+			}
+		}
+	}
+	maxKeyW += 2
+
+	var lines []string
+	lines = append(lines, lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render("Keybindings"))
+
+	for _, sec := range sections {
+		lines = append(lines, "")
+		lines = append(lines, titleStyle.Render(sec.title))
+		lines = append(lines, dimStyle.Render(strings.Repeat("─", maxKeyW+32)))
+		for _, row := range sec.rows {
+			k := keyStyle.Render(padRight(row[0], maxKeyW))
+			d := descStyle.Render(row[1])
+			lines = append(lines, k+"  "+d)
+		}
+	}
+	lines = append(lines, "")
+	lines = append(lines, dimStyle.Render("esc · ? · q  close"))
+
+	w := m.width * 60 / 100
+	if w < 56 {
+		w = 56
+	}
+	box := lipgloss.NewStyle().
+		Width(w).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(colorAccent).
+		Padding(1, 2).
+		Render(strings.Join(lines, "\n"))
+
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
 }
 
 func (m Model) renderSourcesOverlay() string {
@@ -1700,7 +2404,7 @@ func (m Model) renderSearchOverlay() string {
 }
 
 func (m Model) renderPickerOverlay() string {
-	w := 52
+	w := 56
 	maxVisible := 16
 	versions := m.picker.versions
 
@@ -1713,6 +2417,12 @@ func (m Model) renderPickerOverlay() string {
 		end = len(versions)
 	}
 
+	// Look up package-level info for deprecation notice.
+	var pkgInfo *PackageInfo
+	if res, ok := m.results[m.picker.pkgName]; ok {
+		pkgInfo = res.pkg
+	}
+
 	var lines []string
 	lines = append(lines,
 		lipgloss.NewStyle().Foreground(colorAccent).Bold(true).
@@ -1722,6 +2432,15 @@ func (m Model) renderPickerOverlay() string {
 		lipgloss.NewStyle().Foreground(colorSubtle).
 			Render(m.picker.pkgName),
 	)
+	// Deprecation notice directly under the name.
+	if pkgInfo != nil && pkgInfo.Deprecated {
+		notice := lipgloss.NewStyle().Foreground(colorYellow).Render("~ deprecated")
+		if pkgInfo.AlternatePackageID != "" {
+			notice += lipgloss.NewStyle().Foreground(colorMuted).
+				Render("  use: " + pkgInfo.AlternatePackageID)
+		}
+		lines = append(lines, notice)
+	}
 	lines = append(lines,
 		lipgloss.NewStyle().Foreground(colorBorder).Render(strings.Repeat("─", w-6)),
 	)
@@ -1731,6 +2450,19 @@ func (m Model) renderPickerOverlay() string {
 		selected := i == m.picker.cursor
 		compat := versionCompatible(v, m.picker.targets)
 		isPre := v.SemVer.IsPreRelease()
+		isVulnerable := len(v.Vulnerabilities) > 0
+
+		// Compute highest vulnerability severity for colouring.
+		maxSeverity := 0
+		for _, vuln := range v.Vulnerabilities {
+			if int(vuln.Severity) > maxSeverity {
+				maxSeverity = int(vuln.Severity)
+			}
+		}
+		vulnColor := colorYellow // moderate
+		if maxSeverity >= 2 {
+			vulnColor = colorRed // high / critical
+		}
 
 		var style lipgloss.Style
 		prefix := "  "
@@ -1739,6 +2471,8 @@ func (m Model) renderPickerOverlay() string {
 			prefix = "▶ "
 		} else {
 			switch {
+			case isVulnerable:
+				style = lipgloss.NewStyle().Foreground(vulnColor)
 			case !compat:
 				style = lipgloss.NewStyle().Foreground(colorRed)
 			case isPre:
@@ -1749,6 +2483,9 @@ func (m Model) renderPickerOverlay() string {
 		}
 
 		extras := ""
+		if isVulnerable {
+			extras += lipgloss.NewStyle().Foreground(vulnColor).Render(" ⚠")
+		}
 		if isPre {
 			extras += lipgloss.NewStyle().Foreground(colorMuted).Render(" pre")
 		}
@@ -1766,7 +2503,8 @@ func (m Model) renderPickerOverlay() string {
 	lines = append(lines, "")
 	legend := lipgloss.NewStyle().Foreground(colorGreen).Render("■") + " compat  " +
 		lipgloss.NewStyle().Foreground(colorYellow).Render("■") + " pre  " +
-		lipgloss.NewStyle().Foreground(colorRed).Render("■") + " incompat"
+		lipgloss.NewStyle().Foreground(colorRed).Render("■") + " incompat  " +
+		lipgloss.NewStyle().Foreground(colorRed).Render("⚠") + " vuln"
 	lines = append(lines, lipgloss.NewStyle().Foreground(colorMuted).Render(legend))
 	lines = append(lines,
 		lipgloss.NewStyle().Foreground(colorMuted).
@@ -1831,15 +2569,17 @@ func (m Model) renderLogPanel() string {
 func (m Model) renderFooter() string {
 	type kv struct{ k, v string }
 	keys := []kv{
-		{"tab/↑↓", "focus/navigate"},
-		{"u/U", "update compat/latest"},
-		{"r", "pick version"},
+		{"tab/↑↓", "nav"},
+		{"u/U", "update"},
+		{"r", "version"},
 		{"a", "update all"},
 		{"R", "restore"},
-		{"/", "add pkg"},
-		{"d", "del pkg"},
+		{"/", "add"},
+		{"d", "del"},
+		{"t/T", "deps"},
 		{"l", "logs"},
 		{"s", "sources"},
+		{"?", "help"},
 		{"q", "quit"},
 	}
 
@@ -1849,15 +2589,18 @@ func (m Model) renderFooter() string {
 		v := lipgloss.NewStyle().Foreground(colorSubtle).Render(pair.v)
 		parts = append(parts, k+" "+v)
 	}
+	keybinds := strings.Join(parts, "  ·  ")
 
+	// Status line — always reserve the row so height is stable.
+	statusStr := ""
 	if m.restoring {
-		parts = append(parts, m.spinner.View()+lipgloss.NewStyle().Foreground(colorAccent).Render(" restoring..."))
+		statusStr = m.spinner.View() + lipgloss.NewStyle().Foreground(colorAccent).Render(" restoring...")
 	} else if m.statusLine != "" {
 		c := colorGreen
 		if m.statusIsErr {
 			c = colorRed
 		}
-		parts = append(parts, lipgloss.NewStyle().Foreground(c).Render(m.statusLine))
+		statusStr = lipgloss.NewStyle().Foreground(c).Render(m.statusLine)
 	}
 
 	return lipgloss.NewStyle().
@@ -1867,7 +2610,7 @@ func (m Model) renderFooter() string {
 		BorderStyle(lipgloss.NormalBorder()).
 		BorderTopForeground(colorBorder).
 		Padding(0, 2).
-		Render(strings.Join(parts, "  ·  "))
+		Render(statusStr + "\n" + keybinds)
 }
 
 // ─────────────────────────────────────────────
