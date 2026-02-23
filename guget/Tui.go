@@ -222,6 +222,7 @@ func NewModel(parsedProjects []*ParsedProject, noColor bool) Model {
 		Padding(0, 1)
 	l.Styles.TitleBar = lipgloss.NewStyle().Background(colorSurface)
 	l.SetShowStatusBar(false)
+	l.SetShowHelp(false)
 	l.SetFilteringEnabled(false)
 
 	dv := viewport.New(40, 20)
