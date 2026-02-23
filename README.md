@@ -40,7 +40,7 @@ A terminal UI for managing NuGet packages across .NET projects.
 ## Installation
 
 ```bash
-git clone https://github.com/yourname/GoNugetTui
+git clone https://github.com/nulifyer/guget
 cd GoNugetTui/guget
 go build -o guget        # Linux / macOS
 go build -o guget.exe    # Windows
