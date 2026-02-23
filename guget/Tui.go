@@ -659,7 +659,7 @@ func (m *Model) packageListHeight() int {
 
 func (m *Model) relayout() {
 	leftW, _, rightW := m.panelWidths()
-	m.projectList.SetSize(leftW-2, m.height-4)
+	m.projectList.SetSize(leftW-2, m.height-6)
 	m.detailView.Width = rightW - 4
 	m.detailView.Height = m.height - 6
 }
