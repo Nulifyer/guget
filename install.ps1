@@ -13,13 +13,14 @@ $Arch = if (
 # ── Fetch latest release tag ──────────────────────────────────────────────────
 Write-Host "Fetching latest release..."
 $Release = Invoke-RestMethod "https://api.github.com/repos/$Repo/releases/latest"
-$Version = $Release.tag_name
+$Tag     = $Release.tag_name                  # e.g. "v0.1.0"  (used in the URL)
+$Version = $Tag -replace '^v', ''             # e.g.  "0.1.0"  (used in the filename)
 
-Write-Host "Installing guget $Version (windows/$Arch)..."
+Write-Host "Installing guget $Tag (windows/$Arch)..."
 
 # ── Download and extract ──────────────────────────────────────────────────────
 $Filename = "guget_${Version}_windows_${Arch}.zip"
-$Url      = "https://github.com/$Repo/releases/download/$Version/$Filename"
+$Url      = "https://github.com/$Repo/releases/download/$Tag/$Filename"
 
 $Tmp = Join-Path $env:TEMP ([System.Guid]::NewGuid().ToString())
 New-Item -ItemType Directory -Path $Tmp | Out-Null

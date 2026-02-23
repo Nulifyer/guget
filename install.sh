@@ -35,11 +35,14 @@ if [ -z "$VERSION" ]; then
   echo "Error: could not determine latest version"; exit 1
 fi
 
-echo "Installing guget $VERSION ($OS/$ARCH)..."
+TAG="$VERSION"           # e.g. "v0.1.0"  (used in the URL)
+VERSION="${TAG#v}"       # e.g.  "0.1.0"  (used in the filename)
+
+echo "Installing guget $TAG ($OS/$ARCH)..."
 
 # ── Download and extract ──────────────────────────────────────────────────────
 FILENAME="guget_${VERSION}_${OS}_${ARCH}.tar.gz"
-URL="https://github.com/$REPO/releases/download/$VERSION/$FILENAME"
+URL="https://github.com/$REPO/releases/download/$TAG/$FILENAME"
 
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
