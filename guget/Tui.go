@@ -148,6 +148,7 @@ type versionPicker struct {
 	pkgName  string
 	versions []PackageVersion
 	cursor   int
+	targets  Set[TargetFramework]
 }
 
 func (vp *versionPicker) selectedVersion() *PackageVersion {
@@ -506,6 +507,7 @@ func (m *Model) openVersionPicker() {
 		pkgName:  row.ref.Name,
 		versions: row.info.Versions,
 		cursor:   0,
+		targets:  row.project.TargetFrameworks,
 	}
 }
 
@@ -991,6 +993,27 @@ func (m Model) renderDetail(row packageRow) string {
 	return s.String()
 }
 
+// versionCompatible returns true when v is usable by all of the project's
+// target frameworks. Empty Frameworks on the version means "any framework".
+func versionCompatible(v PackageVersion, targets Set[TargetFramework]) bool {
+	if targets.Len() == 0 || len(v.Frameworks) == 0 {
+		return true
+	}
+	for target := range targets {
+		ok := false
+		for _, fw := range v.Frameworks {
+			if target.IsCompatibleWith(fw) {
+				ok = true
+				break
+			}
+		}
+		if !ok {
+			return false
+		}
+	}
+	return true
+}
+
 func (m Model) renderPickerOverlay() string {
 	w := 52
 	maxVisible := 16
@@ -1021,23 +1044,45 @@ func (m Model) renderPickerOverlay() string {
 	for i := start; i < end; i++ {
 		v := versions[i]
 		selected := i == m.picker.cursor
+		compat := versionCompatible(v, m.picker.targets)
+		isPre := v.SemVer.IsPreRelease()
 
-		style := lipgloss.NewStyle().Foreground(colorSubtle)
+		var style lipgloss.Style
 		prefix := "  "
 		if selected {
-			style = style.Foreground(colorAccent).Bold(true)
+			style = lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
 			prefix = "▶ "
+		} else {
+			switch {
+			case !compat:
+				style = lipgloss.NewStyle().Foreground(colorRed)
+			case isPre:
+				style = lipgloss.NewStyle().Foreground(colorYellow)
+			default:
+				style = lipgloss.NewStyle().Foreground(colorGreen)
+			}
 		}
 
 		extras := ""
-		if v.SemVer.IsPreRelease() {
-			extras += lipgloss.NewStyle().Foreground(colorMuted).Render(" (pre)")
+		if isPre {
+			extras += lipgloss.NewStyle().Foreground(colorMuted).Render(" pre")
+		}
+		if selected {
+			if compat {
+				extras += lipgloss.NewStyle().Foreground(colorGreen).Render(" ✓")
+			} else {
+				extras += lipgloss.NewStyle().Foreground(colorRed).Render(" ✗")
+			}
 		}
 
 		lines = append(lines, style.Render(prefix+v.SemVer.String())+extras)
 	}
 
 	lines = append(lines, "")
+	legend := lipgloss.NewStyle().Foreground(colorGreen).Render("■") + " compat  " +
+		lipgloss.NewStyle().Foreground(colorYellow).Render("■") + " pre  " +
+		lipgloss.NewStyle().Foreground(colorRed).Render("■") + " incompat"
+	lines = append(lines, lipgloss.NewStyle().Foreground(colorMuted).Render(legend))
 	lines = append(lines,
 		lipgloss.NewStyle().Foreground(colorMuted).
 			Render("↑/↓ navigate · enter select · esc cancel"),
@@ -1062,7 +1107,8 @@ func (m Model) renderFooter() string {
 		{"u", "update compat"},
 		{"U", "update latest"},
 		{"r", "pick version"},
-		{"a", "sync all projects"},
+		{"a", "sync all"},
+		{"R", "restore"},
 		{"q", "quit"},
 	}
 
@@ -1071,6 +1117,16 @@ func (m Model) renderFooter() string {
 		k := lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render(pair.k)
 		v := lipgloss.NewStyle().Foreground(colorSubtle).Render(pair.v)
 		parts = append(parts, k+" "+v)
+	}
+
+	if m.restoring {
+		parts = append(parts, m.spinner.View()+lipgloss.NewStyle().Foreground(colorAccent).Render(" restoring..."))
+	} else if m.statusLine != "" {
+		c := colorGreen
+		if m.statusIsErr {
+			c = colorRed
+		}
+		parts = append(parts, lipgloss.NewStyle().Foreground(c).Render(m.statusLine))
 	}
 
 	return lipgloss.NewStyle().
