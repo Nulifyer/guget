@@ -16,6 +16,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
+var version = "dev"
+
 // ─────────────────────────────────────────────
 // logBuffer — thread-safe in-memory log sink
 // ─────────────────────────────────────────────
