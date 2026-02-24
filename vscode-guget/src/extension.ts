@@ -1,3 +1,4 @@
+import * as path from "path";
 import * as vscode from "vscode";
 import { resolveGugetBinary } from "./gugetBinary";
 
@@ -51,7 +52,9 @@ export function activate(context: vscode.ExtensionContext) {
         shellPath: binaryPath,
         shellArgs: args,
         location: vscode.TerminalLocation.Editor,
-        iconPath: new vscode.ThemeIcon("package"),
+        iconPath: vscode.Uri.file(
+          path.join(context.extensionPath, "icon.svg")
+        ),
         isTransient: true,
       });
 

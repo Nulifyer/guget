@@ -1,6 +1,12 @@
+<div align="center">
+
+<img src="https://raw.githubusercontent.com/nulifyer/guget/main/vscode-guget/icon.png" alt="guget logo" width="128" height="128">
+
 # guget - NuGet Package Manager for VS Code
 
 Manage NuGet packages across .NET projects with an interactive TUI, right inside VS Code.
+
+</div>
 
 ![Screenshot placeholder](https://raw.githubusercontent.com/nulifyer/guget/main/docs/screenshot.png)
 

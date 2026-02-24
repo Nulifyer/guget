@@ -2,6 +2,8 @@
 
 # guget
 
+<img src="vscode-guget/icon.svg" alt="guget logo" width="128" height="128">
+
 ![Go](https://img.shields.io/badge/Go-1.25%2B-00ADD8?style=flat&logo=go)
 [![Platform](https://img.shields.io/badge/Platform-Linux%20|%20macOS%20|%20Windows-orange.svg)]()
 

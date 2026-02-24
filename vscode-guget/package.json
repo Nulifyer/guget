@@ -22,13 +22,18 @@
     "fsharp",
     "package-manager"
   ],
+  "icon": "icon.png",
   "activationEvents": [],
   "main": "./dist/extension.js",
   "contributes": {
     "commands": [
       {
         "command": "guget.manage",
-        "title": "Guget: Manage NuGet Packages"
+        "title": "Guget: Manage NuGet Packages",
+        "icon": {
+          "light": "icon.svg",
+          "dark": "icon.svg"
+        }
       }
     ],
     "configuration": {
