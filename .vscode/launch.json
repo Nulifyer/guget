@@ -37,6 +37,14 @@
                 "-v", "trc",
                 "-p", "./debug-dotnet",
             ]
+        },
+        {
+            "name": "Run VSCode Extension",
+            "type": "extensionHost",
+            "request": "launch",
+            "args": [
+                "--extensionDevelopmentPath=${workspaceFolder}/vscode-guget"
+            ]
         }
     ]
 }

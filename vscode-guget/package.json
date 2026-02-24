@@ -1,0 +1,79 @@
+{
+  "name": "guget",
+  "displayName": "guget - NuGet Package Manager",
+  "description": "Manage NuGet packages across .NET projects with an interactive TUI",
+  "version": "0.1.0",
+  "publisher": "nulifyer",
+  "license": "GPL-3.0-only",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nulifyer/guget"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "nuget",
+    "dotnet",
+    "csharp",
+    "fsharp",
+    "package-manager"
+  ],
+  "activationEvents": [],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "guget.manage",
+        "title": "Guget: Manage NuGet Packages"
+      }
+    ],
+    "configuration": {
+      "title": "guget",
+      "properties": {
+        "guget.binaryPath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Absolute path to the `guget` binary. Leave empty to search `PATH`."
+        },
+        "guget.verbosity": {
+          "type": "string",
+          "default": "warn",
+          "enum": [
+            "none",
+            "error",
+            "warn",
+            "info",
+            "debug",
+            "trace"
+          ],
+          "description": "Log verbosity level passed to guget via -v flag."
+        },
+        "guget.additionalArgs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Additional CLI arguments to pass to guget."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "node esbuild.js --production",
+    "build": "node esbuild.js",
+    "watch": "node esbuild.js --watch",
+    "package": "npx @vscode/vsce package"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.85.0",
+    "@types/node": "^20.0.0",
+    "esbuild": "^0.24.0",
+    "@vscode/vsce": "^3.0.0",
+    "typescript": "^5.5.0"
+  }
+}

@@ -30,3 +30,35 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  vscode-extension:
+    name: Publish VSCode Extension
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Stamp version from tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          cd vscode-guget
+          npm pkg set version="$VERSION"
+
+      - name: Install and build
+        run: |
+          cd vscode-guget
+          npm ci
+          npm run build
+
+      - name: Publish to Marketplace
+        run: |
+          cd vscode-guget
+          npx @vscode/vsce publish -p "$VSCE_PAT"
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
