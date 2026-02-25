@@ -4,7 +4,7 @@
         {
             "label": "reset-test-dotnet",
             "type": "shell",
-            "command": "git checkout -- test-dotnet/",
+            "command": "git checkout -- ./test-dotnet/",
             "options": {
                 "cwd": "${workspaceFolder}"
             },
