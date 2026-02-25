@@ -92,6 +92,7 @@ type PackageInfo struct {
 	Deprecated         bool
 	DeprecationMessage string
 	AlternatePackageID string
+	NugetOrgURL        string // set when package exists on nuget.org (even if found via another source)
 }
 
 // registrationIndex is returned by the RegistrationsBaseUrl endpoint.

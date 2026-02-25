@@ -1995,10 +1995,14 @@ func (m Model) renderDetail(row packageRow) string {
 		return styleText.Render(text)
 	}
 
-	// name + verified — link to project URL if available, else nuget.org if that's the source
+	// name + verified — link to project URL, nuget.org URL, or constructed nuget.org link
 	pkgLink := row.info.ProjectURL
-	if pkgLink == "" && strings.EqualFold(row.source, "nuget.org") {
-		pkgLink = "https://www.nuget.org/packages/" + row.info.ID
+	if pkgLink == "" {
+		if row.info.NugetOrgURL != "" {
+			pkgLink = row.info.NugetOrgURL
+		} else if strings.EqualFold(row.source, "nuget.org") {
+			pkgLink = "https://www.nuget.org/packages/" + row.info.ID
+		}
 	}
 	name := hyperlink(pkgLink, styleAccentBold.Render(row.info.ID))
 	verified := ""
@@ -2082,7 +2086,11 @@ func (m Model) renderDetail(row packageRow) string {
 		}
 	}
 	s.WriteString(label("Source") + "\n")
-	s.WriteString(hyperlink(sourceURL, styleSubtle.Render(row.source)) + "\n\n")
+	s.WriteString(hyperlink(sourceURL, styleSubtle.Render(row.source)) + "\n")
+	if row.info.NugetOrgURL != "" && !strings.EqualFold(row.source, "nuget.org") {
+		s.WriteString(hyperlink(row.info.NugetOrgURL, styleMuted.Render("nuget.org")) + "\n")
+	}
+	s.WriteString("\n")
 
 	// show defining file if it's from a .props file
 	if sel := m.selectedProject(); sel != nil {
@@ -2190,7 +2198,7 @@ func (m Model) renderDetail(row packageRow) string {
 				Render(fmt.Sprintf(" (%s)", formatDownloads(v.Downloads)))
 		}
 		verText := vStyle.Render(v.SemVer.String())
-		if strings.EqualFold(row.source, "nuget.org") {
+		if strings.EqualFold(row.source, "nuget.org") || row.info.NugetOrgURL != "" {
 			verURL := "https://www.nuget.org/packages/" + row.info.ID + "/" + v.SemVer.String()
 			verText = hyperlink(verURL, verText)
 		}
@@ -2609,7 +2617,7 @@ func (m Model) renderPickerOverlay() string {
 		}
 
 		verStr := style.Render(v.SemVer.String())
-		if strings.EqualFold(pkgSource, "nuget.org") {
+		if strings.EqualFold(pkgSource, "nuget.org") || (pkgInfo != nil && pkgInfo.NugetOrgURL != "") {
 			verURL := "https://www.nuget.org/packages/" + m.picker.pkgName + "/" + v.SemVer.String()
 			verStr = hyperlink(verURL, verStr)
 		}

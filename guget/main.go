@@ -271,6 +271,15 @@ func main() {
 				panic(r)
 			}
 		}()
+		// Identify the nuget.org service for supplementary lookups.
+		var nugetOrgSvc *NugetService
+		for _, svc := range nugetServices {
+			if strings.EqualFold(svc.SourceName(), "nuget.org") {
+				nugetOrgSvc = svc
+				break
+			}
+		}
+
 		var wg sync.WaitGroup
 		for name := range distinctPackages {
 			wg.Add(1)
@@ -287,6 +296,16 @@ func main() {
 					}
 					logDebug("Source [%s] failed for %s: %v", svc.SourceName(), name, lastErr)
 				}
+
+				// Enrich from nuget.org when the winning source is a private feed.
+				// Merges vulnerabilities, downloads, verification, and ProjectURL.
+				if info != nil && !strings.EqualFold(sourceName, "nuget.org") && nugetOrgSvc != nil {
+					if nugetInfo, err := nugetOrgSvc.SearchExact(name); err == nil {
+						info.NugetOrgURL = "https://www.nuget.org/packages/" + nugetInfo.ID
+						enrichFromNugetOrg(info, nugetInfo)
+					}
+				}
+
 				p.Send(packageReadyMsg{
 					name:   name,
 					result: nugetResult{pkg: info, source: sourceName, err: lastErr},
@@ -305,6 +324,51 @@ func main() {
 // ─────────────────────────────────────────────
 // Helper Functions
 // ─────────────────────────────────────────────
+
+// enrichFromNugetOrg merges vulnerability, download, verification, and
+// ProjectURL data from a nuget.org lookup into a PackageInfo that was
+// originally fetched from a private feed.
+func enrichFromNugetOrg(info, nugetInfo *PackageInfo) {
+	// Build a version→vulnerabilities map from nuget.org data.
+	nugetVulns := make(map[string][]PackageVulnerability, len(nugetInfo.Versions))
+	for _, v := range nugetInfo.Versions {
+		if len(v.Vulnerabilities) > 0 {
+			nugetVulns[v.SemVer.String()] = v.Vulnerabilities
+		}
+	}
+
+	// Build a version→downloads map from nuget.org data.
+	nugetDL := make(map[string]int, len(nugetInfo.Versions))
+	for _, v := range nugetInfo.Versions {
+		if v.Downloads > 0 {
+			nugetDL[v.SemVer.String()] = v.Downloads
+		}
+	}
+
+	for i := range info.Versions {
+		key := info.Versions[i].SemVer.String()
+		if len(info.Versions[i].Vulnerabilities) == 0 {
+			if vulns, ok := nugetVulns[key]; ok {
+				info.Versions[i].Vulnerabilities = vulns
+			}
+		}
+		if info.Versions[i].Downloads == 0 {
+			if dl, ok := nugetDL[key]; ok {
+				info.Versions[i].Downloads = dl
+			}
+		}
+	}
+
+	if info.TotalDownloads == 0 {
+		info.TotalDownloads = nugetInfo.TotalDownloads
+	}
+	if !info.Verified {
+		info.Verified = nugetInfo.Verified
+	}
+	if info.ProjectURL == "" {
+		info.ProjectURL = nugetInfo.ProjectURL
+	}
+}
 
 func FindProjectFiles(rootDir string) ([]string, error) {
 	ignoreDirs := []string{
