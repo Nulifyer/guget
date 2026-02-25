@@ -271,12 +271,19 @@ func main() {
 				panic(r)
 			}
 		}()
-		// Identify the nuget.org service for supplementary lookups.
+		// Always have a nuget.org service available for supplementary lookups,
+		// even if the user's nuget.config doesn't include nuget.org as a source.
 		var nugetOrgSvc *NugetService
 		for _, svc := range nugetServices {
 			if strings.EqualFold(svc.SourceName(), "nuget.org") {
 				nugetOrgSvc = svc
 				break
+			}
+		}
+		if nugetOrgSvc == nil {
+			svc, err := NewNugetService(NugetSource{Name: "nuget.org", URL: defaultNugetSource})
+			if err == nil {
+				nugetOrgSvc = svc
 			}
 		}
 
