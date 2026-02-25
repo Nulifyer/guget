@@ -9,12 +9,12 @@ import (
 
 	"logger"
 
-	"github.com/charmbracelet/bubbles/list"
-	"github.com/charmbracelet/bubbles/spinner"
-	"github.com/charmbracelet/bubbles/textinput"
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	bubbles_list "github.com/charmbracelet/bubbles/list"
+	bubbles_spinner "github.com/charmbracelet/bubbles/spinner"
+	bubbles_textinpute "github.com/charmbracelet/bubbles/textinput"
+	bubbles_viewport "github.com/charmbracelet/bubbles/viewport"
+	bubble_tea "github.com/charmbracelet/bubbletea"
+	lipgloss "github.com/charmbracelet/lipgloss"
 )
 
 // ─────────────────────────────────────────────
@@ -22,18 +22,48 @@ import (
 // ─────────────────────────────────────────────
 
 var (
-	colorBg      = lipgloss.Color("#0d1117")
-	colorSurface = lipgloss.Color("#161b22")
-	colorBorder  = lipgloss.Color("#30363d")
-	colorMuted   = lipgloss.Color("#484f58")
-	colorText    = lipgloss.Color("#e6edf3")
-	colorSubtle  = lipgloss.Color("#8b949e")
-	colorAccent  = lipgloss.Color("#58a6ff")
-	colorGreen   = lipgloss.Color("#3fb950")
-	colorYellow  = lipgloss.Color("#d29922")
-	colorRed     = lipgloss.Color("#f85149")
-	colorPurple  = lipgloss.Color("#bc8cff")
-	colorCyan    = lipgloss.Color("#56d7c2")
+	colorBorder = lipgloss.Color("#30363d")
+	colorMuted  = lipgloss.Color("#484f58")
+	colorText   = lipgloss.Color("#e6edf3")
+	colorSubtle = lipgloss.Color("#8b949e")
+	colorAccent = lipgloss.Color("#58a6ff")
+	colorGreen  = lipgloss.Color("#3fb950")
+	colorYellow = lipgloss.Color("#d29922")
+	colorRed    = lipgloss.Color("#f85149")
+	colorPurple = lipgloss.Color("#bc8cff")
+	colorCyan   = lipgloss.Color("#56d7c2")
+)
+
+// ─────────────────────────────────────────────
+// Reusable styles
+// ─────────────────────────────────────────────
+
+var (
+	// text styles
+	styleMuted      = lipgloss.NewStyle().Foreground(colorMuted)
+	styleSubtle     = lipgloss.NewStyle().Foreground(colorSubtle)
+	styleSubtleBold = lipgloss.NewStyle().Foreground(colorSubtle).Bold(true)
+	styleText       = lipgloss.NewStyle().Foreground(colorText)
+	styleTextBold   = lipgloss.NewStyle().Foreground(colorText).Bold(true)
+	styleAccent     = lipgloss.NewStyle().Foreground(colorAccent)
+	styleAccentBold = lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
+	styleGreen      = lipgloss.NewStyle().Foreground(colorGreen)
+	styleYellow     = lipgloss.NewStyle().Foreground(colorYellow)
+	styleYellowBold = lipgloss.NewStyle().Foreground(colorYellow).Bold(true)
+	styleRed        = lipgloss.NewStyle().Foreground(colorRed)
+	styleRedBold    = lipgloss.NewStyle().Foreground(colorRed).Bold(true)
+	stylePurple     = lipgloss.NewStyle().Foreground(colorPurple)
+	styleCyan       = lipgloss.NewStyle().Foreground(colorCyan)
+	styleBorder     = lipgloss.NewStyle().Foreground(colorBorder)
+
+	// Layout styles
+	styleHeaderTitle   = styleAccentBold.Padding(0, 2)
+	styleHeaderBar     = lipgloss.NewStyle().BorderBottom(true).BorderStyle(lipgloss.NormalBorder()).BorderBottomForeground(colorBorder)
+	styleFooterBar     = lipgloss.NewStyle().BorderTop(true).BorderStyle(lipgloss.NormalBorder()).BorderTopForeground(colorBorder).Padding(0, 2)
+	styleOverlay       = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colorAccent).Padding(1, 2)
+	styleOverlayDanger = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colorRed).Padding(1, 2)
+	stylePanel         = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colorBorder).Padding(0, 1)
+	stylePanelNoPad    = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colorBorder)
 )
 
 // ─────────────────────────────────────────────
@@ -43,7 +73,17 @@ var (
 const (
 	logPanelLines       = 6
 	logPanelOuterHeight = logPanelLines + 4 // border(2) + title(1) + divider(1)
+	maxLayoutWidth      = 210
 )
+
+// layoutWidth returns the effective width for the main content area,
+// capped at maxLayoutWidth so the UI stays readable on ultra-wide terminals.
+func (m *Model) layoutWidth() int {
+	if m.width > maxLayoutWidth {
+		return maxLayoutWidth
+	}
+	return m.width
+}
 
 // ─────────────────────────────────────────────
 // Panel focus
@@ -117,7 +157,7 @@ type depTreeOverlay struct {
 	loading bool // true while dotnet list is running (T key)
 	content string
 	err     error
-	vp      viewport.Model
+	vp      bubbles_viewport.Model
 	title   string
 }
 
@@ -192,12 +232,12 @@ func (r packageRow) statusIcon() string {
 	return "✓"
 }
 
-func (r packageRow) statusColor() lipgloss.Color {
+func (r packageRow) statusStyle() lipgloss.Style {
 	if r.vulnerable {
-		return colorRed
+		return styleRed
 	}
 	if r.err != nil {
-		return colorRed
+		return styleRed
 	}
 	check := r.latestCompatible
 	if check == nil {
@@ -206,14 +246,14 @@ func (r packageRow) statusColor() lipgloss.Color {
 	if check != nil && check.SemVer.IsNewerThan(r.ref.Version) {
 		if r.latestStable != nil && r.latestCompatible != nil &&
 			r.latestStable.SemVer.IsNewerThan(r.latestCompatible.SemVer) {
-			return colorPurple
+			return stylePurple
 		}
-		return colorYellow
+		return styleYellow
 	}
 	if r.deprecated {
-		return colorYellow
+		return styleYellow
 	}
-	return colorGreen
+	return styleGreen
 }
 
 // ─────────────────────────────────────────────
@@ -243,7 +283,7 @@ func (vp *versionPicker) selectedVersion() *PackageVersion {
 
 type packageSearch struct {
 	active          bool
-	input           textinput.Model
+	input           bubbles_textinpute.Model
 	debounceID      int
 	lastQuery       string
 	results         []SearchResult
@@ -279,15 +319,15 @@ type Model struct {
 	loading        bool
 	loadingDone    int
 	loadingTotal   int
-	spinner        spinner.Model
+	spinner        bubbles_spinner.Model
 
-	projectList list.Model
+	projectList bubbles_list.Model
 
 	packageRows   []packageRow
 	packageCursor int
 	packageOffset int
 
-	detailView viewport.Model
+	detailView bubbles_viewport.Model
 
 	picker  versionPicker
 	search  packageSearch
@@ -304,7 +344,7 @@ type Model struct {
 	restoring   bool
 
 	logLines []string
-	logView  viewport.Model
+	logView  bubbles_viewport.Model
 	showLogs bool
 }
 
@@ -313,18 +353,18 @@ func NewModel(parsedProjects []*ParsedProject, nugetServices []*NugetService, so
 		lipgloss.SetColorProfile(0)
 	}
 
-	sp := spinner.New()
-	sp.Spinner = spinner.Dot
-	sp.Style = lipgloss.NewStyle().Foreground(colorAccent)
+	sp := bubbles_spinner.New()
+	sp.Spinner = bubbles_spinner.Dot
+	sp.Style = styleAccent
 
-	items := []list.Item{
+	items := []bubbles_list.Item{
 		projectItem{name: "All Projects", project: nil},
 	}
 	for _, p := range parsedProjects {
 		items = append(items, projectItem{name: p.FileName, project: p})
 	}
 
-	delegate := list.NewDefaultDelegate()
+	delegate := bubbles_list.NewDefaultDelegate()
 	delegate.Styles.SelectedTitle = delegate.Styles.SelectedTitle.
 		Foreground(colorAccent).
 		BorderLeftForeground(colorAccent)
@@ -334,21 +374,18 @@ func NewModel(parsedProjects []*ParsedProject, nugetServices []*NugetService, so
 	delegate.Styles.NormalTitle = delegate.Styles.NormalTitle.Foreground(colorText)
 	delegate.Styles.NormalDesc = delegate.Styles.NormalDesc.Foreground(colorMuted)
 
-	l := list.New(items, delegate, 28, 20)
+	l := bubbles_list.New(items, delegate, 28, 20)
 	l.Title = "Projects"
-	l.Styles.Title = lipgloss.NewStyle().
-		Foreground(colorAccent).
-		Bold(true).
-		Padding(0, 1)
-	l.Styles.TitleBar = lipgloss.NewStyle().Background(colorSurface)
+	l.Styles.Title = styleAccentBold.Padding(0, 1)
+	l.Styles.TitleBar = lipgloss.NewStyle()
 	l.SetShowStatusBar(false)
 	l.SetShowHelp(false)
 	l.SetFilteringEnabled(false)
 
-	dv := viewport.New(40, 20)
-	lv := viewport.New(80, logPanelLines)
+	dv := bubbles_viewport.New(40, 20)
+	lv := bubbles_viewport.New(80, logPanelLines)
 
-	ti := textinput.New()
+	ti := bubbles_textinpute.New()
 	ti.Placeholder = "Type a package name…"
 	ti.CharLimit = 100
 	ti.Width = 44
@@ -375,7 +412,7 @@ func NewModel(parsedProjects []*ParsedProject, nugetServices []*NugetService, so
 // Init
 // ─────────────────────────────────────────────
 
-func (m Model) Init() tea.Cmd {
+func (m Model) Init() bubble_tea.Cmd {
 	return m.spinner.Tick
 }
 
@@ -383,18 +420,18 @@ func (m Model) Init() tea.Cmd {
 // Update
 // ─────────────────────────────────────────────
 
-func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	var cmds []tea.Cmd
+func (m Model) Update(msg bubble_tea.Msg) (bubble_tea.Model, bubble_tea.Cmd) {
+	var cmds []bubble_tea.Cmd
 
 	switch msg := msg.(type) {
 
-	case tea.WindowSizeMsg:
+	case bubble_tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
 		m.relayout()
 
-	case spinner.TickMsg:
-		var cmd tea.Cmd
+	case bubbles_spinner.TickMsg:
+		var cmd bubble_tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
 		cmds = append(cmds, cmd)
 
@@ -485,37 +522,37 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.depTree.vp.SetContent(m.buildDepTreeContent())
 
-	case tea.KeyMsg:
+	case bubble_tea.KeyMsg:
 		m.statusLine = ""
 		if m.depTree.active {
 			cmds = append(cmds, m.handleDepTreeKey(msg))
-			return m, tea.Batch(cmds...)
+			return m, bubble_tea.Batch(cmds...)
 		}
 		if m.showSources {
 			switch msg.String() {
 			case "esc", "s", "q":
 				m.showSources = false
 			}
-			return m, tea.Batch(cmds...)
+			return m, bubble_tea.Batch(cmds...)
 		}
 		if m.showHelp {
 			switch msg.String() {
 			case "esc", "?", "q":
 				m.showHelp = false
 			}
-			return m, tea.Batch(cmds...)
+			return m, bubble_tea.Batch(cmds...)
 		}
 		if m.search.active {
 			cmds = append(cmds, m.handleSearchKey(msg))
-			return m, tea.Batch(cmds...)
+			return m, bubble_tea.Batch(cmds...)
 		}
 		if m.picker.active {
 			cmds = append(cmds, m.handlePickerKey(msg))
-			return m, tea.Batch(cmds...)
+			return m, bubble_tea.Batch(cmds...)
 		}
 		if m.confirm.active {
 			cmds = append(cmds, m.handleConfirmKey(msg))
-			return m, tea.Batch(cmds...)
+			return m, bubble_tea.Batch(cmds...)
 		}
 		cmds = append(cmds, m.handleKey(msg))
 	}
@@ -523,7 +560,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if !m.picker.active && !m.search.active && !m.confirm.active {
 		switch m.focus {
 		case focusProjects:
-			var cmd tea.Cmd
+			var cmd bubble_tea.Cmd
 			prev := m.projectList.Index()
 			m.projectList, cmd = m.projectList.Update(msg)
 			cmds = append(cmds, cmd)
@@ -534,25 +571,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.refreshDetail()
 			}
 		case focusDetail:
-			var cmd tea.Cmd
+			var cmd bubble_tea.Cmd
 			m.detailView, cmd = m.detailView.Update(msg)
 			cmds = append(cmds, cmd)
 		case focusLog:
 			if m.showLogs {
-				var cmd tea.Cmd
+				var cmd bubble_tea.Cmd
 				m.logView, cmd = m.logView.Update(msg)
 				cmds = append(cmds, cmd)
 			}
 		}
 	}
 
-	return m, tea.Batch(cmds...)
+	return m, bubble_tea.Batch(cmds...)
 }
 
-func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
+func (m *Model) handleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 	switch msg.String() {
 	case "ctrl+c", "q":
-		return tea.Quit
+		return bubble_tea.Quit
 
 	case "tab":
 		if m.showLogs {
@@ -659,7 +696,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 	return nil
 }
 
-func (m *Model) handlePickerKey(msg tea.KeyMsg) tea.Cmd {
+func (m *Model) handlePickerKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 	switch msg.String() {
 	case "esc", "q":
 		m.picker.active = false
@@ -685,7 +722,7 @@ func (m *Model) handlePickerKey(msg tea.KeyMsg) tea.Cmd {
 	return nil
 }
 
-func (m *Model) handleSearchKey(msg tea.KeyMsg) tea.Cmd {
+func (m *Model) handleSearchKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 	switch msg.String() {
 	case "esc":
 		m.search.active = false
@@ -723,7 +760,7 @@ func (m *Model) handleSearchKey(msg tea.KeyMsg) tea.Cmd {
 		}
 		// Use cached info if we already fetched this package (e.g. it's in another project).
 		if cached, ok := m.results[selected.ID]; ok && cached.pkg != nil {
-			return func() tea.Msg {
+			return func() bubble_tea.Msg {
 				return packageFetchedMsg{info: cached.pkg, source: cached.source}
 			}
 		}
@@ -733,7 +770,7 @@ func (m *Model) handleSearchKey(msg tea.KeyMsg) tea.Cmd {
 	}
 
 	// Forward all other keys to the textinput
-	var cmd tea.Cmd
+	var cmd bubble_tea.Cmd
 	m.search.input, cmd = m.search.input.Update(msg)
 	newQuery := m.search.input.Value()
 
@@ -748,7 +785,7 @@ func (m *Model) handleSearchKey(msg tea.KeyMsg) tea.Cmd {
 	if newQuery != m.search.lastQuery {
 		m.search.lastQuery = newQuery
 		m.search.loading = true
-		return tea.Batch(cmd, m.searchDebounceCmd(newQuery))
+		return bubble_tea.Batch(cmd, m.searchDebounceCmd(newQuery))
 	}
 	return cmd
 }
@@ -757,7 +794,7 @@ func (m *Model) handleSearchKey(msg tea.KeyMsg) tea.Cmd {
 // Actions
 // ─────────────────────────────────────────────
 
-func (m *Model) updateSelected(useLatest bool) tea.Cmd {
+func (m *Model) updateSelected(useLatest bool) bubble_tea.Cmd {
 	if m.packageCursor >= len(m.packageRows) {
 		return nil
 	}
@@ -777,7 +814,7 @@ func (m *Model) updateSelected(useLatest bool) tea.Cmd {
 	return m.applyVersion(row.ref.Name, target.SemVer.String(), m.selectedProject())
 }
 
-func (m *Model) applyVersion(pkgName, version string, targetProject *ParsedProject) tea.Cmd {
+func (m *Model) applyVersion(pkgName, version string, targetProject *ParsedProject) bubble_tea.Cmd {
 	projects := m.parsedProjects
 	if targetProject != nil {
 		projects = []*ParsedProject{targetProject}
@@ -811,7 +848,7 @@ func (m *Model) applyVersion(pkgName, version string, targetProject *ParsedProje
 	if len(toWrite) == 0 {
 		return nil
 	}
-	return func() tea.Msg {
+	return func() bubble_tea.Msg {
 		seen := make(map[string]bool)
 		for _, wt := range toWrite {
 			if seen[wt.filePath] {
@@ -828,7 +865,7 @@ func (m *Model) applyVersion(pkgName, version string, targetProject *ParsedProje
 	}
 }
 
-func (m *Model) triggerRestore() tea.Cmd {
+func (m *Model) triggerRestore() bubble_tea.Cmd {
 	m.restoring = true
 	var projects []*ParsedProject
 	if sel := m.selectedProject(); sel != nil {
@@ -839,8 +876,8 @@ func (m *Model) triggerRestore() tea.Cmd {
 	return runDotnetRestore(projects)
 }
 
-func runDotnetRestore(projects []*ParsedProject) tea.Cmd {
-	return func() tea.Msg {
+func runDotnetRestore(projects []*ParsedProject) bubble_tea.Cmd {
+	return func() bubble_tea.Msg {
 		var lastErr error
 		for _, p := range projects {
 			if p.FilePath == "" {
@@ -860,8 +897,8 @@ func runDotnetRestore(projects []*ParsedProject) tea.Cmd {
 	}
 }
 
-func runDepTreeCmd(project *ParsedProject) tea.Cmd {
-	return func() tea.Msg {
+func runDepTreeCmd(project *ParsedProject) bubble_tea.Cmd {
+	return func() bubble_tea.Msg {
 		cmd := exec.Command("dotnet", "list", project.FilePath, "package", "--include-transitive")
 		out, err := cmd.CombinedOutput()
 		if err != nil {
@@ -871,7 +908,7 @@ func runDepTreeCmd(project *ParsedProject) tea.Cmd {
 	}
 }
 
-func (m *Model) openDepTree() tea.Cmd {
+func (m *Model) openDepTree() bubble_tea.Cmd {
 	if m.packageCursor >= len(m.packageRows) {
 		return nil
 	}
@@ -888,7 +925,7 @@ func (m *Model) openDepTree() tea.Cmd {
 		}
 	}
 	overlayW, overlayH := m.depTreeOverlaySize()
-	vp := viewport.New(overlayW-6, overlayH-8)
+	vp := bubbles_viewport.New(overlayW-6, overlayH-8)
 	vp.SetContent(m.formatDepGroups(installedVer))
 	m.depTree = depTreeOverlay{
 		active:  true,
@@ -899,7 +936,7 @@ func (m *Model) openDepTree() tea.Cmd {
 	return nil
 }
 
-func (m *Model) openTransitiveDepTree() tea.Cmd {
+func (m *Model) openTransitiveDepTree() bubble_tea.Cmd {
 	proj := m.selectedProject()
 	if proj == nil {
 		m.statusLine = "⚠ Select a project first"
@@ -907,7 +944,7 @@ func (m *Model) openTransitiveDepTree() tea.Cmd {
 		return nil
 	}
 	overlayW, overlayH := m.depTreeOverlaySize()
-	vp := viewport.New(overlayW-6, overlayH-8)
+	vp := bubbles_viewport.New(overlayW-6, overlayH-8)
 	m.depTree = depTreeOverlay{
 		active:  true,
 		loading: true,
@@ -983,7 +1020,7 @@ func formatVersionRange(r string) string {
 
 func (m *Model) formatDepGroups(v *PackageVersion) string {
 	if v == nil || len(v.DependencyGroups) == 0 {
-		return lipgloss.NewStyle().Foreground(colorMuted).Render("(no dependency information available)")
+		return styleMuted.Render("(no dependency information available)")
 	}
 	// Compute max dependency name width for column alignment.
 	maxNameW := 20
@@ -1002,19 +1039,19 @@ func (m *Model) formatDepGroups(v *PackageVersion) string {
 		if fw == "" {
 			fw = "any"
 		}
-		sb.WriteString(lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render("["+fw+"]") + "\n")
+		sb.WriteString(styleAccentBold.Render("["+fw+"]") + "\n")
 		if len(dg.Dependencies) == 0 {
-			sb.WriteString(lipgloss.NewStyle().Foreground(colorMuted).Render("  (no dependencies)") + "\n")
+			sb.WriteString(styleMuted.Render("  (no dependencies)") + "\n")
 		} else {
 			for _, dep := range dg.Dependencies {
-				icon, iconColor := " ", colorMuted
+				icon, iconStyle := " ", styleMuted
 				if row := m.rowByName(dep.ID); row != nil {
-					icon, iconColor = row.statusIcon(), row.statusColor()
+					icon, iconStyle = row.statusIcon(), row.statusStyle()
 				}
 				rangeStr := formatVersionRange(dep.Range)
-				sb.WriteString("  " + lipgloss.NewStyle().Foreground(iconColor).Render(icon) + " ")
-				sb.WriteString(lipgloss.NewStyle().Foreground(colorText).Render(padRight(dep.ID, maxNameW)) +
-					lipgloss.NewStyle().Foreground(colorSubtle).Render(rangeStr) + "\n")
+				sb.WriteString("  " + iconStyle.Render(icon) + " ")
+				sb.WriteString(styleText.Render(padRight(dep.ID, maxNameW)) +
+					styleSubtle.Render(rangeStr) + "\n")
 			}
 		}
 		sb.WriteString("\n")
@@ -1033,7 +1070,7 @@ func (m Model) rowByName(name string) *packageRow {
 
 func (m *Model) buildDepTreeContent() string {
 	if m.depTree.err != nil {
-		return lipgloss.NewStyle().Foreground(colorRed).Render("Error: " + m.depTree.err.Error())
+		return styleRed.Render("Error: " + m.depTree.err.Error())
 	}
 	if m.depTree.loading {
 		return "Loading…"
@@ -1179,54 +1216,54 @@ func (m Model) renderParsedDotnetList(projects []dotnetListProject) string {
 		if pi > 0 {
 			sb.WriteString("\n")
 		}
-		sb.WriteString(lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render("◈ "+proj.Name) + "\n")
+		sb.WriteString(styleAccentBold.Render("◈ "+proj.Name) + "\n")
 		for _, fw := range proj.Frameworks {
-			sb.WriteString("\n" + lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render(fw.Name) + "\n")
+			sb.WriteString("\n" + styleAccentBold.Render(fw.Name) + "\n")
 			if len(fw.TopLevel) > 0 {
-				sb.WriteString(lipgloss.NewStyle().Foreground(colorSubtle).Render("  top-level") + "\n")
+				sb.WriteString(styleSubtle.Render("  top-level") + "\n")
 				for _, pkg := range fw.TopLevel {
-					icon, iconColor := " ", colorMuted
+					icon, iconStyle := " ", styleMuted
 					if row := m.rowByName(pkg.Name); row != nil {
-						icon, iconColor = row.statusIcon(), row.statusColor()
+						icon, iconStyle = row.statusIcon(), row.statusStyle()
 					}
-					sb.WriteString("  " + lipgloss.NewStyle().Foreground(iconColor).Render(icon) + " ")
-					sb.WriteString(lipgloss.NewStyle().Foreground(colorText).Render(padRight(pkg.Name, maxNameW)))
+					sb.WriteString("  " + iconStyle.Render(icon) + " ")
+					sb.WriteString(styleText.Render(padRight(pkg.Name, maxNameW)))
 					// Only show Requested when it is a specific pinned version
 					// (not a range like "[2.0.3, )") that differs from Resolved.
 					isRange := strings.ContainsAny(pkg.Requested, "[]()")
 					showReq := pkg.Requested != "" && !isRange && pkg.Requested != pkg.Resolved
 					if showReq {
-						sb.WriteString(lipgloss.NewStyle().Foreground(colorMuted).Render(padRight(pkg.Requested, 14)))
+						sb.WriteString(styleMuted.Render(padRight(pkg.Requested, 14)))
 					} else {
 						sb.WriteString(strings.Repeat(" ", 14))
 					}
 					if pkg.Resolved != "" {
-						c := colorMuted
+						vs := styleMuted
 						if showReq {
-							c = colorYellow
+							vs = styleYellow
 						}
-						sb.WriteString(lipgloss.NewStyle().Foreground(c).Render(pkg.Resolved))
+						sb.WriteString(vs.Render(pkg.Resolved))
 					}
 					sb.WriteString("\n")
 				}
 			}
 			if len(fw.Transitive) > 0 {
-				sb.WriteString("\n" + lipgloss.NewStyle().Foreground(colorSubtle).Render("  transitive") + "\n")
+				sb.WriteString("\n" + styleSubtle.Render("  transitive") + "\n")
 				for _, pkg := range fw.Transitive {
-					icon, iconColor := " ", colorMuted
+					icon, iconStyle := " ", styleMuted
 					if row := m.rowByName(pkg.Name); row != nil {
-						icon, iconColor = row.statusIcon(), row.statusColor()
+						icon, iconStyle = row.statusIcon(), row.statusStyle()
 					}
-					sb.WriteString("  " + lipgloss.NewStyle().Foreground(iconColor).Render(icon) + " ")
-					sb.WriteString(lipgloss.NewStyle().Foreground(colorSubtle).Render(padRight(pkg.Name, maxNameW)))
+					sb.WriteString("  " + iconStyle.Render(icon) + " ")
+					sb.WriteString(styleSubtle.Render(padRight(pkg.Name, maxNameW)))
 					if pkg.Resolved != "" {
-						sb.WriteString(lipgloss.NewStyle().Foreground(colorMuted).Render(formatVersionRange(pkg.Resolved)))
+						sb.WriteString(styleMuted.Render(formatVersionRange(pkg.Resolved)))
 					}
 					sb.WriteString("\n")
 				}
 			}
 			if len(fw.TopLevel) == 0 && len(fw.Transitive) == 0 {
-				sb.WriteString("  " + lipgloss.NewStyle().Foreground(colorMuted).Render("(no packages)") + "\n")
+				sb.WriteString("  " + styleMuted.Render("(no packages)") + "\n")
 			}
 		}
 	}
@@ -1239,16 +1276,16 @@ func (m Model) renderDepTreeOverlay() string {
 
 	var lines []string
 	lines = append(lines,
-		lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render(m.depTree.title),
+		styleAccentBold.Render(m.depTree.title),
 	)
 	lines = append(lines,
-		lipgloss.NewStyle().Foreground(colorBorder).Render(strings.Repeat("─", innerW)),
+		styleBorder.Render(strings.Repeat("─", innerW)),
 	)
 
 	if m.depTree.loading {
 		lines = append(lines,
 			m.spinner.View()+" "+
-				lipgloss.NewStyle().Foreground(colorSubtle).Render("Loading dependency tree…"),
+				styleSubtle.Render("Loading dependency tree…"),
 		)
 		// pad to fill viewport height
 		vpH := overlayH - 8
@@ -1260,23 +1297,20 @@ func (m Model) renderDepTreeOverlay() string {
 	}
 
 	lines = append(lines,
-		lipgloss.NewStyle().Foreground(colorBorder).Render(strings.Repeat("─", innerW)),
+		styleBorder.Render(strings.Repeat("─", innerW)),
 	)
 	lines = append(lines,
-		lipgloss.NewStyle().Foreground(colorMuted).Render("esc close · ↑/↓ scroll"),
+		styleMuted.Render("esc close · ↑/↓ scroll"),
 	)
 
-	box := lipgloss.NewStyle().
+	box := styleOverlay.
 		Width(overlayW).
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(colorAccent).
-		Padding(1, 2).
 		Render(strings.Join(lines, "\n"))
 
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
 }
 
-func (m *Model) updateAllProjects() tea.Cmd {
+func (m *Model) updateAllProjects() bubble_tea.Cmd {
 	if m.packageCursor >= len(m.packageRows) {
 		return nil
 	}
@@ -1306,17 +1340,17 @@ func (m *Model) openVersionPicker() {
 	}
 }
 
-func (m *Model) searchDebounceCmd(query string) tea.Cmd {
+func (m *Model) searchDebounceCmd(query string) bubble_tea.Cmd {
 	m.search.debounceID++
 	id := m.search.debounceID
-	return tea.Tick(300*time.Millisecond, func(t time.Time) tea.Msg {
+	return bubble_tea.Tick(300*time.Millisecond, func(t time.Time) bubble_tea.Msg {
 		return searchDebounceMsg{id: id, query: query}
 	})
 }
 
-func (m *Model) doSearchCmd(query string) tea.Cmd {
+func (m *Model) doSearchCmd(query string) bubble_tea.Cmd {
 	services := m.nugetServices
-	return func() tea.Msg {
+	return func() bubble_tea.Msg {
 		var lastErr error
 		for _, svc := range services {
 			results, err := svc.Search(query, 20)
@@ -1330,9 +1364,9 @@ func (m *Model) doSearchCmd(query string) tea.Cmd {
 	}
 }
 
-func (m *Model) fetchPackageCmd(id string) tea.Cmd {
+func (m *Model) fetchPackageCmd(id string) bubble_tea.Cmd {
 	services := m.nugetServices
-	return func() tea.Msg {
+	return func() bubble_tea.Msg {
 		var lastErr error
 		for _, svc := range services {
 			info, err := svc.SearchExact(id)
@@ -1345,7 +1379,7 @@ func (m *Model) fetchPackageCmd(id string) tea.Cmd {
 	}
 }
 
-func (m *Model) addPackageToProject(pkgName, version string, project *ParsedProject) tea.Cmd {
+func (m *Model) addPackageToProject(pkgName, version string, project *ParsedProject) bubble_tea.Cmd {
 	project.Packages.Add(PackageReference{Name: pkgName, Version: ParseSemVer(version)})
 	project.PackageSources[strings.ToLower(pkgName)] = project.FilePath
 	if m.results == nil {
@@ -1367,7 +1401,7 @@ func (m *Model) addPackageToProject(pkgName, version string, project *ParsedProj
 	m.refreshDetail()
 	m.focus = focusPackages
 	filePath := project.FilePath
-	return func() tea.Msg {
+	return func() bubble_tea.Msg {
 		logger.Info("AddPackageReference: %s %s → %s", pkgName, version, filePath)
 		if err := AddPackageReference(filePath, pkgName, version); err != nil {
 			return writeResultMsg{err: err}
@@ -1376,7 +1410,7 @@ func (m *Model) addPackageToProject(pkgName, version string, project *ParsedProj
 	}
 }
 
-func (m *Model) handleConfirmKey(msg tea.KeyMsg) tea.Cmd {
+func (m *Model) handleConfirmKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 	switch msg.String() {
 	case "esc", "n", "q":
 		m.confirm.active = false
@@ -1387,7 +1421,7 @@ func (m *Model) handleConfirmKey(msg tea.KeyMsg) tea.Cmd {
 	return nil
 }
 
-func (m *Model) removePackage(pkgName string) tea.Cmd {
+func (m *Model) removePackage(pkgName string) bubble_tea.Cmd {
 	targetProject := m.selectedProject() // nil = all projects
 	type writeTarget struct {
 		filePath string
@@ -1438,7 +1472,7 @@ func (m *Model) removePackage(pkgName string) tea.Cmd {
 	if len(toWrite) == 0 {
 		return nil
 	}
-	return func() tea.Msg {
+	return func() bubble_tea.Msg {
 		seen := make(map[string]bool)
 		for _, wt := range toWrite {
 			if seen[wt.filePath] {
@@ -1455,13 +1489,13 @@ func (m *Model) removePackage(pkgName string) tea.Cmd {
 	}
 }
 
-func (m *Model) handleDepTreeKey(msg tea.KeyMsg) tea.Cmd {
+func (m *Model) handleDepTreeKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 	switch msg.String() {
 	case "esc", "q":
 		m.depTree.active = false
 		return nil
 	default:
-		var cmd tea.Cmd
+		var cmd bubble_tea.Cmd
 		m.depTree.vp, cmd = m.depTree.vp.Update(msg)
 		return cmd
 	}
@@ -1470,17 +1504,13 @@ func (m *Model) handleDepTreeKey(msg tea.KeyMsg) tea.Cmd {
 func (m Model) renderConfirmOverlay() string {
 	w := 48
 	lines := []string{
-		lipgloss.NewStyle().Foreground(colorRed).Bold(true).Render("Remove package?"),
-		lipgloss.NewStyle().Foreground(colorSubtle).Render(m.confirm.pkgName),
+		styleRedBold.Render("Remove package?"),
+		styleSubtle.Render(m.confirm.pkgName),
 		"",
-		lipgloss.NewStyle().Foreground(colorMuted).Render("enter / y confirm  ·  esc / n cancel"),
+		styleMuted.Render("enter / y confirm  ·  esc / n cancel"),
 	}
-	box := lipgloss.NewStyle().
+	box := styleOverlayDanger.
 		Width(w).
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(colorRed).
-		Background(colorSurface).
-		Padding(1, 2).
 		Render(strings.Join(lines, "\n"))
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
 }
@@ -1668,17 +1698,27 @@ func (m *Model) relayout() {
 	m.detailView.Width = rightW - 4
 	m.detailView.Height = innerH
 	if m.showLogs {
-		m.logView.Width = m.width - 6
+		m.logView.Width = m.layoutWidth() - 6
 		m.logView.Height = logPanelLines
 	}
 }
 
 func (m *Model) panelWidths() (left, mid, right int) {
+	lw := m.layoutWidth()
 	left = 30
-	right = 38
-	mid = m.width - left - right - 6
-	if mid < 20 {
-		mid = 20
+	right = 60 // comfortable width for the detail panel
+	mid = lw - left - right - 6
+	if mid > 130 {
+		// Cap the package list — beyond this the columns just float apart.
+		mid = 130
+		right = lw - left - mid - 6
+	}
+	if right < 30 {
+		right = 30
+		mid = lw - left - right - 6
+	}
+	if mid < 40 {
+		mid = 40
 	}
 	return
 }
@@ -1695,7 +1735,7 @@ func (m Model) View() string {
 	if m.loading {
 		return lipgloss.Place(m.width, m.height,
 			lipgloss.Center, lipgloss.Center,
-			lipgloss.NewStyle().Foreground(colorAccent).Render(
+			styleAccent.Render(
 				fmt.Sprintf("%s Loading packages... (%d/%d)", m.spinner.View(), m.loadingDone, m.loadingTotal),
 			),
 		)
@@ -1738,61 +1778,59 @@ func (m Model) View() string {
 		parts = append(parts, m.renderLogPanel())
 	}
 	parts = append(parts, m.renderFooter())
-	return lipgloss.JoinVertical(lipgloss.Left, parts...)
+	content := lipgloss.JoinVertical(lipgloss.Left, parts...)
+
+	// Center the content when the terminal is wider than the max layout width.
+	if m.width > m.layoutWidth() {
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Top, content)
+	}
+	return content
 }
 
 func (m Model) renderHeader() string {
-	title := lipgloss.NewStyle().
-		Foreground(colorAccent).Bold(true).Padding(0, 2).
-		Render("◈ GoNuget")
-	subtitle := lipgloss.NewStyle().
-		Foreground(colorSubtle).
-		Render("NuGet package manager")
+	title := styleHeaderTitle.Render("◈ GoNuget")
+	subtitle := styleSubtle.Render("NuGet package manager")
 
-	return lipgloss.NewStyle().
-		Width(m.width).
-		Background(colorSurface).
-		BorderBottom(true).
-		BorderStyle(lipgloss.NormalBorder()).
-		BorderBottomForeground(colorBorder).
+	return styleHeaderBar.
+		Width(m.layoutWidth()).
 		Render(lipgloss.JoinHorizontal(lipgloss.Center, title, "  ", subtitle))
 }
 
 func (m Model) renderProjectPanel(w int) string {
-	borderColor := colorBorder
+	s := stylePanelNoPad
 	if m.focus == focusProjects {
-		borderColor = colorAccent
+		s = s.BorderForeground(colorAccent)
 	}
-	return lipgloss.NewStyle().
-		Width(w).Height(m.bodyOuterHeight()).
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(borderColor).
+	return s.Width(w).Height(m.bodyOuterHeight()).
 		Render(m.projectList.View())
 }
 
 func (m Model) renderPackagePanel(w int) string {
 	focused := m.focus == focusPackages
-	borderColor := colorBorder
-	if focused {
-		borderColor = colorAccent
-	}
 
 	visibleH := m.packageListHeight()
 	var lines []string
 
-	// Column widths (visible chars): icon+gap=3, Package=33, Current=19
-	// (10 ver + space + 8 warn), Compatible=13, Latest=14, Source=remainder.
-	hStyle := lipgloss.NewStyle().Foreground(colorSubtle).Bold(true)
+	// Fixed columns: prefix(2) + icon+space(2) + Current(19) + Compatible(13) + Latest(14) + Source(16) = 66
+	// The Package (name) column gets whatever's left.
+	innerW := w - 4 // border + padding
+	fixedCols := 2 + 2 + 19 + 13 + 14 + 16
+	nameW := innerW - fixedCols
+	if nameW < 20 {
+		nameW = 20
+	}
+
+	hStyle := styleSubtleBold
 	lines = append(lines,
 		"  "+
-			padRight(hStyle.Render("Package"), 33)+
+			padRight(hStyle.Render("Package"), nameW)+
 			padRight(hStyle.Render("Current"), 19)+
 			padRight(hStyle.Render("Compatible"), 13)+
 			padRight(hStyle.Render("Latest"), 14)+
 			hStyle.Render("Source"),
 	)
 	lines = append(lines,
-		lipgloss.NewStyle().Foreground(colorBorder).Render(strings.Repeat("─", w-4)),
+		styleBorder.Render(strings.Repeat("─", w-4)),
 	)
 
 	// rows
@@ -1806,108 +1844,97 @@ func (m Model) renderPackagePanel(w int) string {
 		selected := i == m.packageCursor
 
 		// icon
-		icon := lipgloss.NewStyle().Foreground(row.statusColor()).Render(row.statusIcon())
+		icon := row.statusStyle().Render(row.statusIcon())
 
 		// name
-		rawName := truncate(row.ref.Name, 32)
-		nameStyle := lipgloss.NewStyle().Foreground(colorText)
+		rawName := truncate(row.ref.Name, nameW-1)
+		nameStyle := styleText
 		if selected {
-			nameStyle = nameStyle.Foreground(colorAccent).Bold(true)
+			nameStyle = styleAccentBold
 		}
-		name := padRight(nameStyle.Render(rawName), 33)
+		name := padRight(nameStyle.Render(rawName), nameW)
 
 		// current (19 chars wide: 10 version + space + optional range)
 		rawCurrent := truncate(row.ref.Version.String(), 10)
 		var current string
 		if row.diverged {
-			low := lipgloss.NewStyle().Foreground(colorSubtle).Render(truncate(row.oldest.String(), 6))
-			sep := lipgloss.NewStyle().Foreground(colorMuted).Render("–")
-			high := lipgloss.NewStyle().Foreground(colorYellow).Render(truncate(rawCurrent, 10))
+			low := styleSubtle.Render(truncate(row.oldest.String(), 6))
+			sep := styleMuted.Render("–")
+			high := styleYellow.Render(truncate(rawCurrent, 10))
 			current = padRight(low+sep+high, 19)
 		} else {
 			current = padRight(
-				lipgloss.NewStyle().Foreground(colorSubtle).Render(rawCurrent), 19)
+				styleSubtle.Render(rawCurrent), 19)
 		}
 
 		// compatible
 		rawComp := "-"
-		compColor := colorSubtle
+		compStyle := styleSubtle
 		if row.latestCompatible != nil {
 			rawComp = truncate(row.latestCompatible.SemVer.String(), 12)
 			if row.latestCompatible.SemVer.IsNewerThan(row.ref.Version) {
-				compColor = colorYellow
+				compStyle = styleYellow
 			} else {
-				compColor = colorGreen
+				compStyle = styleGreen
 			}
 		}
-		comp := padRight(lipgloss.NewStyle().Foreground(compColor).Render(rawComp), 13)
+		comp := padRight(compStyle.Render(rawComp), 13)
 
 		// latest
 		rawLatest := "-"
-		latestColor := colorSubtle
+		latestStyle := styleSubtle
 		if row.latestStable != nil {
 			rawLatest = truncate(row.latestStable.SemVer.String(), 12)
 			if row.latestStable.SemVer.IsNewerThan(row.ref.Version) {
-				latestColor = colorPurple
+				latestStyle = stylePurple
 			} else {
-				latestColor = colorGreen
+				latestStyle = styleGreen
 			}
 		}
-		latest := padRight(lipgloss.NewStyle().Foreground(latestColor).Render(rawLatest), 14)
+		latest := padRight(latestStyle.Render(rawLatest), 14)
 
 		// source
 		src := truncate(row.source, 16)
-		source := lipgloss.NewStyle().Foreground(colorMuted).Render(src)
+		source := styleMuted.Render(src)
 
 		prefix := "  "
 		if selected && focused {
-			prefix = lipgloss.NewStyle().Foreground(colorAccent).Render("▶ ")
+			prefix = styleAccent.Render("▶ ")
 		}
 
 		line := prefix + icon + " " + name + current + comp + latest + source
-
-		if selected && focused {
-			line = lipgloss.NewStyle().
-				Background(colorSurface).
-				Width(w - 4).
-				Render(line)
-		}
 
 		lines = append(lines, line)
 	}
 
 	content := strings.Join(lines, "\n")
 
-	return lipgloss.NewStyle().
-		Width(w).Height(m.bodyOuterHeight()).
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(borderColor).
-		Padding(0, 1).
+	s := stylePanel
+	if focused {
+		s = s.BorderForeground(colorAccent)
+	}
+	return s.Width(w).Height(m.bodyOuterHeight()).
 		Render(content)
 }
 
 func (m Model) renderDetailPanel(w int) string {
-	borderColor := colorBorder
+	s := stylePanel
 	if m.focus == focusDetail {
-		borderColor = colorAccent
+		s = s.BorderForeground(colorAccent)
 	}
 
-	title := lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render("Package Detail")
-	divider := lipgloss.NewStyle().Foreground(colorBorder).Render(strings.Repeat("─", w-6))
+	title := styleAccentBold.Render("Package Detail")
+	divider := styleBorder.Render(strings.Repeat("─", w-6))
 
 	content := lipgloss.JoinVertical(lipgloss.Left, title, divider, m.detailView.View())
 
-	return lipgloss.NewStyle().
-		Width(w).Height(m.bodyOuterHeight()).
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(borderColor).
-		Padding(0, 1).
+	return s.Width(w).Height(m.bodyOuterHeight()).
 		Render(content)
 }
 
 func (m Model) renderDetail(row packageRow) string {
 	if row.err != nil {
-		return lipgloss.NewStyle().Foreground(colorRed).Render("Error: " + row.err.Error())
+		return styleRed.Render("Error: " + row.err.Error())
 	}
 	if row.info == nil {
 		return "No data"
@@ -1921,23 +1948,23 @@ func (m Model) renderDetail(row packageRow) string {
 	var s strings.Builder
 
 	label := func(text string) string {
-		return lipgloss.NewStyle().Foreground(colorMuted).Render(text)
+		return styleMuted.Render(text)
 	}
 	value := func(text string) string {
-		return lipgloss.NewStyle().Foreground(colorText).Render(text)
+		return styleText.Render(text)
 	}
 
 	// name + verified
-	name := lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render(row.info.ID)
+	name := styleAccentBold.Render(row.info.ID)
 	verified := ""
 	if row.info.Verified {
-		verified = " " + lipgloss.NewStyle().Foreground(colorGreen).Render("✓ verified")
+		verified = " " + styleGreen.Render("✓ verified")
 	}
 	s.WriteString(name + verified + "\n\n")
 
 	// description
 	if row.info.Description != "" {
-		s.WriteString(lipgloss.NewStyle().Foreground(colorSubtle).
+		s.WriteString(styleSubtle.
 			Render(wordWrap(row.info.Description, w)) + "\n\n")
 	}
 
@@ -1961,19 +1988,19 @@ func (m Model) renderDetail(row packageRow) string {
 			}
 		}
 		if len(vulns) > 0 {
-			s.WriteString(lipgloss.NewStyle().Foreground(colorRed).Bold(true).Render("Vulnerabilities") + "\n")
+			s.WriteString(styleRedBold.Render("Vulnerabilities") + "\n")
 			for _, vuln := range vulns {
 				sev := vuln.SeverityLabel()
-				var sevColor lipgloss.Color
+				var sevStyle lipgloss.Style
 				switch sev {
 				case "critical", "high":
-					sevColor = colorRed
+					sevStyle = styleRedBold
 				case "moderate":
-					sevColor = colorYellow
+					sevStyle = styleYellowBold
 				default:
-					sevColor = colorText
+					sevStyle = styleTextBold
 				}
-				sevStr := lipgloss.NewStyle().Foreground(sevColor).Bold(true).Render(sev)
+				sevStr := sevStyle.Render(sev)
 				s.WriteString("  " + sevStr + "  " + vuln.AdvisoryURL + "\n")
 			}
 			s.WriteString("\n")
@@ -1982,7 +2009,7 @@ func (m Model) renderDetail(row packageRow) string {
 
 	// deprecation
 	if row.info.Deprecated {
-		s.WriteString(lipgloss.NewStyle().Foreground(colorYellow).Bold(true).Render("Deprecated") + "\n")
+		s.WriteString(styleYellowBold.Render("Deprecated") + "\n")
 		if row.info.DeprecationMessage != "" {
 			s.WriteString(value(wordWrap(row.info.DeprecationMessage, w)) + "\n")
 		}
@@ -1998,14 +2025,14 @@ func (m Model) renderDetail(row packageRow) string {
 
 	// source
 	s.WriteString(label("Source") + "\n")
-	s.WriteString(lipgloss.NewStyle().Foreground(colorSubtle).Render(row.source) + "\n\n")
+	s.WriteString(styleSubtle.Render(row.source) + "\n\n")
 
 	// show defining file if it's from a .props file
 	if sel := m.selectedProject(); sel != nil {
 		sourceFile := sel.SourceFileForPackage(row.ref.Name)
 		if sourceFile != sel.FilePath {
 			s.WriteString(label("Defined in") + "\n")
-			s.WriteString(lipgloss.NewStyle().Foreground(colorCyan).
+			s.WriteString(styleCyan.
 				Render(filepath.Base(sourceFile)) + "\n\n")
 		}
 	}
@@ -2016,15 +2043,15 @@ func (m Model) renderDetail(row packageRow) string {
 		for _, p := range m.parsedProjects {
 			for ref := range p.Packages {
 				if ref.Name == row.ref.Name {
-					proj := lipgloss.NewStyle().Foreground(colorSubtle).
+					proj := styleSubtle.
 						Render(fmt.Sprintf("  %-20s", truncate(p.FileName, 20)))
-					ver := lipgloss.NewStyle().Foreground(colorText).
+					ver := styleText.
 						Render(ref.Version.String())
 					line := proj + " " + ver
 					sourceFile := p.SourceFileForPackage(ref.Name)
 					if sourceFile != p.FilePath {
-						line += " " + lipgloss.NewStyle().Foreground(colorCyan).
-							Render("(" + filepath.Base(sourceFile) + ")")
+						line += " " + styleCyan.
+							Render("("+filepath.Base(sourceFile)+")")
 					}
 					s.WriteString(line + "\n")
 				}
@@ -2079,7 +2106,7 @@ func (m Model) renderDetail(row packageRow) string {
 
 	renderVRow := func(v PackageVersion) {
 		marker := "  "
-		vStyle := lipgloss.NewStyle().Foreground(colorSubtle)
+		vStyle := styleSubtle
 
 		isCurrent := v.SemVer.String() == installedStr
 		isCompat := row.latestCompatible != nil && v.SemVer.String() == row.latestCompatible.SemVer.String()
@@ -2087,22 +2114,22 @@ func (m Model) renderDetail(row packageRow) string {
 
 		switch {
 		case isCurrent:
-			vStyle = vStyle.Foreground(colorAccent)
+			vStyle = styleAccent
 			marker = "▶ "
 		case isCompat:
-			vStyle = vStyle.Foreground(colorYellow)
+			vStyle = styleYellow
 			marker = "↑ "
 		case isLatest:
-			vStyle = vStyle.Foreground(colorPurple)
+			vStyle = stylePurple
 			marker = "⬆ "
 		}
 
 		extras := ""
 		if v.SemVer.IsPreRelease() {
-			extras += lipgloss.NewStyle().Foreground(colorMuted).Render(" pre")
+			extras += styleMuted.Render(" pre")
 		}
 		if v.Downloads > 0 {
-			extras += lipgloss.NewStyle().Foreground(colorMuted).
+			extras += styleMuted.
 				Render(fmt.Sprintf(" (%s)", formatDownloads(v.Downloads)))
 		}
 		s.WriteString(vStyle.Render(marker+v.SemVer.String()) + extras + "\n")
@@ -2117,7 +2144,7 @@ func (m Model) renderDetail(row packageRow) string {
 	if len(displayVersions) > limit {
 		hidden := len(displayVersions) - limit - len(pinnedAfter)
 		if hidden > 0 {
-			s.WriteString(lipgloss.NewStyle().Foreground(colorMuted).
+			s.WriteString(styleMuted.
 				Render(fmt.Sprintf("  … and %d more", hidden)) + "\n")
 		}
 		for _, pv := range pinnedAfter {
@@ -2129,7 +2156,7 @@ func (m Model) renderDetail(row packageRow) string {
 	if row.latestCompatible != nil && len(row.latestCompatible.Frameworks) > 0 {
 		s.WriteString("\n" + label("Frameworks") + "\n")
 		for _, fw := range row.latestCompatible.Frameworks {
-			s.WriteString(lipgloss.NewStyle().Foreground(colorSubtle).
+			s.WriteString(styleSubtle.
 				Render("  "+fw.String()) + "\n")
 		}
 	}
@@ -2229,10 +2256,10 @@ func (m Model) renderHelpOverlay() string {
 		},
 	}
 
-	keyStyle := lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
-	titleStyle := lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
-	descStyle := lipgloss.NewStyle().Foreground(colorSubtle)
-	dimStyle := lipgloss.NewStyle().Foreground(colorBorder)
+	keyStyle := styleAccentBold
+	titleStyle := styleAccentBold
+	descStyle := styleSubtle
+	dimStyle := styleBorder
 
 	// Compute key column width across all sections.
 	maxKeyW := 0
@@ -2246,7 +2273,7 @@ func (m Model) renderHelpOverlay() string {
 	maxKeyW += 2
 
 	var lines []string
-	lines = append(lines, lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render("Keybindings"))
+	lines = append(lines, styleAccentBold.Render("Keybindings"))
 
 	for _, sec := range sections {
 		lines = append(lines, "")
@@ -2265,11 +2292,8 @@ func (m Model) renderHelpOverlay() string {
 	if w < 56 {
 		w = 56
 	}
-	box := lipgloss.NewStyle().
+	box := styleOverlay.
 		Width(w).
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(colorAccent).
-		Padding(1, 2).
 		Render(strings.Join(lines, "\n"))
 
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
@@ -2281,45 +2305,41 @@ func (m Model) renderSourcesOverlay() string {
 
 	var lines []string
 	lines = append(lines,
-		lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render("NuGet Sources"),
+		styleAccentBold.Render("NuGet Sources"),
 	)
 	lines = append(lines,
-		lipgloss.NewStyle().Foreground(colorBorder).Render(strings.Repeat("─", innerW)),
+		styleBorder.Render(strings.Repeat("─", innerW)),
 	)
 
 	if len(m.sources) == 0 {
 		lines = append(lines,
-			lipgloss.NewStyle().Foreground(colorMuted).Render("No sources detected"),
+			styleMuted.Render("No sources detected"),
 		)
 	} else {
 		for _, src := range m.sources {
-			nameStyle := lipgloss.NewStyle().Foreground(colorText).Bold(true)
+			nameStyle := styleTextBold
 			name := nameStyle.Render(truncate(src.Name, innerW-18))
 			auth := ""
 			if src.Username != "" {
-				auth = "  " + lipgloss.NewStyle().Foreground(colorGreen).Render("✓ authenticated")
+				auth = "  " + styleGreen.Render("✓ authenticated")
 			}
 			lines = append(lines, name+auth)
 			lines = append(lines,
-				"  "+lipgloss.NewStyle().Foreground(colorSubtle).Render(truncate(src.URL, innerW-2)),
+				"  "+styleSubtle.Render(truncate(src.URL, innerW-2)),
 			)
 			lines = append(lines, "")
 		}
 	}
 
 	lines = append(lines,
-		lipgloss.NewStyle().Foreground(colorBorder).Render(strings.Repeat("─", innerW)),
+		styleBorder.Render(strings.Repeat("─", innerW)),
 	)
 	lines = append(lines,
-		lipgloss.NewStyle().Foreground(colorMuted).Render("esc / s  close"),
+		styleMuted.Render("esc / s  close"),
 	)
 
-	box := lipgloss.NewStyle().
+	box := styleOverlay.
 		Width(w).
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(colorAccent).
-		Background(colorSurface).
-		Padding(1, 2).
 		Render(strings.Join(lines, "\n"))
 
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
@@ -2332,11 +2352,11 @@ func (m Model) renderSearchOverlay() string {
 	var lines []string
 
 	// Title row
-	title := lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render("Add Package")
+	title := styleAccentBold.Render("Add Package")
 	proj := m.selectedProject()
 	projName := ""
 	if proj != nil {
-		projName = lipgloss.NewStyle().Foreground(colorSubtle).
+		projName = styleSubtle.
 			Render("  " + truncate(proj.FileName, innerW-15))
 	}
 	lines = append(lines, title+projName)
@@ -2346,7 +2366,7 @@ func (m Model) renderSearchOverlay() string {
 
 	// Divider
 	lines = append(lines,
-		lipgloss.NewStyle().Foreground(colorBorder).Render(strings.Repeat("─", innerW)),
+		styleBorder.Render(strings.Repeat("─", innerW)),
 	)
 
 	// Body
@@ -2355,24 +2375,24 @@ func (m Model) renderSearchOverlay() string {
 	case m.search.fetchingVersion:
 		lines = append(lines,
 			m.spinner.View()+" "+
-				lipgloss.NewStyle().Foreground(colorAccent).Render("Fetching package info…"))
+				styleAccent.Render("Fetching package info…"))
 
 	case m.search.loading:
 		lines = append(lines,
 			m.spinner.View()+" "+
-				lipgloss.NewStyle().Foreground(colorSubtle).Render("Searching…"))
+				styleSubtle.Render("Searching…"))
 
 	case m.search.err != nil:
 		lines = append(lines,
-			lipgloss.NewStyle().Foreground(colorRed).Render("✗ "+m.search.err.Error()))
+			styleRed.Render("✗ "+m.search.err.Error()))
 
 	case len(m.search.results) == 0 && m.search.lastQuery != "":
 		lines = append(lines,
-			lipgloss.NewStyle().Foreground(colorMuted).Render("No results found"))
+			styleMuted.Render("No results found"))
 
 	case len(m.search.results) == 0:
 		lines = append(lines,
-			lipgloss.NewStyle().Foreground(colorMuted).Render("Type to search NuGet…"))
+			styleMuted.Render("Type to search NuGet…"))
 
 	default:
 		// Build already-installed set for the current project
@@ -2397,46 +2417,36 @@ func (m Model) renderSearchOverlay() string {
 			selected := i == m.search.cursor
 
 			prefix := "  "
-			idStyle := lipgloss.NewStyle().Foreground(colorText)
+			idStyle := styleText
 			if selected {
-				prefix = lipgloss.NewStyle().Foreground(colorAccent).Render("▶ ")
-				idStyle = lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
+				prefix = styleAccent.Render("▶ ")
+				idStyle = styleAccentBold
 			}
 
 			pkgID := padRight(idStyle.Render(truncate(r.ID, 34)), 35)
-			ver := lipgloss.NewStyle().Foreground(colorSubtle).Render(truncate(r.Version, 12))
+			ver := styleSubtle.Render(truncate(r.Version, 12))
 
 			suffix := ""
 			if alreadyHas.Contains(strings.ToLower(r.ID)) {
-				suffix = " " + lipgloss.NewStyle().Foreground(colorMuted).Render("(installed)")
+				suffix = " " + styleMuted.Render("(installed)")
 			} else if r.Verified {
-				suffix = " " + lipgloss.NewStyle().Foreground(colorGreen).Render("✓")
+				suffix = " " + styleGreen.Render("✓")
 			}
 
 			line := prefix + pkgID + ver + suffix
-			if selected {
-				line = lipgloss.NewStyle().
-					Background(colorSurface).
-					Width(innerW).
-					Render(line)
-			}
-			lines = append(lines, line)
+				lines = append(lines, line)
 		}
 	}
 
 	// Help line
 	lines = append(lines, "")
 	lines = append(lines,
-		lipgloss.NewStyle().Foreground(colorMuted).
+		styleMuted.
 			Render("↑/↓ navigate · enter select · esc cancel"),
 	)
 
-	box := lipgloss.NewStyle().
+	box := styleOverlay.
 		Width(w).
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(colorAccent).
-		Background(colorSurface).
-		Padding(1, 2).
 		Render(strings.Join(lines, "\n"))
 
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
@@ -2464,24 +2474,22 @@ func (m Model) renderPickerOverlay() string {
 
 	var lines []string
 	lines = append(lines,
-		lipgloss.NewStyle().Foreground(colorAccent).Bold(true).
-			Render("Select version"),
+		styleAccentBold.Render("Select version"),
 	)
 	lines = append(lines,
-		lipgloss.NewStyle().Foreground(colorSubtle).
-			Render(m.picker.pkgName),
+		styleSubtle.Render(m.picker.pkgName),
 	)
 	// Deprecation notice directly under the name.
 	if pkgInfo != nil && pkgInfo.Deprecated {
-		notice := lipgloss.NewStyle().Foreground(colorYellow).Render("~ deprecated")
+		notice := styleYellow.Render("~ deprecated")
 		if pkgInfo.AlternatePackageID != "" {
-			notice += lipgloss.NewStyle().Foreground(colorMuted).
+			notice += styleMuted.
 				Render("  use: " + pkgInfo.AlternatePackageID)
 		}
 		lines = append(lines, notice)
 	}
 	lines = append(lines,
-		lipgloss.NewStyle().Foreground(colorBorder).Render(strings.Repeat("─", w-6)),
+		styleBorder.Render(strings.Repeat("─", w-6)),
 	)
 
 	for i := start; i < end; i++ {
@@ -2498,41 +2506,41 @@ func (m Model) renderPickerOverlay() string {
 				maxSeverity = int(vuln.Severity)
 			}
 		}
-		vulnColor := colorYellow // moderate
+		vulnStyle := styleYellow // moderate
 		if maxSeverity >= 2 {
-			vulnColor = colorRed // high / critical
+			vulnStyle = styleRed // high / critical
 		}
 
 		var style lipgloss.Style
 		prefix := "  "
 		if selected {
-			style = lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
+			style = styleAccentBold
 			prefix = "▶ "
 		} else {
 			switch {
 			case isVulnerable:
-				style = lipgloss.NewStyle().Foreground(vulnColor)
+				style = vulnStyle
 			case !compat:
-				style = lipgloss.NewStyle().Foreground(colorRed)
+				style = styleRed
 			case isPre:
-				style = lipgloss.NewStyle().Foreground(colorYellow)
+				style = styleYellow
 			default:
-				style = lipgloss.NewStyle().Foreground(colorGreen)
+				style = styleGreen
 			}
 		}
 
 		extras := ""
 		if isVulnerable {
-			extras += lipgloss.NewStyle().Foreground(vulnColor).Render(" ⚠")
+			extras += vulnStyle.Render(" ⚠")
 		}
 		if isPre {
-			extras += lipgloss.NewStyle().Foreground(colorMuted).Render(" pre")
+			extras += styleMuted.Render(" pre")
 		}
 		if selected {
 			if compat {
-				extras += lipgloss.NewStyle().Foreground(colorGreen).Render(" ✓")
+				extras += styleGreen.Render(" ✓")
 			} else {
-				extras += lipgloss.NewStyle().Foreground(colorRed).Render(" ✗")
+				extras += styleRed.Render(" ✗")
 			}
 		}
 
@@ -2540,22 +2548,18 @@ func (m Model) renderPickerOverlay() string {
 	}
 
 	lines = append(lines, "")
-	legend := lipgloss.NewStyle().Foreground(colorGreen).Render("■") + " compat  " +
-		lipgloss.NewStyle().Foreground(colorYellow).Render("■") + " pre  " +
-		lipgloss.NewStyle().Foreground(colorRed).Render("■") + " incompat  " +
-		lipgloss.NewStyle().Foreground(colorRed).Render("⚠") + " vuln"
-	lines = append(lines, lipgloss.NewStyle().Foreground(colorMuted).Render(legend))
+	legend := styleGreen.Render("■") + " compat  " +
+		styleYellow.Render("■") + " pre  " +
+		styleRed.Render("■") + " incompat  " +
+		styleRed.Render("⚠") + " vuln"
+	lines = append(lines, styleMuted.Render(legend))
 	lines = append(lines,
-		lipgloss.NewStyle().Foreground(colorMuted).
+		styleMuted.
 			Render("↑/↓ navigate · enter select · esc cancel"),
 	)
 
-	box := lipgloss.NewStyle().
+	box := styleOverlay.
 		Width(w).
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(colorAccent).
-		Background(colorSurface).
-		Padding(1, 2).
 		Render(strings.Join(lines, "\n"))
 
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
@@ -2573,35 +2577,31 @@ func (m *Model) updateLogView() {
 func colorizeLogLine(line string) string {
 	switch {
 	case strings.HasPrefix(line, "[TRACE]"):
-		return lipgloss.NewStyle().Foreground(colorMuted).Render(line)
+		return styleMuted.Render(line)
 	case strings.HasPrefix(line, "[DEBUG]"):
-		return lipgloss.NewStyle().Foreground(colorCyan).Render(line)
+		return styleCyan.Render(line)
 	case strings.HasPrefix(line, "[INFO]"):
-		return lipgloss.NewStyle().Foreground(colorGreen).Render(line)
+		return styleGreen.Render(line)
 	case strings.HasPrefix(line, "[WARN]"):
-		return lipgloss.NewStyle().Foreground(colorYellow).Render(line)
+		return styleYellow.Render(line)
 	case strings.HasPrefix(line, "[ERROR]"), strings.HasPrefix(line, "[FATAL]"):
-		return lipgloss.NewStyle().Foreground(colorRed).Render(line)
+		return styleRed.Render(line)
 	default:
-		return lipgloss.NewStyle().Foreground(colorText).Render(line)
+		return styleText.Render(line)
 	}
 }
 
 func (m Model) renderLogPanel() string {
-	borderColor := colorBorder
+	s := stylePanel
 	if m.focus == focusLog {
-		borderColor = colorAccent
+		s = s.BorderForeground(colorAccent)
 	}
 
-	title := lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render("Logs")
-	divider := lipgloss.NewStyle().Foreground(colorBorder).Render(strings.Repeat("─", m.width-6))
+	title := styleAccentBold.Render("Logs")
+	divider := styleBorder.Render(strings.Repeat("─", m.layoutWidth()-6))
 	content := lipgloss.JoinVertical(lipgloss.Left, title, divider, m.logView.View())
 
-	return lipgloss.NewStyle().
-		Width(m.width).
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(borderColor).
-		Padding(0, 1).
+	return s.Width(m.layoutWidth()).
 		Render(content)
 }
 
@@ -2624,8 +2624,8 @@ func (m Model) renderFooter() string {
 
 	var parts []string
 	for _, pair := range keys {
-		k := lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render(pair.k)
-		v := lipgloss.NewStyle().Foreground(colorSubtle).Render(pair.v)
+		k := styleAccentBold.Render(pair.k)
+		v := styleSubtle.Render(pair.v)
 		parts = append(parts, k+" "+v)
 	}
 	keybinds := strings.Join(parts, "  ·  ")
@@ -2633,22 +2633,17 @@ func (m Model) renderFooter() string {
 	// Status line — always reserve the row so height is stable.
 	statusStr := ""
 	if m.restoring {
-		statusStr = m.spinner.View() + lipgloss.NewStyle().Foreground(colorAccent).Render(" restoring...")
+		statusStr = m.spinner.View() + styleAccent.Render(" restoring...")
 	} else if m.statusLine != "" {
-		c := colorGreen
+		s := styleGreen
 		if m.statusIsErr {
-			c = colorRed
+			s = styleRed
 		}
-		statusStr = lipgloss.NewStyle().Foreground(c).Render(m.statusLine)
+		statusStr = s.Render(m.statusLine)
 	}
 
-	return lipgloss.NewStyle().
-		Width(m.width).
-		Background(colorSurface).
-		BorderTop(true).
-		BorderStyle(lipgloss.NormalBorder()).
-		BorderTopForeground(colorBorder).
-		Padding(0, 2).
+	return styleFooterBar.
+		Width(m.layoutWidth()).
 		Render(statusStr + "\n" + keybinds)
 }
 
