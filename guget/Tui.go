@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -781,7 +782,10 @@ func (m *Model) applyVersion(pkgName, version string, targetProject *ParsedProje
 	if targetProject != nil {
 		projects = []*ParsedProject{targetProject}
 	}
-	var toWrite []*ParsedProject
+	type writeTarget struct {
+		filePath string
+	}
+	var toWrite []writeTarget
 	for _, p := range projects {
 		updated := NewSet[PackageReference]()
 		changed := false
@@ -793,8 +797,11 @@ func (m *Model) applyVersion(pkgName, version string, targetProject *ParsedProje
 			updated.Add(ref)
 		}
 		p.Packages = updated
-		if changed && p.FilePath != "" {
-			toWrite = append(toWrite, p)
+		if changed {
+			sourceFile := p.SourceFileForPackage(pkgName)
+			if sourceFile != "" {
+				toWrite = append(toWrite, writeTarget{filePath: sourceFile})
+			}
 		}
 	}
 	m.rebuildPackageRows()
@@ -805,10 +812,15 @@ func (m *Model) applyVersion(pkgName, version string, targetProject *ParsedProje
 		return nil
 	}
 	return func() tea.Msg {
-		for _, p := range toWrite {
-			logger.Debug("writing %s to %s", pkgName, p.FilePath)
-			if err := UpdatePackageVersion(p.FilePath, pkgName, version); err != nil {
-				logger.Warn("write failed for %s: %v", p.FilePath, err)
+		seen := make(map[string]bool)
+		for _, wt := range toWrite {
+			if seen[wt.filePath] {
+				continue
+			}
+			seen[wt.filePath] = true
+			logger.Debug("writing %s to %s", pkgName, wt.filePath)
+			if err := UpdatePackageVersion(wt.filePath, pkgName, version); err != nil {
+				logger.Warn("write failed for %s: %v", wt.filePath, err)
 				return writeResultMsg{err: err}
 			}
 		}
@@ -1335,6 +1347,7 @@ func (m *Model) fetchPackageCmd(id string) tea.Cmd {
 
 func (m *Model) addPackageToProject(pkgName, version string, project *ParsedProject) tea.Cmd {
 	project.Packages.Add(PackageReference{Name: pkgName, Version: ParseSemVer(version)})
+	project.PackageSources[strings.ToLower(pkgName)] = project.FilePath
 	if m.results == nil {
 		m.results = make(map[string]nugetResult)
 	}
@@ -1376,7 +1389,10 @@ func (m *Model) handleConfirmKey(msg tea.KeyMsg) tea.Cmd {
 
 func (m *Model) removePackage(pkgName string) tea.Cmd {
 	targetProject := m.selectedProject() // nil = all projects
-	var toWrite []*ParsedProject
+	type writeTarget struct {
+		filePath string
+	}
+	var toWrite []writeTarget
 	for _, p := range m.parsedProjects {
 		if targetProject != nil && p != targetProject {
 			continue
@@ -1384,9 +1400,11 @@ func (m *Model) removePackage(pkgName string) tea.Cmd {
 		for ref := range p.Packages {
 			if strings.EqualFold(ref.Name, pkgName) {
 				p.Packages.Remove(ref)
-				if p.FilePath != "" {
-					toWrite = append(toWrite, p)
+				sourceFile := p.SourceFileForPackage(pkgName)
+				if sourceFile != "" {
+					toWrite = append(toWrite, writeTarget{filePath: sourceFile})
 				}
+				delete(p.PackageSources, strings.ToLower(pkgName))
 				break
 			}
 		}
@@ -1421,10 +1439,15 @@ func (m *Model) removePackage(pkgName string) tea.Cmd {
 		return nil
 	}
 	return func() tea.Msg {
-		for _, p := range toWrite {
-			logger.Debug("RemovePackageReference: %s from %s", pkgName, p.FilePath)
-			if err := RemovePackageReference(p.FilePath, pkgName); err != nil {
-				logger.Warn("remove failed for %s: %v", p.FilePath, err)
+		seen := make(map[string]bool)
+		for _, wt := range toWrite {
+			if seen[wt.filePath] {
+				continue
+			}
+			seen[wt.filePath] = true
+			logger.Debug("RemovePackageReference: %s from %s", pkgName, wt.filePath)
+			if err := RemovePackageReference(wt.filePath, pkgName); err != nil {
+				logger.Warn("remove failed for %s: %v", wt.filePath, err)
 				return writeResultMsg{err: err}
 			}
 		}
@@ -1977,6 +2000,16 @@ func (m Model) renderDetail(row packageRow) string {
 	s.WriteString(label("Source") + "\n")
 	s.WriteString(lipgloss.NewStyle().Foreground(colorSubtle).Render(row.source) + "\n\n")
 
+	// show defining file if it's from a .props file
+	if sel := m.selectedProject(); sel != nil {
+		sourceFile := sel.SourceFileForPackage(row.ref.Name)
+		if sourceFile != sel.FilePath {
+			s.WriteString(label("Defined in") + "\n")
+			s.WriteString(lipgloss.NewStyle().Foreground(colorCyan).
+				Render(filepath.Base(sourceFile)) + "\n\n")
+		}
+	}
+
 	// diverged project breakdown
 	if row.diverged || m.selectedProject() == nil {
 		s.WriteString(label("Project versions") + "\n")
@@ -1987,7 +2020,13 @@ func (m Model) renderDetail(row packageRow) string {
 						Render(fmt.Sprintf("  %-20s", truncate(p.FileName, 20)))
 					ver := lipgloss.NewStyle().Foreground(colorText).
 						Render(ref.Version.String())
-					s.WriteString(proj + " " + ver + "\n")
+					line := proj + " " + ver
+					sourceFile := p.SourceFileForPackage(ref.Name)
+					if sourceFile != p.FilePath {
+						line += " " + lipgloss.NewStyle().Foreground(colorCyan).
+							Render("(" + filepath.Base(sourceFile) + ")")
+					}
+					s.WriteString(line + "\n")
 				}
 			}
 		}

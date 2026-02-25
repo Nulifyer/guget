@@ -1,0 +1,9 @@
+<Project>
+
+  <Import Project="shared_versions.props" />
+
+  <ItemGroup>
+    <PackageReference Include="Serilog" Version="4.2.0" />
+  </ItemGroup>
+
+</Project>

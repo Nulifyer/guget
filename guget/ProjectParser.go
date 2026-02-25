@@ -3,16 +3,22 @@ package main
 import (
 	"encoding/xml"
 	"fmt"
+	"logger"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 )
 
+type ImportElement struct {
+	Project string `xml:"Project,attr"`
+}
+
 type Project struct {
 	XMLName        xml.Name        `xml:"Project"`
 	PropertyGroups []PropertyGroup `xml:"PropertyGroup"`
 	ItemGroups     []ItemGroup     `xml:"ItemGroup"`
+	Imports        []ImportElement `xml:"Import"`
 }
 
 type PropertyGroup struct {
@@ -41,6 +47,16 @@ type ParsedProject struct {
 	FilePath         string // full path to the .csproj/.fsproj file
 	TargetFrameworks Set[TargetFramework]
 	Packages         Set[PackageReference]
+	PackageSources   map[string]string // lowercase pkg name → absolute path of defining file
+}
+
+// SourceFileForPackage returns the file path where pkgName is defined.
+// Falls back to the project's own FilePath if no source is recorded.
+func (pp *ParsedProject) SourceFileForPackage(pkgName string) string {
+	if source, ok := pp.PackageSources[strings.ToLower(pkgName)]; ok {
+		return source
+	}
+	return pp.FilePath
 }
 
 func ParseCsproj(filePath string) (*ParsedProject, error) {
@@ -54,21 +70,17 @@ func ParseCsproj(filePath string) (*ParsedProject, error) {
 		return nil, fmt.Errorf("failed to parse XML: %w", err)
 	}
 
+	absFilePath, _ := filepath.Abs(filePath)
+
 	result := &ParsedProject{
 		FileName:         filepath.Base(filePath),
 		FilePath:         filePath,
 		TargetFrameworks: NewSet[TargetFramework](),
 		Packages:         NewSet[PackageReference](),
+		PackageSources:   make(map[string]string),
 	}
 
-	for _, pg := range project.PropertyGroups {
-		for _, fw := range strings.Split(pg.TargetFramework+";"+pg.TargetFrameworks, ";") {
-			fw = strings.TrimSpace(fw)
-			if fw != "" {
-				result.TargetFrameworks.Add(ParseTargetFramework(fw))
-			}
-		}
-	}
+	mergePropertyGroups(result, project.PropertyGroups)
 
 	for _, ig := range project.ItemGroups {
 		for _, raw := range ig.PackageReferences {
@@ -76,10 +88,143 @@ func ParseCsproj(filePath string) (*ParsedProject, error) {
 				Name:    raw.Include,
 				Version: ParseSemVer(raw.Version),
 			})
+			result.PackageSources[strings.ToLower(raw.Include)] = filePath
 		}
 	}
 
+	projectDir := filepath.Dir(filePath)
+	visited := map[string]bool{absFilePath: true}
+
+	// Implicit import: Directory.Build.props (walk up from project dir)
+	if dbp := findDirectoryBuildProps(projectDir); dbp != "" {
+		collectPropsPackages(result, dbp, projectDir, visited)
+	}
+
+	// Explicit <Import> elements in the project file
+	for _, imp := range project.Imports {
+		resolved, err := resolveImportPath(imp.Project, projectDir, projectDir)
+		if err != nil {
+			logger.Debug("Skipping import in %s: %v", filePath, err)
+			continue
+		}
+		collectPropsPackages(result, resolved, projectDir, visited)
+	}
+
 	return result, nil
+}
+
+// mergePropertyGroups extracts target frameworks from PropertyGroup elements.
+func mergePropertyGroups(result *ParsedProject, groups []PropertyGroup) {
+	for _, pg := range groups {
+		for _, fw := range strings.Split(pg.TargetFramework+";"+pg.TargetFrameworks, ";") {
+			fw = strings.TrimSpace(fw)
+			if fw != "" {
+				result.TargetFrameworks.Add(ParseTargetFramework(fw))
+			}
+		}
+	}
+}
+
+// findDirectoryBuildProps walks up from startDir looking for Directory.Build.props.
+// Returns the full path if found, or "" if not found.
+func findDirectoryBuildProps(startDir string) string {
+	dir := startDir
+	for {
+		candidate := filepath.Join(dir, "Directory.Build.props")
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+	return ""
+}
+
+// resolveImportPath resolves MSBuild-style import paths with basic variable substitution.
+// referringFileDir is the directory containing the file with the <Import> element.
+// projectDir is the directory of the .csproj/.fsproj being parsed.
+func resolveImportPath(rawPath, referringFileDir, projectDir string) (string, error) {
+	resolved := rawPath
+	resolved = strings.ReplaceAll(resolved, "$(MSBuildThisFileDirectory)", referringFileDir+string(os.PathSeparator))
+	resolved = strings.ReplaceAll(resolved, "$(ProjectDir)", projectDir+string(os.PathSeparator))
+
+	if strings.Contains(resolved, "$(") {
+		return "", fmt.Errorf("unresolved MSBuild variable in import path: %s", rawPath)
+	}
+
+	resolved = filepath.FromSlash(resolved)
+	if !filepath.IsAbs(resolved) {
+		resolved = filepath.Join(referringFileDir, resolved)
+	}
+	return filepath.Clean(resolved), nil
+}
+
+// parsePropsFile parses a .props file and returns its PackageReferences, Import
+// elements, and PropertyGroups.
+func parsePropsFile(filePath string) ([]rawPackageReference, []ImportElement, []PropertyGroup, error) {
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("failed to read props file: %w", err)
+	}
+	var project Project
+	if err := xml.Unmarshal(data, &project); err != nil {
+		return nil, nil, nil, fmt.Errorf("failed to parse props XML: %w", err)
+	}
+	var refs []rawPackageReference
+	for _, ig := range project.ItemGroups {
+		refs = append(refs, ig.PackageReferences...)
+	}
+	return refs, project.Imports, project.PropertyGroups, nil
+}
+
+// collectPropsPackages parses a .props file and merges its PackageReferences
+// into the result. Recurses into nested <Import> elements. Uses visited to
+// prevent cycles.
+func collectPropsPackages(result *ParsedProject, propsPath, projectDir string, visited map[string]bool) {
+	absPath, err := filepath.Abs(propsPath)
+	if err != nil {
+		logger.Warn("Could not resolve absolute path for %s: %v", propsPath, err)
+		return
+	}
+	if visited[absPath] {
+		return
+	}
+	visited[absPath] = true
+
+	refs, imports, propertyGroups, err := parsePropsFile(absPath)
+	if err != nil {
+		logger.Debug("Failed to parse props file %s: %v", absPath, err)
+		return
+	}
+
+	for _, raw := range refs {
+		ref := PackageReference{
+			Name:    raw.Include,
+			Version: ParseSemVer(raw.Version),
+		}
+		result.Packages.Add(ref)
+		key := strings.ToLower(raw.Include)
+		// Only set source if not already defined (.csproj takes precedence)
+		if _, exists := result.PackageSources[key]; !exists {
+			result.PackageSources[key] = absPath
+		}
+	}
+
+	mergePropertyGroups(result, propertyGroups)
+
+	// Recurse into nested imports
+	propsDir := filepath.Dir(absPath)
+	for _, imp := range imports {
+		resolved, err := resolveImportPath(imp.Project, propsDir, projectDir)
+		if err != nil {
+			logger.Debug("Skipping nested import in %s: %v", absPath, err)
+			continue
+		}
+		collectPropsPackages(result, resolved, projectDir, visited)
+	}
 }
 
 var versionAttrRe = regexp.MustCompile(`(Version\s*=\s*")[^"]*(")`)
