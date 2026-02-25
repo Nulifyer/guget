@@ -246,7 +246,6 @@ func main() {
 	p := tea.NewProgram(
 		m,
 		tea.WithAltScreen(),
-		tea.WithMouseCellMotion(),
 	)
 
 	// Wire up live log forwarding to the TUI now that the program exists.
