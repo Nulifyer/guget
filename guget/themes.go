@@ -188,6 +188,7 @@ var themes = map[string]Theme{
 // Call this before NewModel. If noColor is true, all color output is disabled.
 func initTheme(name string, noColor bool) {
 	if noColor {
+		hyperlinkEnabled = false
 		lipgloss.SetColorProfile(0)
 		return
 	}

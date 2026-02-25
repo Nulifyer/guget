@@ -85,6 +85,7 @@ type PackageInfo struct {
 	Description        string
 	Authors            Set[string]
 	Tags               Set[string]
+	ProjectURL         string // from catalog entry (e.g. GitHub repo)
 	TotalDownloads     int
 	Verified           bool
 	Versions           []PackageVersion // sorted newest → oldest
@@ -115,6 +116,7 @@ type registrationLeaf struct {
 	Description      string                 `json:"description"`
 	Authors          StringOrArray          `json:"authors"`
 	Tags             StringOrArray          `json:"tags"`
+	ProjectURL       string                 `json:"projectUrl"`
 	Listed           *bool                  `json:"listed"`
 	DependencyGroups []dependencyGroup      `json:"dependencyGroups"`
 	Vulnerabilities  []PackageVulnerability `json:"vulnerabilities"`
@@ -412,6 +414,7 @@ func (s *NugetService) SearchExact(packageID string) (*PackageInfo, error) {
 		Description:   meta.Description,
 		Authors:       authors,
 		Tags:          tags,
+		ProjectURL:    meta.ProjectURL,
 		Versions:      versions,
 	}
 	if meta.Deprecation != nil {

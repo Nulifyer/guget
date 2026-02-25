@@ -1897,8 +1897,12 @@ func (m Model) renderDetail(row packageRow) string {
 		return styleText.Render(text)
 	}
 
-	// name + verified
-	name := styleAccentBold.Render(row.info.ID)
+	// name + verified — link to project URL if available, else nuget.org if that's the source
+	pkgLink := row.info.ProjectURL
+	if pkgLink == "" && strings.EqualFold(row.source, "nuget.org") {
+		pkgLink = "https://www.nuget.org/packages/" + row.info.ID
+	}
+	name := hyperlink(pkgLink, styleAccentBold.Render(row.info.ID))
 	verified := ""
 	if row.info.Verified {
 		verified = " " + styleGreen.Render("✓ verified")
@@ -1944,8 +1948,8 @@ func (m Model) renderDetail(row packageRow) string {
 					sevStyle = styleTextBold
 				}
 				sevStr := sevStyle.Render(sev)
-				s.WriteString("  " + sevStr + "\n")
-				s.WriteString("  " + hardWrap(vuln.AdvisoryURL, w-2) + "\n")
+				label := hyperlink(vuln.AdvisoryURL, styleSubtle.Render(advisoryLabel(vuln.AdvisoryURL)))
+				s.WriteString("  " + sevStr + "  " + label + "\n")
 			}
 			s.WriteString("\n")
 		}
@@ -2269,7 +2273,7 @@ func (m Model) renderSourcesOverlay() string {
 			}
 			lines = append(lines, name+auth)
 			lines = append(lines,
-				"  "+styleSubtle.Render(truncate(src.URL, innerW-2)),
+				"  "+hyperlink(src.URL, styleSubtle.Render(truncate(src.URL, innerW-2))),
 			)
 			lines = append(lines, "")
 		}
@@ -2410,10 +2414,12 @@ func (m Model) renderPickerOverlay() string {
 		end = len(versions)
 	}
 
-	// Look up package-level info for deprecation notice.
+	// Look up package-level info for deprecation notice and source.
 	var pkgInfo *PackageInfo
+	var pkgSource string
 	if res, ok := m.results[m.picker.pkgName]; ok {
 		pkgInfo = res.pkg
+		pkgSource = res.source
 	}
 
 	var lines []string
@@ -2488,7 +2494,12 @@ func (m Model) renderPickerOverlay() string {
 			}
 		}
 
-		lines = append(lines, style.Render(prefix+v.SemVer.String())+extras)
+		verText := style.Render(prefix + v.SemVer.String())
+		if strings.EqualFold(pkgSource, "nuget.org") {
+			verURL := "https://www.nuget.org/packages/" + m.picker.pkgName + "/" + v.SemVer.String()
+			verText = hyperlink(verURL, verText)
+		}
+		lines = append(lines, verText+extras)
 	}
 
 	lines = append(lines, "")
@@ -2612,25 +2623,28 @@ func truncate(s string, n int) string {
 	return s[:n-1] + "…"
 }
 
-// hardWrap breaks s at exactly width characters (no word boundaries).
-// Useful for long strings with no spaces, like URLs.
-func hardWrap(s string, width int) string {
-	if width <= 0 || len(s) <= width {
-		return s
+// hyperlinkEnabled controls whether OSC 8 escape codes are emitted.
+// Disabled when --no-color is active.
+var hyperlinkEnabled = true
+
+// hyperlink wraps text in an OSC 8 terminal hyperlink.
+// Unsupported terminals silently ignore the escape codes.
+func hyperlink(url, text string) string {
+	if !hyperlinkEnabled || url == "" {
+		return text
 	}
-	var b strings.Builder
-	for i := 0; i < len(s); i += width {
-		end := i + width
-		if end > len(s) {
-			end = len(s)
-		}
-		if i > 0 {
-			b.WriteByte('\n')
-		}
-		b.WriteString(s[i:end])
-	}
-	return b.String()
+	return "\x1b]8;;" + url + "\x1b\\" + text + "\x1b]8;;\x1b\\"
 }
+
+// advisoryLabel extracts a short display label from an advisory URL.
+// e.g. "https://github.com/advisories/GHSA-5crp-9r3c-p9vr" → "GHSA-5crp-9r3c-p9vr"
+func advisoryLabel(url string) string {
+	if i := strings.LastIndex(url, "/"); i >= 0 && i < len(url)-1 {
+		return url[i+1:]
+	}
+	return url
+}
+
 
 func wordWrap(s string, width int) string {
 	words := strings.Fields(s)
