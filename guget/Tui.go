@@ -138,7 +138,10 @@ func (p projectItem) Description() string {
 	for fw := range p.project.TargetFrameworks {
 		fws = append(fws, fw.String())
 	}
-	return strings.Join(fws, ", ")
+	if len(fws) > 0 {
+		return strings.Join(fws, ", ")
+	}
+	return fmt.Sprintf("%d packages", p.project.Packages.Len())
 }
 
 func (p projectItem) FilterValue() string { return p.name }
@@ -267,6 +270,7 @@ type Model struct {
 	focus  focusPanel
 
 	parsedProjects []*ParsedProject
+	propsProjects  []*ParsedProject // standalone .props files shown after proj files
 	nugetServices  []*NugetService
 	results        map[string]nugetResult
 	loading        bool
@@ -302,7 +306,7 @@ type Model struct {
 	resizeDebounceID int
 }
 
-func NewModel(parsedProjects []*ParsedProject, nugetServices []*NugetService, sources []NugetSource, initialLogLines []string, loadingTotal int) Model {
+func NewModel(parsedProjects []*ParsedProject, propsProjects []*ParsedProject, nugetServices []*NugetService, sources []NugetSource, initialLogLines []string, loadingTotal int) Model {
 	sp := bubbles_spinner.New()
 	sp.Spinner = bubbles_spinner.Dot
 	sp.Style = styleAccent
@@ -311,6 +315,9 @@ func NewModel(parsedProjects []*ParsedProject, nugetServices []*NugetService, so
 		projectItem{name: "All Projects", project: nil},
 	}
 	for _, p := range parsedProjects {
+		items = append(items, projectItem{name: p.FileName, project: p})
+	}
+	for _, p := range propsProjects {
 		items = append(items, projectItem{name: p.FileName, project: p})
 	}
 
@@ -342,6 +349,7 @@ func NewModel(parsedProjects []*ParsedProject, nugetServices []*NugetService, so
 
 	m := Model{
 		parsedProjects: parsedProjects,
+		propsProjects:  propsProjects,
 		nugetServices:  nugetServices,
 		sources:        sources,
 		loading:        loadingTotal > 0,
@@ -772,6 +780,23 @@ func (m *Model) updateSelected(useLatest bool) bubble_tea.Cmd {
 	return m.applyVersion(row.ref.Name, target.SemVer.String(), m.selectedProject())
 }
 
+func (m *Model) isPropsProject(p *ParsedProject) bool {
+	for _, pp := range m.propsProjects {
+		if pp == p {
+			return true
+		}
+	}
+	return false
+}
+
+// allProjects returns every project (parsed + props) for propagation purposes.
+func (m *Model) allProjects() []*ParsedProject {
+	all := make([]*ParsedProject, 0, len(m.parsedProjects)+len(m.propsProjects))
+	all = append(all, m.parsedProjects...)
+	all = append(all, m.propsProjects...)
+	return all
+}
+
 func (m *Model) applyVersion(pkgName, version string, targetProject *ParsedProject) bubble_tea.Cmd {
 	projects := m.parsedProjects
 	if targetProject != nil {
@@ -781,6 +806,8 @@ func (m *Model) applyVersion(pkgName, version string, targetProject *ParsedProje
 		filePath string
 	}
 	var toWrite []writeTarget
+	// Determine the on-disk source file so we know which .props (if any) to propagate.
+	var propsSource string
 	for _, p := range projects {
 		updated := NewSet[PackageReference]()
 		changed := false
@@ -796,7 +823,27 @@ func (m *Model) applyVersion(pkgName, version string, targetProject *ParsedProje
 			sourceFile := p.SourceFileForPackage(pkgName)
 			if sourceFile != "" {
 				toWrite = append(toWrite, writeTarget{filePath: sourceFile})
+				if strings.HasSuffix(strings.ToLower(sourceFile), ".props") {
+					propsSource = sourceFile
+				}
 			}
+		}
+	}
+	// When the package lives in a .props file, propagate the version change
+	// to every other project that inherits from the same file.
+	if propsSource != "" {
+		for _, p := range m.allProjects() {
+			if p.SourceFileForPackage(pkgName) != propsSource {
+				continue
+			}
+			updated := NewSet[PackageReference]()
+			for ref := range p.Packages {
+				if ref.Name == pkgName {
+					ref.Version = ParseSemVer(version)
+				}
+				updated.Add(ref)
+			}
+			p.Packages = updated
 		}
 	}
 	m.rebuildPackageRows()
@@ -826,9 +873,11 @@ func (m *Model) applyVersion(pkgName, version string, targetProject *ParsedProje
 func (m *Model) triggerRestore() bubble_tea.Cmd {
 	m.restoring = true
 	var projects []*ParsedProject
-	if sel := m.selectedProject(); sel != nil {
+	sel := m.selectedProject()
+	if sel != nil && !m.isPropsProject(sel) {
 		projects = []*ParsedProject{sel}
 	} else {
+		// "All Projects" or a .props file — restore all actual project files.
 		projects = m.parsedProjects
 	}
 	return runDotnetRestore(projects)
@@ -1385,16 +1434,28 @@ func (m *Model) removePackage(pkgName string) bubble_tea.Cmd {
 		filePath string
 	}
 	var toWrite []writeTarget
-	for _, p := range m.parsedProjects {
-		if targetProject != nil && p != targetProject {
-			continue
+	var propsSource string
+
+	// Determine which projects to operate on.
+	projects := m.parsedProjects
+	if targetProject != nil {
+		if m.isPropsProject(targetProject) {
+			projects = []*ParsedProject{targetProject}
+		} else {
+			projects = []*ParsedProject{targetProject}
 		}
+	}
+
+	for _, p := range projects {
 		for ref := range p.Packages {
 			if strings.EqualFold(ref.Name, pkgName) {
-				p.Packages.Remove(ref)
 				sourceFile := p.SourceFileForPackage(pkgName)
+				p.Packages.Remove(ref)
 				if sourceFile != "" {
 					toWrite = append(toWrite, writeTarget{filePath: sourceFile})
+					if strings.HasSuffix(strings.ToLower(sourceFile), ".props") {
+						propsSource = sourceFile
+					}
 				}
 				delete(p.PackageSources, strings.ToLower(pkgName))
 				break
@@ -1402,9 +1463,26 @@ func (m *Model) removePackage(pkgName string) bubble_tea.Cmd {
 		}
 	}
 
+	// When the package lived in a .props file, propagate the removal to
+	// every other project that inherited it from the same file.
+	if propsSource != "" {
+		for _, p := range m.allProjects() {
+			if p.SourceFileForPackage(pkgName) != propsSource {
+				continue
+			}
+			for ref := range p.Packages {
+				if strings.EqualFold(ref.Name, pkgName) {
+					p.Packages.Remove(ref)
+					delete(p.PackageSources, strings.ToLower(pkgName))
+					break
+				}
+			}
+		}
+	}
+
 	// Clean up results cache if the package is gone from every project.
 	stillExists := false
-	for _, p := range m.parsedProjects {
+	for _, p := range m.allProjects() {
 		for ref := range p.Packages {
 			if strings.EqualFold(ref.Name, pkgName) {
 				stillExists = true

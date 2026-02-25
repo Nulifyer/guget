@@ -245,6 +245,40 @@ func collectPropsPackages(result *ParsedProject, propsPath, projectDir string, v
 	}
 }
 
+// ParsePropsAsProject parses a .props file and returns a ParsedProject
+// containing only the packages directly defined in that file.
+func ParsePropsAsProject(filePath string) (*ParsedProject, error) {
+	absPath, err := filepath.Abs(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve path: %w", err)
+	}
+
+	refs, _, propertyGroups, err := parsePropsFile(absPath)
+	if err != nil {
+		return nil, err
+	}
+
+	result := &ParsedProject{
+		FileName:         filepath.Base(absPath),
+		FilePath:         absPath,
+		TargetFrameworks: NewSet[TargetFramework](),
+		Packages:         NewSet[PackageReference](),
+		PackageSources:   make(map[string]string),
+	}
+
+	mergePropertyGroups(result, propertyGroups)
+
+	for _, raw := range refs {
+		result.Packages.Add(PackageReference{
+			Name:    raw.Include,
+			Version: ParseSemVer(raw.Version),
+		})
+		result.PackageSources[strings.ToLower(raw.Include)] = absPath
+	}
+
+	return result, nil
+}
+
 var versionAttrRe = regexp.MustCompile(`(Version\s*=\s*")[^"]*(")`)
 // RemovePackageReference removes a <PackageReference> line for pkgName from a
 // .csproj/.fsproj file without altering any other formatting.

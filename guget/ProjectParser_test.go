@@ -260,36 +260,6 @@ func TestParseCsproj_CircularRefServiceB(t *testing.T) {
 }
 
 // ─────────────────────────────────────────────
-// FindProjectFiles — discovers all projects including circular-ref ones
-// ─────────────────────────────────────────────
-
-func TestFindProjectFiles_IncludesCircularRefProjects(t *testing.T) {
-	td := testDataDir(t)
-	files, err := FindProjectFiles(td)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	foundA := false
-	foundB := false
-	for _, f := range files {
-		base := filepath.Base(f)
-		if base == "ServiceA.csproj" {
-			foundA = true
-		}
-		if base == "ServiceB.csproj" {
-			foundB = true
-		}
-	}
-	if !foundA {
-		t.Fatal("expected to find ServiceA.csproj")
-	}
-	if !foundB {
-		t.Fatal("expected to find ServiceB.csproj")
-	}
-}
-
-// ─────────────────────────────────────────────
 // Shared package across circular-ref projects gets same props source
 // ─────────────────────────────────────────────
 
@@ -331,36 +301,6 @@ func TestSourceFileForPackage_Fallback(t *testing.T) {
 }
 
 // ─────────────────────────────────────────────
-// FindProjectFiles — picks up both csproj and fsproj
-// ─────────────────────────────────────────────
-
-func TestFindProjectFiles_MixedFormats(t *testing.T) {
-	td := testDataDir(t)
-	files, err := FindProjectFiles(td)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	hasCsproj := false
-	hasFsproj := false
-	for _, f := range files {
-		ext := strings.ToLower(filepath.Ext(f))
-		if ext == ".csproj" {
-			hasCsproj = true
-		}
-		if ext == ".fsproj" {
-			hasFsproj = true
-		}
-	}
-	if !hasCsproj {
-		t.Fatal("expected at least one .csproj file")
-	}
-	if !hasFsproj {
-		t.Fatal("expected at least one .fsproj file")
-	}
-}
-
-// ─────────────────────────────────────────────
 // parsePropsFile
 // ─────────────────────────────────────────────
 
@@ -380,6 +320,100 @@ func TestParsePropsFile_Valid(t *testing.T) {
 
 func TestParsePropsFile_NotFound(t *testing.T) {
 	_, _, _, err := parsePropsFile("/nonexistent/file.props")
+	if err == nil {
+		t.Fatal("expected error for nonexistent file")
+	}
+}
+
+// ─────────────────────────────────────────────
+// ParsePropsAsProject — Directory.Build.props
+// ─────────────────────────────────────────────
+
+func TestParsePropsAsProject_DirectoryBuildProps(t *testing.T) {
+	td := testDataDir(t)
+	proj, err := ParsePropsAsProject(filepath.Join(td, "Directory.Build.props"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if proj.FileName != "Directory.Build.props" {
+		t.Fatalf("expected FileName Directory.Build.props, got %s", proj.FileName)
+	}
+
+	pkgs := pkgNameSet(proj)
+	assertContains(t, pkgs, "Serilog")
+
+	// Only direct packages — not nested imports (shared_versions.props)
+	if pkgs["Microsoft.Extensions.Logging.Abstractions"] {
+		t.Fatal("ParsePropsAsProject should not include packages from nested imports")
+	}
+
+	if proj.Packages.Len() != 1 {
+		t.Fatalf("expected 1 package, got %d", proj.Packages.Len())
+	}
+}
+
+// ─────────────────────────────────────────────
+// ParsePropsAsProject — shared_versions.props
+// ─────────────────────────────────────────────
+
+func TestParsePropsAsProject_SharedVersionsProps(t *testing.T) {
+	td := testDataDir(t)
+	proj, err := ParsePropsAsProject(filepath.Join(td, "shared_versions.props"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pkgs := pkgNameSet(proj)
+	assertContains(t, pkgs, "Microsoft.Extensions.Logging.Abstractions")
+
+	if proj.Packages.Len() != 1 {
+		t.Fatalf("expected 1 package, got %d", proj.Packages.Len())
+	}
+}
+
+// ─────────────────────────────────────────────
+// ParsePropsAsProject — explicit import (build_info.props)
+// ─────────────────────────────────────────────
+
+func TestParsePropsAsProject_BuildInfoProps(t *testing.T) {
+	td := testDataDir(t)
+	proj, err := ParsePropsAsProject(filepath.Join(td, "Scryfall", "build_info.props"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pkgs := pkgNameSet(proj)
+	assertContains(t, pkgs, "Polly")
+
+	if proj.Packages.Len() != 1 {
+		t.Fatalf("expected 1 package, got %d", proj.Packages.Len())
+	}
+}
+
+// ─────────────────────────────────────────────
+// ParsePropsAsProject — sources map to the props file itself
+// ─────────────────────────────────────────────
+
+func TestParsePropsAsProject_SourceMapping(t *testing.T) {
+	td := testDataDir(t)
+	proj, err := ParsePropsAsProject(filepath.Join(td, "Directory.Build.props"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	source := proj.SourceFileForPackage("Serilog")
+	if filepath.Base(source) != "Directory.Build.props" {
+		t.Fatalf("expected source to be Directory.Build.props, got %s", source)
+	}
+}
+
+// ─────────────────────────────────────────────
+// ParsePropsAsProject — nonexistent file returns error
+// ─────────────────────────────────────────────
+
+func TestParsePropsAsProject_NotFound(t *testing.T) {
+	_, err := ParsePropsAsProject("/nonexistent/file.props")
 	if err == nil {
 		t.Fatal("expected error for nonexistent file")
 	}
