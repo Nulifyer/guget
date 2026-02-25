@@ -241,8 +241,13 @@ func main() {
 	logInfo("Found %d .props file(s) with packages", len(propsProjects))
 
 	// detect nuget sources
-	sources := DetectSources(fullProjectPath)
+	detected := DetectSources(fullProjectPath)
+	sources := detected.Sources
+	sourceMapping := detected.Mapping
 	logInfo("Detected %d NuGet source(s)", len(sources))
+	if sourceMapping.IsConfigured() {
+		logInfo("Package source mapping configured with %d source(s)", len(sourceMapping.Entries))
+	}
 
 	var nugetServices []*NugetService
 	for _, src := range sources {
@@ -265,7 +270,7 @@ func main() {
 		}
 	}
 
-	m := NewModel(parsedProjects, propsProjects, nugetServices, sources, buf.Lines(), distinctPackages.Len())
+	m := NewModel(parsedProjects, propsProjects, nugetServices, sources, sourceMapping, buf.Lines(), distinctPackages.Len())
 
 	p := tea.NewProgram(
 		m,
@@ -319,7 +324,8 @@ func main() {
 				var info *PackageInfo
 				var sourceName string
 				var lastErr error
-				for _, svc := range nugetServices {
+				eligibleServices := FilterServices(nugetServices, sourceMapping, name)
+			for _, svc := range eligibleServices {
 					info, lastErr = svc.SearchExact(name)
 					if lastErr == nil {
 						sourceName = svc.SourceName()

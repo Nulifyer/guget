@@ -16,11 +16,12 @@ const defaultNugetSource = "https://api.nuget.org/v3/index.json"
 // ─────────────────────────────────────────────
 
 type nugetConfig struct {
-	XMLName              xml.Name        `xml:"configuration"`
-	PackageSources       []packageSource `xml:"packageSources>add"`
-	PackageSourcesClear  []struct{}      `xml:"packageSources>clear"`       // <clear /> stops inheritance
-	DisabledSources      []packageSource `xml:"disabledPackageSources>add"`
-	DisabledSourcesClear []struct{}      `xml:"disabledPackageSources>clear"`
+	XMLName              xml.Name                 `xml:"configuration"`
+	PackageSources       []packageSource          `xml:"packageSources>add"`
+	PackageSourcesClear  []struct{}               `xml:"packageSources>clear"`       // <clear /> stops inheritance
+	DisabledSources      []packageSource          `xml:"disabledPackageSources>add"`
+	DisabledSourcesClear []struct{}               `xml:"disabledPackageSources>clear"`
+	SourceMapping        *packageSourceMappingXML `xml:"packageSourceMapping"`
 }
 
 type packageSource struct {
@@ -43,14 +44,30 @@ type NugetSource struct {
 // Detection
 // ─────────────────────────────────────────────
 
-// DetectSources finds all NuGet sources relevant to the given project directory.
+// DetectedConfig holds everything discovered from the nuget.config hierarchy.
+type DetectedConfig struct {
+	Sources []NugetSource
+	Mapping *PackageSourceMapping
+}
+
+// parsedMappingResult is an internal type returned by sourcesFromNugetConfig
+// for a single config file's <packageSourceMapping> section.
+type parsedMappingResult struct {
+	entries map[string][]string // source key → lowercase patterns
+	cleared bool               // <clear/> inside <packageSourceMapping>
+}
+
+// DetectSources finds all NuGet sources and package-source mapping rules
+// relevant to the given project directory.
 // Sources are collected in priority order: solution/project → parents → user → machine.
-// A <clear /> element inside <packageSources> stops inheritance: no lower-priority
-// configs contribute sources beyond that point.
+// A <clear /> element inside <packageSources> stops source inheritance.
+// A <clear /> element inside <packageSourceMapping> resets inherited mappings.
 // Duplicates (by URL) are removed. Falls back to nuget.org if nothing is found.
-func DetectSources(projectDir string) []NugetSource {
+func DetectSources(projectDir string) DetectedConfig {
 	seen := NewSet[string]()
 	var sources []NugetSource
+	mapping := &PackageSourceMapping{Entries: make(map[string][]string)}
+	mappingCleared := false
 
 	add := func(s NugetSource) {
 		url := strings.TrimRight(s.URL, "/")
@@ -60,12 +77,32 @@ func DetectSources(projectDir string) []NugetSource {
 		}
 	}
 
-	// addConfig adds sources from a config file and returns true if a <clear/>
-	// was found (meaning lower-priority configs should be ignored).
+	// addConfig adds sources and mapping rules from a config file.
+	// Returns true if a <clear/> was found in <packageSources>.
+	// Deduplicates by resolved path so case-insensitive filesystems
+	// (Windows) don't parse the same file twice.
+	seenConfigs := NewSet[string]()
 	addConfig := func(path string) bool {
-		srcs, cleared := sourcesFromNugetConfig(path)
+		resolved, err := filepath.Abs(path)
+		if err == nil {
+			resolved = strings.ToLower(resolved)
+			if seenConfigs.Contains(resolved) {
+				return false
+			}
+			seenConfigs.Add(resolved)
+		}
+		srcs, cleared, mr := sourcesFromNugetConfig(path)
 		for _, s := range srcs {
 			add(s)
+		}
+		if !mappingCleared && mr != nil {
+			if mr.cleared {
+				mapping = &PackageSourceMapping{Entries: make(map[string][]string)}
+				mappingCleared = true
+			}
+			for k, v := range mr.entries {
+				mapping.Entries[k] = append(mapping.Entries[k], v...)
+			}
 		}
 		return cleared
 	}
@@ -115,28 +152,32 @@ func DetectSources(projectDir string) []NugetSource {
 		add(NugetSource{Name: "nuget.org", URL: defaultNugetSource})
 	}
 
-	return sources
+	// Nil out empty mapping so IsConfigured() returns false.
+	if len(mapping.Entries) == 0 {
+		mapping = nil
+	}
+
+	return DetectedConfig{Sources: sources, Mapping: mapping}
 }
 
 // ─────────────────────────────────────────────
 // Parsers
 // ─────────────────────────────────────────────
 
-// sourcesFromNugetConfig parses a NuGet.Config file and returns its sources.
-// The second return value is true when a <clear /> element was found inside
-// <packageSources>, which means no lower-priority configs should contribute
-// further sources (NuGet inheritance stops at that point).
-func sourcesFromNugetConfig(path string) ([]NugetSource, bool) {
+// sourcesFromNugetConfig parses a NuGet.Config file and returns its sources,
+// whether a <clear /> was found in <packageSources>, and any
+// <packageSourceMapping> entries defined in this file.
+func sourcesFromNugetConfig(path string) ([]NugetSource, bool, *parsedMappingResult) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		logTrace("sourcesFromNugetConfig: skipping %q (%v)", path, err)
-		return nil, false
+		return nil, false, nil
 	}
 	logTrace("sourcesFromNugetConfig: reading %q", path)
 
 	var cfg nugetConfig
 	if err := xml.Unmarshal(data, &cfg); err != nil {
-		return nil, false
+		return nil, false, nil
 	}
 
 	cleared := len(cfg.PackageSourcesClear) > 0
@@ -174,7 +215,23 @@ func sourcesFromNugetConfig(path string) ([]NugetSource, bool) {
 			logTrace("sourcesFromNugetConfig: [%s] skipped (not http/https: %q)", ps.Key, ps.Value)
 		}
 	}
-	return sources, cleared
+
+	// Extract <packageSourceMapping> entries
+	var mr *parsedMappingResult
+	if cfg.SourceMapping != nil {
+		mr = &parsedMappingResult{
+			entries: make(map[string][]string),
+			cleared: len(cfg.SourceMapping.Clear) > 0,
+		}
+		for _, src := range cfg.SourceMapping.Sources {
+			for _, pkg := range src.Patterns {
+				mr.entries[src.Key] = append(mr.entries[src.Key], strings.ToLower(pkg.Pattern))
+			}
+		}
+		logTrace("sourcesFromNugetConfig: %q — %d mapping source(s), mapping-cleared=%v", path, len(mr.entries), mr.cleared)
+	}
+
+	return sources, cleared, mr
 }
 
 func sourcesFromBuildProps(path string) []NugetSource {

@@ -291,8 +291,9 @@ type Model struct {
 	confirm confirmRemove
 	depTree depTreeOverlay
 
-	sources     []NugetSource
-	showSources bool
+	sources        []NugetSource
+	sourceMapping  *PackageSourceMapping
+	showSources    bool
 	showHelp    bool
 
 	statusLine  string
@@ -306,7 +307,7 @@ type Model struct {
 	resizeDebounceID int
 }
 
-func NewModel(parsedProjects []*ParsedProject, propsProjects []*ParsedProject, nugetServices []*NugetService, sources []NugetSource, initialLogLines []string, loadingTotal int) Model {
+func NewModel(parsedProjects []*ParsedProject, propsProjects []*ParsedProject, nugetServices []*NugetService, sources []NugetSource, sourceMapping *PackageSourceMapping, initialLogLines []string, loadingTotal int) Model {
 	sp := bubbles_spinner.New()
 	sp.Spinner = bubbles_spinner.Dot
 	sp.Style = styleAccent
@@ -352,6 +353,7 @@ func NewModel(parsedProjects []*ParsedProject, propsProjects []*ParsedProject, n
 		propsProjects:  propsProjects,
 		nugetServices:  nugetServices,
 		sources:        sources,
+		sourceMapping:  sourceMapping,
 		loading:        loadingTotal > 0,
 		loadingTotal:   loadingTotal,
 		spinner:        sp,
@@ -1372,7 +1374,7 @@ func (m *Model) doSearchCmd(query string) bubble_tea.Cmd {
 }
 
 func (m *Model) fetchPackageCmd(id string) bubble_tea.Cmd {
-	services := m.nugetServices
+	services := FilterServices(m.nugetServices, m.sourceMapping, id)
 	return func() bubble_tea.Msg {
 		var lastErr error
 		for _, svc := range services {
