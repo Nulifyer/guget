@@ -26,7 +26,7 @@ A terminal UI for managing NuGet packages across .NET projects.
 
 - **Browse projects** — scans recursively for `.csproj` / `.fsproj` files
 - **Live version status** — fetches latest versions from NuGet v3 API
-- **Vulnerability & deprecation tracking** — surfaces CVE advisories and deprecated status per package version, with severity-coloured indicators in the list, detail panel, and version picker
+- **Vulnerability & deprecation tracking** — surfaces CVE advisories and deprecated status per package version, with severity-coloured indicators in the list, detail panel, and version picker. Packages from private/Azure feeds are automatically enriched with vulnerability data from nuget.org.
 - **Update packages** — bump to the latest compatible or latest stable version
 - **Version picker** — choose any specific version with target-framework and vulnerability indicators
 - **Dependency tree** — `t` shows a package's declared dependencies; `T` runs `dotnet list --include-transitive` and displays the full transitive tree with status icons
@@ -36,7 +36,10 @@ A terminal UI for managing NuGet packages across .NET projects.
 - **Log panel** — real-time internal logs, toggleable with `l`
 - **Sources panel** — view configured NuGet sources, toggleable with `s`
 - **Help overlay** — full keybinding reference, press `?`
-- **Multi-source** — respects `NuGet.config` and global NuGet source configuration
+- **Multi-source** — respects `NuGet.config` and global NuGet source configuration. Packages found on private feeds are supplemented with metadata from nuget.org (vulnerabilities, downloads, verification).
+- **Clickable hyperlinks** — package names, advisory IDs, versions, and source URLs are clickable in terminals that support OSC 8 hyperlinks (Windows Terminal, iTerm2, Kitty, Ghostty, WezTerm, and others)
+- **Themes** — built-in colour themes: `auto`, `dracula`, `nord`, `everforest`, `gruvbox`. Select with `--theme` / `-t`.
+- **Responsive layout** — columns hide progressively on narrow terminals to keep the UI usable at any width
 
 ---
 
@@ -102,6 +105,13 @@ Usage:
     project      -p, --project
                 Set the target project directory (defaults to current working directory)
 
+    theme        -t, --theme
+                Color theme
+                [auto, dracula, nord, everforest, gruvbox, etc]
+
+    log-file     -lf, --log-file
+                Write all log output to this file (in addition to the TUI log panel)
+
     version      -V, --version
                 Print the version and exit
 ```
@@ -117,6 +127,9 @@ guget ~/src/MyApp
 
 # Enable verbose logging
 guget -v debug
+
+# Use the dracula theme
+guget -t dracula
 ```
 
 ---
@@ -174,32 +187,12 @@ guget -v debug
 
 | Icon | Meaning |
 |------|---------|
-| `⚠` | Installed version has known **CVE vulnerabilities** |
+| `▲` | Installed version has known **CVE vulnerabilities** |
 | `✗` | Error fetching version info |
 | `↑` | Newer **compatible** version available |
 | `⬆` | Newer **stable** version available (beyond compatible) |
 | `~` | Package is **deprecated** in the registry |
 | `✓` | Up to date |
-
----
-
-## Project Structure
-
-```
-GoNugetTui/
-├── guget/
-│   ├── main.go               # Entry point, CLI flags, background fetching
-│   ├── Tui.go                # Bubbletea MVU — all UI state and rendering
-│   ├── ProjectParser.go      # XML parsing of .csproj / .fsproj files
-│   ├── Nugetservice.go       # NuGet v3 API client
-│   ├── Nugetsourcedetector.go# Reads NuGet source configuration
-│   ├── TargetFramework.go    # Target framework compatibility logic
-│   ├── Semver.go             # Semantic version parsing and comparison
-│   ├── Set.go                # Generic set helper
-│   ├── logger/               # Leveled, colored logger with TUI integration
-│   └── arger/                # Minimal CLI argument parser
-└── test-dotnet/              # Sample .NET projects for development
-```
 
 ---
 

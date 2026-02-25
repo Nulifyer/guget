@@ -2,70 +2,154 @@ import * as path from "path";
 import * as vscode from "vscode";
 import { resolveGugetBinary } from "./gugetBinary";
 
-export function activate(context: vscode.ExtensionContext) {
-  const disposable = vscode.commands.registerCommand(
-    "guget.manage",
-    async () => {
-      // 1. Determine target folder
+let statusBarItem: vscode.StatusBarItem | undefined;
+
+export async function activate(context: vscode.ExtensionContext) {
+  // Set context key for when clauses
+  const hasDotnet = await checkForDotnetProjects();
+  vscode.commands.executeCommand("setContext", "guget:hasDotnetProjects", hasDotnet);
+
+  // Status bar item
+  statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 0);
+  statusBarItem.text = "$(package) guget";
+  statusBarItem.tooltip = "Manage NuGet Packages";
+  statusBarItem.command = "guget.manage";
+  if (hasDotnet) {
+    statusBarItem.show();
+  }
+  context.subscriptions.push(statusBarItem);
+
+  // Watch for .csproj/.fsproj additions and deletions to update context dynamically
+  const watcher = vscode.workspace.createFileSystemWatcher("**/*.{csproj,fsproj}");
+  watcher.onDidCreate(() => updateDotnetContext(true));
+  watcher.onDidDelete(async () => {
+    const still = await checkForDotnetProjects();
+    updateDotnetContext(still);
+  });
+  context.subscriptions.push(watcher);
+
+  // guget.manage — command palette / keybinding / status bar
+  context.subscriptions.push(
+    vscode.commands.registerCommand("guget.manage", async () => {
       const targetFolder = await pickFolder();
       if (!targetFolder) {
         return;
       }
-
-      // 2. Resolve binary
-      const binaryPath = await resolveGugetBinary();
-      if (!binaryPath) {
-        const action = await vscode.window.showErrorMessage(
-          "guget binary not found. Install it or set guget.binaryPath in settings.",
-          "Open Settings",
-          "Installation Guide"
-        );
-        if (action === "Open Settings") {
-          vscode.commands.executeCommand(
-            "workbench.action.openSettings",
-            "guget.binaryPath"
-          );
-        } else if (action === "Installation Guide") {
-          vscode.env.openExternal(
-            vscode.Uri.parse("https://github.com/nulifyer/guget#installation")
-          );
-        }
-        return;
-      }
-
-      // 3. Build arguments
-      const config = vscode.workspace.getConfiguration("guget");
-      const verbosity = config.get<string>("verbosity", "warn");
-      const additionalArgs = config.get<string[]>("additionalArgs", []);
-
-      const args: string[] = [
-        "-p",
-        targetFolder,
-        "-v",
-        verbosity,
-        ...additionalArgs,
-      ];
-
-      // 4. Open guget as a fullscreen editor tab
-      const terminal = vscode.window.createTerminal({
-        name: `guget - ${folderBasename(targetFolder)}`,
-        shellPath: binaryPath,
-        shellArgs: args,
-        location: vscode.TerminalLocation.Editor,
-        iconPath: vscode.Uri.file(
-          path.join(context.extensionPath, "icon.svg")
-        ),
-        isTransient: true,
-      });
-
-      terminal.show();
-    }
+      await launchGuget(context, targetFolder);
+    })
   );
 
-  context.subscriptions.push(disposable);
+  // guget.manageProject — explorer context menu / editor title button
+  context.subscriptions.push(
+    vscode.commands.registerCommand("guget.manageProject", async (uri?: vscode.Uri) => {
+      if (!uri) {
+        return;
+      }
+      const projectDir = path.dirname(uri.fsPath);
+      await launchGuget(context, projectDir);
+    })
+  );
 }
 
 export function deactivate() {}
+
+// ─────────────────────────────────────────────
+// Context key management
+// ─────────────────────────────────────────────
+
+async function checkForDotnetProjects(): Promise<boolean> {
+  const files = await vscode.workspace.findFiles("**/*.{csproj,fsproj}", "**/node_modules/**", 1);
+  return files.length > 0;
+}
+
+function updateDotnetContext(hasDotnet: boolean) {
+  vscode.commands.executeCommand("setContext", "guget:hasDotnetProjects", hasDotnet);
+  if (hasDotnet) {
+    statusBarItem?.show();
+  } else {
+    statusBarItem?.hide();
+  }
+}
+
+// ─────────────────────────────────────────────
+// Launch guget
+// ─────────────────────────────────────────────
+
+async function launchGuget(context: vscode.ExtensionContext, targetFolder: string) {
+  const binaryPath = await resolveGugetBinary();
+  if (!binaryPath) {
+    const action = await vscode.window.showErrorMessage(
+      "guget binary not found. Install it or set guget.binaryPath in settings.",
+      "Open Settings",
+      "Installation Guide"
+    );
+    if (action === "Open Settings") {
+      vscode.commands.executeCommand(
+        "workbench.action.openSettings",
+        "guget.binaryPath"
+      );
+    } else if (action === "Installation Guide") {
+      vscode.env.openExternal(
+        vscode.Uri.parse("https://github.com/nulifyer/guget#installation")
+      );
+    }
+    return;
+  }
+
+  const config = vscode.workspace.getConfiguration("guget");
+  const verbosity = config.get<string>("verbosity", "warn");
+  const theme = config.get<string>("theme", "auto");
+  const additionalArgs = config.get<string[]>("additionalArgs", []);
+
+  const args: string[] = [
+    "-p",
+    targetFolder,
+    "-v",
+    verbosity,
+    "-t",
+    theme,
+    ...additionalArgs,
+  ];
+
+  const terminalName = "guget";
+
+  const terminal = vscode.window.createTerminal({
+    name: terminalName,
+    shellPath: binaryPath,
+    shellArgs: args,
+    location: vscode.TerminalLocation.Editor,
+    iconPath: vscode.Uri.file(
+      path.join(context.extensionPath, "icon.svg")
+    ),
+    isTransient: true,
+  });
+
+  terminal.show(false);
+  // Editor-location terminals may not receive keyboard focus automatically;
+  // explicitly focus the active terminal so keystrokes go to guget immediately.
+  vscode.commands.executeCommand("workbench.action.terminal.focus");
+
+  // Close the editor tab immediately when guget exits.
+  const onClose = vscode.window.onDidCloseTerminal((t) => {
+    if (t === terminal) {
+      onClose.dispose();
+      // The terminal process has ended — close its editor tab directly.
+      // Find the tab backing this terminal and close it.
+      for (const group of vscode.window.tabGroups.all) {
+        for (const tab of group.tabs) {
+          if (tab.input instanceof vscode.TabInputTerminal && tab.label === terminalName) {
+            vscode.window.tabGroups.close(tab);
+            return;
+          }
+        }
+      }
+    }
+  });
+}
+
+// ─────────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────────
 
 async function pickFolder(): Promise<string | undefined> {
   const folders = vscode.workspace.workspaceFolders;
@@ -88,9 +172,4 @@ async function pickFolder(): Promise<string | undefined> {
     placeHolder: "Select workspace folder to scan for NuGet packages",
   });
   return chosen?.uri.fsPath;
-}
-
-function folderBasename(folderPath: string): string {
-  const parts = folderPath.replace(/\\/g, "/").split("/");
-  return parts[parts.length - 1] || folderPath;
 }

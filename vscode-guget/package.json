@@ -20,10 +20,39 @@
     "dotnet",
     "csharp",
     "fsharp",
-    "package-manager"
+    "package-manager",
+    "net",
+    "packages",
+    "dependencies",
+    "vulnerability",
+    "tui"
+  ],
+  "galleryBanner": {
+    "color": "#1e1e2e",
+    "theme": "dark"
+  },
+  "badges": [
+    {
+      "url": "https://img.shields.io/github/v/release/nulifyer/guget?label=CLI",
+      "href": "https://github.com/nulifyer/guget/releases",
+      "description": "Latest CLI release"
+    },
+    {
+      "url": "https://img.shields.io/visual-studio-marketplace/v/nulifyer.guget",
+      "href": "https://marketplace.visualstudio.com/items?itemName=nulifyer.guget",
+      "description": "VS Code Marketplace version"
+    },
+    {
+      "url": "https://img.shields.io/visual-studio-marketplace/i/nulifyer.guget",
+      "href": "https://marketplace.visualstudio.com/items?itemName=nulifyer.guget",
+      "description": "Install count"
+    }
   ],
   "icon": "icon.png",
-  "activationEvents": [],
+  "activationEvents": [
+    "workspaceContains:**/*.csproj",
+    "workspaceContains:**/*.fsproj"
+  ],
   "main": "./dist/extension.js",
   "contributes": {
     "commands": [
@@ -34,8 +63,42 @@
           "light": "icon.svg",
           "dark": "icon.svg"
         }
+      },
+      {
+        "command": "guget.manageProject",
+        "title": "Guget: Manage NuGet Packages",
+        "icon": {
+          "light": "icon.svg",
+          "dark": "icon.svg"
+        }
       }
     ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "guget.manage",
+          "when": "guget:hasDotnetProjects"
+        },
+        {
+          "command": "guget.manageProject",
+          "when": "false"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "guget.manageProject",
+          "when": "resourceExtname =~ /^\\.(csproj|fsproj)$/",
+          "group": "navigation"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "guget.manageProject",
+          "when": "resourceExtname =~ /^\\.(csproj|fsproj)$/",
+          "group": "navigation"
+        }
+      ]
+    },
     "configuration": {
       "title": "guget",
       "properties": {
@@ -56,6 +119,25 @@
             "trace"
           ],
           "description": "Log verbosity level passed to guget via -v flag."
+        },
+        "guget.theme": {
+          "type": "string",
+          "default": "auto",
+          "enum": [
+            "auto",
+            "auto-light",
+            "auto-dark",
+            "dracula",
+            "catppuccin-mocha",
+            "catppuccin-macchiato",
+            "catppuccin-frappe",
+            "catppuccin-latte",
+            "nord",
+            "tokyo-night",
+            "everforest",
+            "gruvbox"
+          ],
+          "description": "Color theme passed to guget via --theme flag."
         },
         "guget.additionalArgs": {
           "type": "array",

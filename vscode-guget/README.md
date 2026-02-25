@@ -14,14 +14,17 @@ Manage NuGet packages across .NET projects with an interactive TUI, right inside
 
 - **Browse projects** — scans recursively for `.csproj` / `.fsproj` files
 - **Live version status** — fetches latest versions from NuGet v3 API
-- **Vulnerability & deprecation tracking** — surfaces CVE advisories and deprecated status per package
+- **Vulnerability & deprecation tracking** — surfaces CVE advisories and deprecated status per package version, with severity-coloured indicators. Packages from private/Azure feeds are automatically enriched with vulnerability data from nuget.org.
 - **Update packages** — bump to latest compatible or latest stable version
 - **Version picker** — choose any specific version with target-framework and vulnerability indicators
 - **Dependency tree** — view declared and full transitive dependency trees
 - **Add packages** — search NuGet and add new package references
 - **Bulk sync** — apply a compatible version across all projects at once
 - **Restore** — run `dotnet restore` without leaving the TUI
-- **Multi-source** — respects `NuGet.config` and global NuGet source configuration
+- **Multi-source** — respects `NuGet.config` and global NuGet source configuration. Packages found on private feeds are supplemented with metadata from nuget.org.
+- **Clickable hyperlinks** — package names, advisory IDs, versions, and source URLs are clickable in terminals that support OSC 8 hyperlinks
+- **Themes** — built-in colour themes: `auto`, `dracula`, `nord`, `everforest`, `gruvbox`
+- **Responsive layout** — columns hide progressively on narrow terminals to keep the UI usable at any width
 
 ## Requirements
 
@@ -47,11 +50,25 @@ Manage NuGet packages across .NET projects with an interactive TUI, right inside
 
 ## Usage
 
+**Command palette:**
+
 1. Open a folder containing `.csproj` or `.fsproj` files
 2. Open the command palette (`Ctrl+Shift+P` / `Cmd+Shift+P`)
 3. Run **"Guget: Manage NuGet Packages"**
 
-guget opens as a full editor tab with complete keyboard and mouse support.
+**Explorer context menu:**
+
+Right-click any `.csproj` or `.fsproj` file in the explorer and select **"Guget: Manage NuGet Packages"** to open guget scoped to that project's directory.
+
+**Editor title button:**
+
+When viewing a `.csproj` or `.fsproj` file, click the guget icon in the editor title bar.
+
+**Status bar:**
+
+When a workspace contains .NET project files, a **guget** item appears in the status bar. Click it to launch guget.
+
+guget opens as a full editor tab with complete keyboard support.
 
 ## Extension Settings
 
@@ -59,6 +76,7 @@ guget opens as a full editor tab with complete keyboard and mouse support.
 |---------|---------|-------------|
 | `guget.binaryPath` | `""` | Absolute path to the `guget` binary. Leave empty to auto-detect from PATH. |
 | `guget.verbosity` | `"warn"` | Log verbosity level: `none`, `error`, `warn`, `info`, `debug`, `trace` |
+| `guget.theme` | `"auto"` | Color theme passed to guget (`auto`, `dracula`, `nord`, `everforest`, `gruvbox`, etc.) |
 | `guget.additionalArgs` | `[]` | Additional CLI arguments to pass to guget |
 
 ## Keybindings
