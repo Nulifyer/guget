@@ -14,7 +14,6 @@ import (
 	"strings"
 	"time"
 
-	"logger"
 )
 
 // sourceCredential holds decoded credentials for a NuGet source.
@@ -61,7 +60,7 @@ func normalizeCredentialKey(name string) string {
 func parseCredentials(data []byte) map[string]sourceCredential {
 	creds := make(map[string]sourceCredential)
 	dec := xml.NewDecoder(bytes.NewReader(data))
-	logger.Trace("parseCredentials: parsing %d bytes", len(data))
+	logTrace("parseCredentials: parsing %d bytes", len(data))
 
 	inSection := false
 	var currentSource string
@@ -80,7 +79,7 @@ func parseCredentials(data []byte) map[string]sourceCredential {
 			case inSection && currentSource == "":
 				// The element name IS the source name.
 				currentSource = t.Name.Local
-				logger.Trace("parseCredentials: found credential block for source %q", currentSource)
+				logTrace("parseCredentials: found credential block for source %q", currentSource)
 			case inSection && currentSource != "" && t.Name.Local == "add":
 				var key, value string
 				for _, attr := range t.Attr {
@@ -94,13 +93,13 @@ func parseCredentials(data []byte) map[string]sourceCredential {
 				switch strings.ToLower(key) {
 				case "username":
 					username = value
-					logger.Trace("parseCredentials: [%s] username = %q", currentSource, username)
+					logTrace("parseCredentials: [%s] username = %q", currentSource, username)
 				case "cleartextpassword":
 					clearPass = value
-					logger.Trace("parseCredentials: [%s] ClearTextPassword present (%d chars)", currentSource, len(clearPass))
+					logTrace("parseCredentials: [%s] ClearTextPassword present (%d chars)", currentSource, len(clearPass))
 				case "password":
 					encPass = value // DPAPI-encrypted (Windows)
-					logger.Trace("parseCredentials: [%s] encrypted Password present (%d chars)", currentSource, len(encPass))
+					logTrace("parseCredentials: [%s] encrypted Password present (%d chars)", currentSource, len(encPass))
 				}
 			}
 
@@ -114,19 +113,19 @@ func parseCredentials(data []byte) map[string]sourceCredential {
 					if p, err := decryptNuGetPassword(encPass); err == nil {
 						password = p
 					} else {
-						logger.Debug("DPAPI decryption failed for source %q: %v", currentSource, err)
+						logDebug("DPAPI decryption failed for source %q: %v", currentSource, err)
 					}
 				}
 				if username != "" || password != "" {
 					if username == "" && password != "" {
 						username = "PAT"
-						logger.Trace("parseCredentials: [%s] no username set, defaulting to %q", currentSource, username)
+						logTrace("parseCredentials: [%s] no username set, defaulting to %q", currentSource, username)
 					}
 					key := normalizeCredentialKey(currentSource)
-					logger.Trace("parseCredentials: [%s] stored credential under key %q (username=%q, password=%d chars)", currentSource, key, username, len(password))
+					logTrace("parseCredentials: [%s] stored credential under key %q (username=%q, password=%d chars)", currentSource, key, username, len(password))
 					creds[key] = sourceCredential{Username: username, Password: password}
 				} else {
-					logger.Trace("parseCredentials: [%s] no credentials found in block", currentSource)
+					logTrace("parseCredentials: [%s] no credentials found in block", currentSource)
 				}
 				// Reset state for next source element
 				currentSource = ""
@@ -152,10 +151,10 @@ func fetchFromCredentialProvider(sourceURL, sourceName string) (*sourceCredentia
 	for _, p := range providers {
 		cred, err := invokeProvider(p, sourceURL)
 		if err == nil && (cred.Username != "" || cred.Password != "") {
-			logger.Debug("[%s] credential provider %s supplied credentials", sourceName, filepath.Base(p))
+			logDebug("[%s] credential provider %s supplied credentials", sourceName, filepath.Base(p))
 			return cred, nil
 		}
-		logger.Debug("[%s] provider %s: %v", sourceName, filepath.Base(p), err)
+		logDebug("[%s] provider %s: %v", sourceName, filepath.Base(p), err)
 	}
 	return nil, fmt.Errorf("no credential provider succeeded for %q", sourceName)
 }
@@ -169,22 +168,22 @@ func findCredentialProviders() []string {
 
 	// 1. Explicit env var (semicolon on Windows, colon on Unix)
 	if envPaths := os.Getenv("NUGET_CREDENTIALPROVIDER_PLUGIN_PATHS"); envPaths != "" {
-		logger.Trace("findCredentialProviders: NUGET_CREDENTIALPROVIDER_PLUGIN_PATHS=%q", envPaths)
+		logTrace("findCredentialProviders: NUGET_CREDENTIALPROVIDER_PLUGIN_PATHS=%q", envPaths)
 		for _, dir := range strings.Split(envPaths, string(os.PathListSeparator)) {
 			providers = append(providers, findProvidersInDir(dir)...)
 		}
 	} else {
-		logger.Trace("findCredentialProviders: NUGET_CREDENTIALPROVIDER_PLUGIN_PATHS not set")
+		logTrace("findCredentialProviders: NUGET_CREDENTIALPROVIDER_PLUGIN_PATHS not set")
 	}
 
 	// 2. Standard per-user plugin directory
 	if home, err := os.UserHomeDir(); err == nil {
 		dir := filepath.Join(home, ".nuget", "plugins", "netcore")
-		logger.Trace("findCredentialProviders: scanning standard dir %q", dir)
+		logTrace("findCredentialProviders: scanning standard dir %q", dir)
 		providers = append(providers, findProvidersInDir(dir)...)
 	}
 
-	logger.Trace("findCredentialProviders: found %d provider(s)", len(providers))
+	logTrace("findCredentialProviders: found %d provider(s)", len(providers))
 	return providers
 }
 
@@ -193,7 +192,7 @@ func findCredentialProviders() []string {
 func findProvidersInDir(dir string) []string {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		logger.Trace("findProvidersInDir: cannot read %q: %v", dir, err)
+		logTrace("findProvidersInDir: cannot read %q: %v", dir, err)
 		return nil
 	}
 	var providers []string
@@ -207,10 +206,10 @@ func findProvidersInDir(dir string) []string {
 		}
 		exePath := filepath.Join(dir, entry.Name(), exeName)
 		if _, err := os.Stat(exePath); err == nil {
-			logger.Trace("findProvidersInDir: found provider %q", exePath)
+			logTrace("findProvidersInDir: found provider %q", exePath)
 			providers = append(providers, exePath)
 		} else {
-			logger.Trace("findProvidersInDir: expected exe not found at %q: %v", exePath, err)
+			logTrace("findProvidersInDir: expected exe not found at %q: %v", exePath, err)
 		}
 	}
 	return providers
@@ -231,32 +230,32 @@ func invokeProvider(providerPath, sourceURL string) (*sourceCredential, error) {
 	if err != nil {
 		return nil, fmt.Errorf("provider exited non-zero: %w", err)
 	}
-	logger.Trace("invokeProvider: %s produced %d bytes of output", filepath.Base(providerPath), len(out))
+	logTrace("invokeProvider: %s produced %d bytes of output", filepath.Base(providerPath), len(out))
 
 	// Credential providers sometimes emit informational lines to stdout before
 	// the JSON payload (e.g. "INFO: ..."). Find the first '{' to locate the JSON.
 	jsonStart := bytes.IndexByte(out, '{')
 	if jsonStart >= 0 {
-		logger.Trace("invokeProvider: JSON found at offset %d (preamble: %d bytes)", jsonStart, jsonStart)
+		logTrace("invokeProvider: JSON found at offset %d (preamble: %d bytes)", jsonStart, jsonStart)
 		var resp credentialProviderResponse
 		if err := json.Unmarshal(out[jsonStart:], &resp); err != nil {
 			return nil, fmt.Errorf("parsing provider output: %w", err)
 		}
-		logger.Trace("invokeProvider: JSON parsed OK (username=%q, password=%d chars)", resp.Username, len(resp.Password))
+		logTrace("invokeProvider: JSON parsed OK (username=%q, password=%d chars)", resp.Username, len(resp.Password))
 		return &sourceCredential{Username: resp.Username, Password: resp.Password}, nil
 	}
 
 	// Fallback: some providers emit credentials as log lines instead of JSON, e.g.:
 	//   [Information] [CredentialProvider]Username: VssSessionToken
 	//   [Information] [CredentialProvider]Password: abc123
-	logger.Trace("invokeProvider: no JSON found, trying log-line parse")
+	logTrace("invokeProvider: no JSON found, trying log-line parse")
 	cred := parseLogLineCredentials(out)
 	if cred != nil {
-		logger.Trace("invokeProvider: log-line parse OK (username=%q, password=%d chars)", cred.Username, len(cred.Password))
+		logTrace("invokeProvider: log-line parse OK (username=%q, password=%d chars)", cred.Username, len(cred.Password))
 		return cred, nil
 	}
 
-	logger.Trace("invokeProvider: raw output: %q", string(out))
+	logTrace("invokeProvider: raw output: %q", string(out))
 	return nil, fmt.Errorf("parsing provider output: no JSON object or recognisable credential lines found in output")
 }
 

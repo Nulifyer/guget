@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/xml"
 	"fmt"
-	"logger"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -22,7 +21,7 @@ func writeFileRetry(path string, data []byte, perm os.FileMode) error {
 			return nil
 		}
 		if i < maxAttempts-1 {
-			logger.Debug("write retry %d/%d for %s: %v", i+1, maxAttempts, path, err)
+			logDebug("write retry %d/%d for %s: %v", i+1, maxAttempts, path, err)
 			time.Sleep(time.Duration(50*(i+1)) * time.Millisecond)
 		}
 	}
@@ -123,7 +122,7 @@ func ParseCsproj(filePath string) (*ParsedProject, error) {
 	for _, imp := range project.Imports {
 		resolved, err := resolveImportPath(imp.Project, projectDir, projectDir)
 		if err != nil {
-			logger.Debug("Skipping import in %s: %v", filePath, err)
+			logDebug("Skipping import in %s: %v", filePath, err)
 			continue
 		}
 		collectPropsPackages(result, resolved, projectDir, visited)
@@ -205,7 +204,7 @@ func parsePropsFile(filePath string) ([]rawPackageReference, []ImportElement, []
 func collectPropsPackages(result *ParsedProject, propsPath, projectDir string, visited map[string]bool) {
 	absPath, err := filepath.Abs(propsPath)
 	if err != nil {
-		logger.Warn("Could not resolve absolute path for %s: %v", propsPath, err)
+		logWarn("Could not resolve absolute path for %s: %v", propsPath, err)
 		return
 	}
 	if visited[absPath] {
@@ -215,7 +214,7 @@ func collectPropsPackages(result *ParsedProject, propsPath, projectDir string, v
 
 	refs, imports, propertyGroups, err := parsePropsFile(absPath)
 	if err != nil {
-		logger.Debug("Failed to parse props file %s: %v", absPath, err)
+		logDebug("Failed to parse props file %s: %v", absPath, err)
 		return
 	}
 
@@ -239,7 +238,7 @@ func collectPropsPackages(result *ParsedProject, propsPath, projectDir string, v
 	for _, imp := range imports {
 		resolved, err := resolveImportPath(imp.Project, propsDir, projectDir)
 		if err != nil {
-			logger.Debug("Skipping nested import in %s: %v", absPath, err)
+			logDebug("Skipping nested import in %s: %v", absPath, err)
 			continue
 		}
 		collectPropsPackages(result, resolved, projectDir, visited)

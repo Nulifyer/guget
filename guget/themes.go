@@ -3,8 +3,6 @@ package main
 import (
 	"strings"
 
-	"logger"
-
 	lipgloss "github.com/charmbracelet/lipgloss"
 )
 
@@ -196,7 +194,7 @@ func initTheme(name string, noColor bool) {
 
 	t, ok := themes[strings.ToLower(name)]
 	if !ok {
-		logger.Warn("Unknown theme %q, falling back to \"auto\"", name)
+		logWarn("Unknown theme %q, falling back to \"auto\"", name)
 		t = themes["auto"]
 	}
 
@@ -241,4 +239,7 @@ func rebuildStyles() {
 	styleOverlayDanger = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colorRed).Padding(1, 2)
 	stylePanel = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colorBorder).Padding(0, 1)
 	stylePanelNoPad = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colorBorder)
+
+	// log styles
+	rebuildLogStyles()
 }

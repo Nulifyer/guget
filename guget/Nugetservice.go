@@ -10,7 +10,6 @@ import (
 	"strings"
 	"sync"
 
-	"logger"
 )
 
 // ─────────────────────────────────────────────
@@ -194,10 +193,10 @@ func (t *authTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	// Clone so we never mutate the caller's request.
 	req = req.Clone(req.Context())
 	if user != "" || pass != "" {
-		logger.Trace("[%s] sending Basic Auth (username=%q, password=%d chars)", t.sourceName, user, len(pass))
+		logTrace("[%s] sending Basic Auth (username=%q, password=%d chars)", t.sourceName, user, len(pass))
 		req.SetBasicAuth(user, pass)
 	} else {
-		logger.Trace("[%s] no credentials available, sending unauthenticated request", t.sourceName)
+		logTrace("[%s] no credentials available, sending unauthenticated request", t.sourceName)
 	}
 
 	resp, err := t.base.RoundTrip(req)
@@ -206,14 +205,14 @@ func (t *authTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 
 	// 401 — ask a credential provider (once per transport lifetime).
-	logger.Trace("[%s] got 401, invoking credential provider", t.sourceName)
+	logTrace("[%s] got 401, invoking credential provider", t.sourceName)
 	resp.Body.Close()
 
 	var providerCred *sourceCredential
 	t.provOnce.Do(func() {
 		cred, provErr := fetchFromCredentialProvider(t.sourceURL, t.sourceName)
 		if provErr != nil {
-			logger.Debug("[%s] credential provider: %v", t.sourceName, provErr)
+			logDebug("[%s] credential provider: %v", t.sourceName, provErr)
 			return
 		}
 		t.mu.Lock()
@@ -276,7 +275,7 @@ func (s *NugetService) resolveEndpoints() error {
 	}
 	var searchVer, regVer SemVer
 	for _, r := range idx.Resources {
-		logger.Trace("[%s] service index resource: type=%q id=%q", s.sourceName, r.Type, r.ID)
+		logTrace("[%s] service index resource: type=%q id=%q", s.sourceName, r.Type, r.ID)
 		switch {
 		case strings.HasPrefix(r.Type, "SearchQueryService"):
 			if v := resourceTypeVersion(r.Type); s.searchBase == "" || v.IsNewerThan(searchVer) {
@@ -293,18 +292,18 @@ func (s *NugetService) resolveEndpoints() error {
 	if s.searchBase == "" {
 		// Not fatal — exact lookups use the registration index directly.
 		// Interactive search will be unavailable for this source.
-		logger.Warn("[%s] SearchQueryService not found in service index — search unavailable", s.sourceName)
+		logWarn("[%s] SearchQueryService not found in service index — search unavailable", s.sourceName)
 	}
 	if s.regBase == "" {
 		return fmt.Errorf("RegistrationsBaseUrl not found in service index")
 	}
-	logger.Debug("[%s] endpoints resolved: search=%s reg=%s", s.sourceName, s.searchBase, s.regBase)
+	logDebug("[%s] endpoints resolved: search=%s reg=%s", s.sourceName, s.searchBase, s.regBase)
 	return nil
 }
 
 // Search returns up to take results matching the given query string.
 func (s *NugetService) Search(query string, take int) ([]SearchResult, error) {
-	logger.Debug("[%s] search query=%q take=%d", s.sourceName, query, take)
+	logDebug("[%s] search query=%q take=%d", s.sourceName, query, take)
 	params := url.Values{}
 	params.Set("q", query)
 	params.Set("take", strconv.Itoa(take))
@@ -313,7 +312,7 @@ func (s *NugetService) Search(query string, take int) ([]SearchResult, error) {
 	if err := s.getJSON(s.searchBase+"?"+params.Encode(), &resp); err != nil {
 		return nil, err
 	}
-	logger.Debug("[%s] search returned %d results", s.sourceName, len(resp.Data))
+	logDebug("[%s] search returned %d results", s.sourceName, len(resp.Data))
 	return resp.Data, nil
 }
 
@@ -322,14 +321,14 @@ func (s *NugetService) Search(query string, take int) ([]SearchResult, error) {
 // feed types (e.g. Azure DevOps returns HTTP 500 from its search endpoint for
 // packages not in the feed, whereas the registration endpoint returns 404).
 func (s *NugetService) SearchExact(packageID string) (*PackageInfo, error) {
-	logger.Debug("[%s] looking up %q via registration index", s.sourceName, packageID)
+	logDebug("[%s] looking up %q via registration index", s.sourceName, packageID)
 	regURL := fmt.Sprintf("%s%s/index.json", s.regBase, strings.ToLower(packageID))
 
 	var regIdx registrationIndex
 	if err := s.getJSON(regURL, &regIdx); err != nil {
 		var he *httpStatusError
 		if errors.As(err, &he) && he.Code == http.StatusNotFound {
-			logger.Debug("[%s] %q not found (404)", s.sourceName, packageID)
+			logDebug("[%s] %q not found (404)", s.sourceName, packageID)
 			return nil, fmt.Errorf("package %q not found", packageID)
 		}
 		return nil, err
@@ -384,7 +383,7 @@ func (s *NugetService) SearchExact(packageID string) (*PackageInfo, error) {
 	}
 
 	if len(versions) == 0 || latestLeaf == nil {
-		logger.Debug("[%s] %q has no listed versions", s.sourceName, packageID)
+		logDebug("[%s] %q has no listed versions", s.sourceName, packageID)
 		return nil, fmt.Errorf("package %q not found", packageID)
 	}
 
@@ -405,7 +404,7 @@ func (s *NugetService) SearchExact(packageID string) (*PackageInfo, error) {
 		tags.Add(t)
 	}
 
-	logger.Debug("[%s] found %q: %d versions, latest stable=%s", s.sourceName, packageID, len(versions), meta.Version)
+	logDebug("[%s] found %q: %d versions, latest stable=%s", s.sourceName, packageID, len(versions), meta.Version)
 
 	pkg := &PackageInfo{
 		ID:            meta.ID,
@@ -453,7 +452,7 @@ func (s *NugetService) fetchSearchResult(packageID string) *SearchResult {
 	params.Set("prerelease", "true")
 	var resp searchResponse
 	if err := s.getJSON(s.searchBase+"?"+params.Encode(), &resp); err != nil {
-		logger.Debug("[%s] download fetch failed for %q: %v", s.sourceName, packageID, err)
+		logDebug("[%s] download fetch failed for %q: %v", s.sourceName, packageID, err)
 		return nil
 	}
 	for i := range resp.Data {

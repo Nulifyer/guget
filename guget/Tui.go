@@ -7,63 +7,12 @@ import (
 	"strings"
 	"time"
 
-	"logger"
-
 	bubbles_list "github.com/charmbracelet/bubbles/list"
 	bubbles_spinner "github.com/charmbracelet/bubbles/spinner"
 	bubbles_textinpute "github.com/charmbracelet/bubbles/textinput"
 	bubbles_viewport "github.com/charmbracelet/bubbles/viewport"
 	bubble_tea "github.com/charmbracelet/bubbletea"
 	lipgloss "github.com/charmbracelet/lipgloss"
-)
-
-// ─────────────────────────────────────────────
-// Color palette
-// ─────────────────────────────────────────────
-
-var (
-	colorBorder lipgloss.TerminalColor = lipgloss.Color("#30363d")
-	colorMuted  lipgloss.TerminalColor = lipgloss.Color("#484f58")
-	colorText   lipgloss.TerminalColor = lipgloss.Color("#e6edf3")
-	colorSubtle lipgloss.TerminalColor = lipgloss.Color("#8b949e")
-	colorAccent lipgloss.TerminalColor = lipgloss.Color("#58a6ff")
-	colorGreen  lipgloss.TerminalColor = lipgloss.Color("#3fb950")
-	colorYellow lipgloss.TerminalColor = lipgloss.Color("#d29922")
-	colorRed    lipgloss.TerminalColor = lipgloss.Color("#f85149")
-	colorPurple lipgloss.TerminalColor = lipgloss.Color("#bc8cff")
-	colorCyan   lipgloss.TerminalColor = lipgloss.Color("#56d7c2")
-)
-
-// ─────────────────────────────────────────────
-// Reusable styles
-// ─────────────────────────────────────────────
-
-var (
-	// text styles
-	styleMuted      = lipgloss.NewStyle().Foreground(colorMuted)
-	styleSubtle     = lipgloss.NewStyle().Foreground(colorSubtle)
-	styleSubtleBold = lipgloss.NewStyle().Foreground(colorSubtle).Bold(true)
-	styleText       = lipgloss.NewStyle().Foreground(colorText)
-	styleTextBold   = lipgloss.NewStyle().Foreground(colorText).Bold(true)
-	styleAccent     = lipgloss.NewStyle().Foreground(colorAccent)
-	styleAccentBold = lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
-	styleGreen      = lipgloss.NewStyle().Foreground(colorGreen)
-	styleYellow     = lipgloss.NewStyle().Foreground(colorYellow)
-	styleYellowBold = lipgloss.NewStyle().Foreground(colorYellow).Bold(true)
-	styleRed        = lipgloss.NewStyle().Foreground(colorRed)
-	styleRedBold    = lipgloss.NewStyle().Foreground(colorRed).Bold(true)
-	stylePurple     = lipgloss.NewStyle().Foreground(colorPurple)
-	styleCyan       = lipgloss.NewStyle().Foreground(colorCyan)
-	styleBorder     = lipgloss.NewStyle().Foreground(colorBorder)
-
-	// Layout styles
-	styleHeaderTitle   = styleAccentBold.Padding(0, 2)
-	styleHeaderBar     = lipgloss.NewStyle().BorderBottom(true).BorderStyle(lipgloss.NormalBorder()).BorderBottomForeground(colorBorder)
-	styleFooterBar     = lipgloss.NewStyle().BorderTop(true).BorderStyle(lipgloss.NormalBorder()).BorderTopForeground(colorBorder).Padding(0, 2)
-	styleOverlay       = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colorAccent).Padding(1, 2)
-	styleOverlayDanger = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colorRed).Padding(1, 2)
-	stylePanel         = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colorBorder).Padding(0, 1)
-	stylePanelNoPad    = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colorBorder)
 )
 
 // ─────────────────────────────────────────────
@@ -838,7 +787,7 @@ func (m *Model) applyVersion(pkgName, version string, targetProject *ParsedProje
 	m.rebuildPackageRows()
 	m.refreshDetail()
 
-	logger.Info("applyVersion: %s → %s (%d file(s) to write)", pkgName, version, len(toWrite))
+	logInfo("applyVersion: %s → %s (%d file(s) to write)", pkgName, version, len(toWrite))
 	if len(toWrite) == 0 {
 		return nil
 	}
@@ -849,9 +798,9 @@ func (m *Model) applyVersion(pkgName, version string, targetProject *ParsedProje
 				continue
 			}
 			seen[wt.filePath] = true
-			logger.Debug("writing %s to %s", pkgName, wt.filePath)
+			logDebug("writing %s to %s", pkgName, wt.filePath)
 			if err := UpdatePackageVersion(wt.filePath, pkgName, version); err != nil {
-				logger.Warn("write failed for %s: %v", wt.filePath, err)
+				logWarn("write failed for %s: %v", wt.filePath, err)
 				return writeResultMsg{err: err}
 			}
 		}
@@ -877,14 +826,14 @@ func runDotnetRestore(projects []*ParsedProject) bubble_tea.Cmd {
 			if p.FilePath == "" {
 				continue
 			}
-			logger.Debug("dotnet restore: %s", p.FilePath)
+			logDebug("dotnet restore: %s", p.FilePath)
 			cmd := exec.Command("dotnet", "restore", p.FilePath)
 			out, err := cmd.CombinedOutput()
 			if err != nil {
-				logger.Warn("restore failed for %s: %v\n%s", p.FilePath, err, strings.TrimSpace(string(out)))
+				logWarn("restore failed for %s: %v\n%s", p.FilePath, err, strings.TrimSpace(string(out)))
 				lastErr = fmt.Errorf("%w\n%s", err, strings.TrimSpace(string(out)))
 			} else {
-				logger.Info("restore succeeded for %s", p.FileName)
+				logInfo("restore succeeded for %s", p.FileName)
 			}
 		}
 		return restoreResultMsg{err: lastErr}
@@ -1352,7 +1301,7 @@ func (m *Model) doSearchCmd(query string) bubble_tea.Cmd {
 				return searchResultsMsg{results: results, query: query}
 			}
 			lastErr = err
-			logger.Warn("search source [%s] failed: %v", svc.SourceName(), err)
+			logWarn("search source [%s] failed: %v", svc.SourceName(), err)
 		}
 		return searchResultsMsg{query: query, err: lastErr}
 	}
@@ -1396,7 +1345,7 @@ func (m *Model) addPackageToProject(pkgName, version string, project *ParsedProj
 	m.focus = focusPackages
 	filePath := project.FilePath
 	return func() bubble_tea.Msg {
-		logger.Info("AddPackageReference: %s %s → %s", pkgName, version, filePath)
+		logInfo("AddPackageReference: %s %s → %s", pkgName, version, filePath)
 		if err := AddPackageReference(filePath, pkgName, version); err != nil {
 			return writeResultMsg{err: err}
 		}
@@ -1462,7 +1411,7 @@ func (m *Model) removePackage(pkgName string) bubble_tea.Cmd {
 	m.clampOffset()
 	m.refreshDetail()
 
-	logger.Info("removePackage: %s (%d file(s) to write)", pkgName, len(toWrite))
+	logInfo("removePackage: %s (%d file(s) to write)", pkgName, len(toWrite))
 	if len(toWrite) == 0 {
 		return nil
 	}
@@ -1473,9 +1422,9 @@ func (m *Model) removePackage(pkgName string) bubble_tea.Cmd {
 				continue
 			}
 			seen[wt.filePath] = true
-			logger.Debug("RemovePackageReference: %s from %s", pkgName, wt.filePath)
+			logDebug("RemovePackageReference: %s from %s", pkgName, wt.filePath)
 			if err := RemovePackageReference(wt.filePath, pkgName); err != nil {
-				logger.Warn("remove failed for %s: %v", wt.filePath, err)
+				logWarn("remove failed for %s: %v", wt.filePath, err)
 				return writeResultMsg{err: err}
 			}
 		}
@@ -2428,7 +2377,7 @@ func (m Model) renderSearchOverlay() string {
 			}
 
 			line := prefix + pkgID + ver + suffix
-				lines = append(lines, line)
+			lines = append(lines, line)
 		}
 	}
 

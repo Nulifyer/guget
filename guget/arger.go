@@ -1,12 +1,10 @@
-package arger
+package main
 
 import (
 	"fmt"
 	"os"
 	"strings"
 	"time"
-
-	logger "logger"
 
 	xterm "golang.org/x/term"
 )
@@ -217,7 +215,7 @@ func RegisterFlag(f IFlag) {
 		aliasToFlag[alias] = f
 	}
 	registeredFlags[f.GetName()] = f
-	logger.Debug("Registered flag %s with aliases %v", f.GetName(), f.GetAliases())
+	logDebug("Registered flag %s with aliases %v", f.GetName(), f.GetAliases())
 }
 
 func validateFlag(f IFlag) {
@@ -235,13 +233,13 @@ func validateFlag(f IFlag) {
 	}
 }
 
-func Parse() (map[string]IParsedFlag, []string) {
+func ParseFlags() (map[string]IParsedFlag, []string) {
 	if len(registeredFlags) == 0 && len(os.Args) > 1 {
 		return nil, nil
 	}
 
 	args := os.Args[1:]
-	logger.Trace("Start Parse args: %v", args)
+	logTrace("Start Parse args: %v", args)
 
 	var (
 		parsedFlags      = make(map[string]IParsedFlag)
@@ -268,7 +266,7 @@ func Parse() (map[string]IParsedFlag, []string) {
 				if _, ok := lastFlag.(Flag[bool]); ok {
 					if lastFlag.(Flag[bool]).Parser == nil {
 						parsedFlags[lastFlag.GetName()] = ParsedFlag[bool]{flag: func() *Flag[bool] { f := lastFlag.(Flag[bool]); return &f }(), Value: true}
-						logger.Debug("Set switch flag %s = true", lastFlag.GetName())
+						logDebug("Set switch flag %s = true", lastFlag.GetName())
 						lastFlag = nil
 					}
 				}
@@ -276,13 +274,13 @@ func Parse() (map[string]IParsedFlag, []string) {
 				usageError("Unknown flag: %s", arg)
 			}
 		} else if lastFlag != nil {
-			logger.Trace("Parsing value %s for flag %s", arg, lastFlag.GetName())
+			logTrace("Parsing value %s for flag %s", arg, lastFlag.GetName())
 			pf, err := lastFlag.parse(arg)
 			if err != nil {
 				flagError(lastFlag, "Failed to parse value. %s", err.Error())
 			}
 			parsedFlags[lastFlag.GetName()] = pf
-			logger.Debug("Parsed flag %s = %v", lastFlag.GetName(), pf.GetValue())
+			logDebug("Parsed flag %s = %v", lastFlag.GetName(), pf.GetValue())
 			lastFlag = nil
 		} else {
 			positionalValues = append(positionalValues, arg)
@@ -299,13 +297,13 @@ func Parse() (map[string]IParsedFlag, []string) {
 		found := false
 		for _, flag := range registeredFlags {
 			if _, exists := parsedFlags[flag.GetName()]; !exists && flag.GetPositional() {
-				logger.Trace("Parsing positional value %s for flag %s", value, flag.GetName())
+				logTrace("Parsing positional value %s for flag %s", value, flag.GetName())
 				pf, err := flag.parse(value)
 				if err != nil {
 					flagError(flag, "Failed to parse value. %s", err.Error())
 				}
 				parsedFlags[flag.GetName()] = pf
-				logger.Debug("Assigned positional %s = %v", flag.GetName(), pf.GetValue())
+				logDebug("Assigned positional %s = %v", flag.GetName(), pf.GetValue())
 				found = true
 				break
 			}
@@ -320,7 +318,7 @@ func Parse() (map[string]IParsedFlag, []string) {
 		if _, exists := parsedFlags[flag.GetName()]; !exists {
 			if def := flag.defaultParsed(); def != nil {
 				parsedFlags[flag.GetName()] = def
-				logger.Debug("Applying default for flag %s = %v", flag.GetName(), def.GetValue())
+				logDebug("Applying default for flag %s = %v", flag.GetName(), def.GetValue())
 			}
 		}
 	}
@@ -421,26 +419,29 @@ func wrapText(s string, maxWidth int) []string {
 // ─────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────
+
 func Optional[T any](v T) *T { return &v }
 
 func usageError(format string, args ...any) {
-	logger.Error(format, args...)
+	logError(format, args...)
 	PrintUsage()
 	os.Exit(1)
 }
+
 func flagError(f IFlag, format string, args ...any) {
-	logger.Error("error with flag %s (%s): %s", f.GetName(), strings.Join(f.GetAliases(), ", "), fmt.Sprintf(format, args...))
+	logError("error with flag %s (%s): %s", f.GetName(), strings.Join(f.GetAliases(), ", "), fmt.Sprintf(format, args...))
 	PrintUsage()
 	os.Exit(1)
 }
-func Get[T any](flags map[string]IParsedFlag, name string) T {
+
+func GetFlag[T any](flags map[string]IParsedFlag, name string) T {
 	pf, exists := flags[name]
 	if !exists {
-		logger.Fatal("Flag %s was not registered", name)
+		logFatal("Flag %s was not registered", name)
 	}
 	typed, ok := pf.(ParsedFlag[T])
 	if !ok {
-		logger.Fatal("Flag %s is not of expected type", name)
+		logFatal("Flag %s is not of expected type", name)
 	}
 	return typed.Value
 }

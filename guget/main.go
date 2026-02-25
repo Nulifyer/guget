@@ -11,9 +11,6 @@ import (
 	"sync"
 	"syscall"
 
-	"arger"
-	"logger"
-
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -40,7 +37,7 @@ func (b *logBuffer) Write(p []byte) (int, error) {
 	b.mu.Unlock()
 	if send != nil {
 		// Use a goroutine so callers on the Bubbletea event loop goroutine
-		// (e.g. logger calls inside Update) don't deadlock p.Send's channel.
+		// (e.g. log calls inside Update) don't deadlock p.Send's channel.
 		go send(logLineMsg{line: line})
 	} else {
 		// Before the TUI starts, mirror to stderr so fatal errors are visible.
@@ -79,78 +76,77 @@ type BuiltFlags struct {
 	Theme      string
 }
 
-func BuildFlags(flags map[string]arger.IParsedFlag) BuiltFlags {
+func BuildFlags(flags map[string]IParsedFlag) BuiltFlags {
 	return BuiltFlags{
-		NoColor:    arger.Get[bool](flags, Flag_NoColor),
-		Verbosity:  arger.Get[string](flags, Flag_Verbosity),
-		ProjectDir: arger.Get[string](flags, Flag_ProjectDir),
-		Version:    arger.Get[bool](flags, Flag_Version),
-		LogFile:    arger.Get[string](flags, Flag_LogFile),
-		Theme:      arger.Get[string](flags, Flag_Theme),
+		NoColor:    GetFlag[bool](flags, Flag_NoColor),
+		Verbosity:  GetFlag[string](flags, Flag_Verbosity),
+		ProjectDir: GetFlag[string](flags, Flag_ProjectDir),
+		Version:    GetFlag[bool](flags, Flag_Version),
+		LogFile:    GetFlag[string](flags, Flag_LogFile),
+		Theme:      GetFlag[string](flags, Flag_Theme),
 	}
 }
 
 // initCLI registers CLI flags, parses os.Args, and returns the resolved flag values.
 // Named initCLI (not Init) to avoid confusion with Model.Init() in the same package.
 func initCLI() BuiltFlags {
-	logger.SetColor(false)
-	logger.SetLevel(logger.LevelWarn)
+	logSetLevel(LogLevelWarn)
 	// Allow LOG_LEVEL env var to override the pre-parse default; --verbose will
 	// override it again after flags are parsed below.
 	if envLogLevel := os.Getenv("LOG_LEVEL"); envLogLevel != "" {
-		logger.SetLevel(logger.ParseLevel(envLogLevel))
+		logSetLevel(logParseLevel(envLogLevel))
 	}
 
-	arger.RegisterFlag(arger.Flag[bool]{
+	RegisterFlag(Flag[bool]{
 		Name:        Flag_Version,
 		Aliases:     []string{"-V", "--version"},
-		Default:     arger.Optional(false),
+		Default:     Optional(false),
 		Description: "Print the version and exit",
 	})
-	arger.RegisterFlag(arger.Flag[bool]{
+	RegisterFlag(Flag[bool]{
 		Name:        Flag_NoColor,
 		Aliases:     []string{"-nc", "--no-color"},
-		Default:     arger.Optional(false),
+		Default:     Optional(false),
 		Description: "Disable colored output in the terminal",
 	})
-	arger.RegisterFlag(arger.Flag[string]{
+	RegisterFlag(Flag[string]{
 		Name:           Flag_Verbosity,
 		Aliases:        []string{"-v", "--verbose"},
-		Default:        arger.Optional("warn"),
+		Default:        Optional("warn"),
 		Description:    "Set the logging verbosity level",
 		ExpectedValues: []string{"", "none", "error", "err", "warn", "warning", "info", "debug", "dbg", "trace", "trc"},
 	})
-	arger.RegisterFlag(arger.Flag[string]{
+	RegisterFlag(Flag[string]{
 		Name:    Flag_ProjectDir,
 		Aliases: []string{"-p", "--project"},
 		DefaultFunc: func() string {
 			dir, err := os.Getwd()
 			if err != nil {
-				logger.Fatal("Couldn't get current working directory")
+				logFatal("Couldn't get current working directory")
 			}
 			return dir
 		},
 		Description: "Set the target project directory (defaults to current working directory)",
 	})
-	arger.RegisterFlag(arger.Flag[string]{
+	RegisterFlag(Flag[string]{
 		Name:        Flag_LogFile,
 		Aliases:     []string{"-lf", "--log-file"},
-		Default:     arger.Optional(""),
+		Default:     Optional(""),
 		Description: "Write all log output to this file (in addition to the TUI log panel)",
 	})
-	arger.RegisterFlag(arger.Flag[string]{
+	RegisterFlag(Flag[string]{
 		Name:           Flag_Theme,
 		Aliases:        []string{"-t", "--theme"},
-		Default:        arger.Optional("auto"),
+		Default:        Optional("auto"),
 		Description:    "Color theme",
 		ExpectedValues: validThemeNames,
 	})
 
-	parsedFlags, _ := arger.Parse()
+	parsedFlags, _ := ParseFlags()
 	builtFlags := BuildFlags(parsedFlags)
 
-	logger.SetLevel(logger.ParseLevel(builtFlags.Verbosity))
-	logger.SetColor(!builtFlags.NoColor)
+	logSetLevel(logParseLevel(builtFlags.Verbosity))
+	logSetColor(!builtFlags.NoColor)
 
 	if builtFlags.Version {
 		fmt.Printf("guget %s\n", version)
@@ -180,7 +176,7 @@ func main() {
 
 	// Redirect logger to an in-memory buffer immediately so that all startup
 	// logs are captured for the TUI log panel. Before p.Send is wired up,
-	// Write also mirrors to stderr so fatal errors are still visible.
+	// Write also mirrors to stderr so fatal errors are visible.
 	buf := &logBuffer{}
 	if builtFlags.LogFile != "" {
 		f, err := os.Create(builtFlags.LogFile)
@@ -188,53 +184,53 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Failed to open log file %q: %v\n", builtFlags.LogFile, err)
 			os.Exit(1)
 		}
-		logger.SetOutput(io.MultiWriter(buf, f))
+		logSetOutput(io.MultiWriter(buf, f))
 	} else {
-		logger.SetOutput(buf)
+		logSetOutput(buf)
 	}
 
 	fullProjectPath, err := filepath.Abs(builtFlags.ProjectDir)
 	if err != nil {
-		logger.Fatal("Couldn't get absolute path for project directory: %v", err)
+		logFatal("Couldn't get absolute path for project directory: %v", err)
 	}
-	logger.Info("Starting guget with project directory: %s", fullProjectPath)
+	logInfo("Starting guget with project directory: %s", fullProjectPath)
 
 	// find + parse projects
 	projectFiles, err := FindProjectFiles(fullProjectPath)
 	if err != nil {
-		logger.Fatal("Error finding projects: %v", err)
+		logFatal("Error finding projects: %v", err)
 	}
-	logger.Info("Found %d project(s)", len(projectFiles))
+	logInfo("Found %d project(s)", len(projectFiles))
 
 	var parsedProjects []*ParsedProject
 	for _, file := range projectFiles {
 		project, err := ParseCsproj(file)
 		if err != nil {
-			logger.Fatal("Error parsing project %s: %v", file, err)
+			logFatal("Error parsing project %s: %v", file, err)
 		}
 		parsedProjects = append(parsedProjects, project)
 	}
 
 	if len(parsedProjects) == 0 {
-		logger.Warn("No .csproj or .fsproj files found in: %s", fullProjectPath)
+		logWarn("No .csproj or .fsproj files found in: %s", fullProjectPath)
 		os.Exit(1)
 	}
 
 	// detect nuget sources
 	sources := DetectSources(fullProjectPath)
-	logger.Info("Detected %d NuGet source(s)", len(sources))
+	logInfo("Detected %d NuGet source(s)", len(sources))
 
 	var nugetServices []*NugetService
 	for _, src := range sources {
 		svc, err := NewNugetService(src)
 		if err != nil {
-			logger.Warn("Failed to initialise NuGet source [%s]: %v", src.Name, err)
+			logWarn("Failed to initialise NuGet source [%s]: %v", src.Name, err)
 			continue
 		}
 		nugetServices = append(nugetServices, svc)
 	}
 	if len(nugetServices) == 0 {
-		logger.Fatal("No reachable NuGet sources found")
+		logFatal("No reachable NuGet sources found")
 	}
 
 	// Count distinct packages so the TUI can track loading progress.
@@ -290,7 +286,7 @@ func main() {
 						sourceName = svc.SourceName()
 						break
 					}
-					logger.Debug("Source [%s] failed for %s: %v", svc.SourceName(), name, lastErr)
+					logDebug("Source [%s] failed for %s: %v", svc.SourceName(), name, lastErr)
 				}
 				p.Send(packageReadyMsg{
 					name:   name,
