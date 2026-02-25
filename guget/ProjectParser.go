@@ -8,7 +8,26 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 )
+
+// writeFileRetry wraps os.WriteFile with retries to handle transient file
+// locks on Windows (antivirus, IDE file watchers, indexing services).
+func writeFileRetry(path string, data []byte, perm os.FileMode) error {
+	const maxAttempts = 5
+	var err error
+	for i := range maxAttempts {
+		err = os.WriteFile(path, data, perm)
+		if err == nil {
+			return nil
+		}
+		if i < maxAttempts-1 {
+			logger.Debug("write retry %d/%d for %s: %v", i+1, maxAttempts, path, err)
+			time.Sleep(time.Duration(50*(i+1)) * time.Millisecond)
+		}
+	}
+	return err
+}
 
 type ImportElement struct {
 	Project string `xml:"Project,attr"`
@@ -253,7 +272,7 @@ func RemovePackageReference(filePath, pkgName string) error {
 		return nil
 	}
 
-	return os.WriteFile(filePath, []byte(strings.Join(out, "\n")), 0644)
+	return writeFileRetry(filePath, []byte(strings.Join(out, "\n")), 0644)
 }
 
 
@@ -284,7 +303,7 @@ func UpdatePackageVersion(filePath, pkgName, newVersion string) error {
 		return nil
 	}
 
-	return os.WriteFile(filePath, []byte(strings.Join(lines, "\n")), 0644)
+	return writeFileRetry(filePath, []byte(strings.Join(lines, "\n")), 0644)
 }
 
 // AddPackageReference inserts a new <PackageReference Include="pkgName" Version="version" />
@@ -363,5 +382,5 @@ func AddPackageReference(filePath, pkgName, version string) error {
 		}
 	}
 
-	return os.WriteFile(filePath, []byte(strings.Join(lines, "\n")), 0644)
+	return writeFileRetry(filePath, []byte(strings.Join(lines, "\n")), 0644)
 }
