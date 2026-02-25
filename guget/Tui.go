@@ -1944,7 +1944,8 @@ func (m Model) renderDetail(row packageRow) string {
 					sevStyle = styleTextBold
 				}
 				sevStr := sevStyle.Render(sev)
-				s.WriteString("  " + sevStr + "  " + vuln.AdvisoryURL + "\n")
+				s.WriteString("  " + sevStr + "\n")
+				s.WriteString("  " + hardWrap(vuln.AdvisoryURL, w-2) + "\n")
 			}
 			s.WriteString("\n")
 		}
@@ -2609,6 +2610,26 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n-1] + "…"
+}
+
+// hardWrap breaks s at exactly width characters (no word boundaries).
+// Useful for long strings with no spaces, like URLs.
+func hardWrap(s string, width int) string {
+	if width <= 0 || len(s) <= width {
+		return s
+	}
+	var b strings.Builder
+	for i := 0; i < len(s); i += width {
+		end := i + width
+		if end > len(s) {
+			end = len(s)
+		}
+		if i > 0 {
+			b.WriteByte('\n')
+		}
+		b.WriteString(s[i:end])
+	}
+	return b.String()
 }
 
 func wordWrap(s string, width int) string {
