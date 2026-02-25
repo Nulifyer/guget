@@ -7,10 +7,6 @@ import (
 	"strings"
 )
 
-// ─────────────────────────────────────────────
-// FrameworkFamily groups compatible frameworks
-// ─────────────────────────────────────────────
-
 type FrameworkFamily string
 
 const (
@@ -20,10 +16,6 @@ const (
 	FamilyCoreApp  FrameworkFamily = "netcoreapp"  // netcoreapp3.1 etc
 	FamilyUnknown  FrameworkFamily = "unknown"
 )
-
-// ─────────────────────────────────────────────
-// TargetFramework
-// ─────────────────────────────────────────────
 
 type TargetFramework struct {
 	Raw    string

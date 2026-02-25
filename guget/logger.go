@@ -9,10 +9,6 @@ import (
 	lipgloss "github.com/charmbracelet/lipgloss"
 )
 
-// ─────────────────────────────────────────────
-// Log levels
-// ─────────────────────────────────────────────
-
 type LogLevel int
 
 const (
@@ -23,10 +19,6 @@ const (
 	LogLevelDebug
 	LogLevelTrace
 )
-
-// ─────────────────────────────────────────────
-// Log state
-// ─────────────────────────────────────────────
 
 var (
 	logLevel        = LogLevelNone
@@ -56,10 +48,6 @@ func rebuildLogStyles() {
 	logStyleFatal = lipgloss.NewStyle().Foreground(colorRed)
 }
 
-// ─────────────────────────────────────────────
-// Configuration
-// ─────────────────────────────────────────────
-
 func logSetOutput(w io.Writer) {
 	logOutWriter = w
 	logErrWriter = w
@@ -87,10 +75,6 @@ func logParseLevel(levelStr string) LogLevel {
 	}
 }
 
-// ─────────────────────────────────────────────
-// Internal helpers
-// ─────────────────────────────────────────────
-
 func logStdOut() io.Writer {
 	if logOutWriter != nil {
 		return logOutWriter
@@ -111,10 +95,6 @@ func logStdErr() io.Writer {
 func logUseColor() bool {
 	return logColorEnabled && logOutWriter == nil
 }
-
-// ─────────────────────────────────────────────
-// Log functions
-// ─────────────────────────────────────────────
 
 func logTrace(format string, v ...interface{}) {
 	if logLevel >= LogLevelTrace {

@@ -7,10 +7,6 @@ import (
 	"testing"
 )
 
-// ─────────────────────────────────────────────
-// FindProjectFiles — picks up both csproj and fsproj
-// ─────────────────────────────────────────────
-
 func TestFindProjectFiles_MixedFormats(t *testing.T) {
 	td := testDataDir(t)
 	files, err := FindProjectFiles(td)
@@ -36,10 +32,6 @@ func TestFindProjectFiles_MixedFormats(t *testing.T) {
 		t.Fatal("expected at least one .fsproj file")
 	}
 }
-
-// ─────────────────────────────────────────────
-// FindProjectFiles — discovers all projects including circular-ref ones
-// ─────────────────────────────────────────────
 
 func TestFindProjectFiles_IncludesCircularRefProjects(t *testing.T) {
 	td := testDataDir(t)
@@ -67,10 +59,6 @@ func TestFindProjectFiles_IncludesCircularRefProjects(t *testing.T) {
 	}
 }
 
-// ─────────────────────────────────────────────
-// FindProjectFiles — skips ignored directories
-// ─────────────────────────────────────────────
-
 func TestFindProjectFiles_SkipsIgnoredDirs(t *testing.T) {
 	td := testDataDir(t)
 	files, err := FindProjectFiles(td)
@@ -95,10 +83,6 @@ func TestFindProjectFiles_SkipsIgnoredDirs(t *testing.T) {
 	}
 }
 
-// ─────────────────────────────────────────────
-// FindProjectFiles — discovers expected count of projects
-// ─────────────────────────────────────────────
-
 func TestFindProjectFiles_ExpectedCount(t *testing.T) {
 	td := testDataDir(t)
 	files, err := FindProjectFiles(td)
@@ -118,10 +102,6 @@ func TestFindProjectFiles_ExpectedCount(t *testing.T) {
 	}
 }
 
-// ─────────────────────────────────────────────
-// FindProjectFiles — empty directory returns no results
-// ─────────────────────────────────────────────
-
 func TestFindProjectFiles_EmptyDir(t *testing.T) {
 	dir := t.TempDir()
 	files, err := FindProjectFiles(dir)
@@ -133,20 +113,12 @@ func TestFindProjectFiles_EmptyDir(t *testing.T) {
 	}
 }
 
-// ─────────────────────────────────────────────
-// FindProjectFiles — nonexistent directory returns error
-// ─────────────────────────────────────────────
-
 func TestFindProjectFiles_NonexistentDir(t *testing.T) {
 	_, err := FindProjectFiles(filepath.Join(os.TempDir(), "nonexistent_guget_test_dir"))
 	if err == nil {
 		t.Fatal("expected error for nonexistent directory")
 	}
 }
-
-// ─────────────────────────────────────────────
-// FindProjectFiles — only returns .csproj and .fsproj, not .props
-// ─────────────────────────────────────────────
 
 func TestFindProjectFiles_ExcludesPropsFiles(t *testing.T) {
 	td := testDataDir(t)

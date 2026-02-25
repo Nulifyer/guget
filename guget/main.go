@@ -15,10 +15,6 @@ import (
 
 var version = "dev"
 
-// ─────────────────────────────────────────────
-// logBuffer — thread-safe in-memory log sink
-// ─────────────────────────────────────────────
-
 type logBuffer struct {
 	mu    sync.Mutex
 	lines []string
@@ -52,10 +48,6 @@ func (b *logBuffer) Lines() []string {
 	copy(cp, b.lines)
 	return cp
 }
-
-// ─────────────────────────────────────────────
-// CLI flags
-// ─────────────────────────────────────────────
 
 const (
 	Flag_NoColor    = "no-color"
@@ -155,27 +147,17 @@ func initCLI() BuiltFlags {
 	return builtFlags
 }
 
-// ─────────────────────────────────────────────
-// nugetResult (shared between main and tui)
-// ─────────────────────────────────────────────
-
 type nugetResult struct {
 	pkg    *PackageInfo
 	source string
 	err    error
 }
 
-// ─────────────────────────────────────────────
-// Main
-// ─────────────────────────────────────────────
-
 func main() {
 	builtFlags := initCLI()
 	initTheme(builtFlags.Theme, builtFlags.NoColor)
 
-	// Redirect logger to an in-memory buffer immediately so that all startup
-	// logs are captured for the TUI log panel. Before p.Send is wired up,
-	// Write also mirrors to stderr so fatal errors are visible.
+	// Capture all startup logs for the TUI log panel.
 	buf := &logBuffer{}
 	if builtFlags.LogFile != "" {
 		f, err := os.Create(builtFlags.LogFile)
@@ -358,13 +340,8 @@ func main() {
 	}
 }
 
-// ─────────────────────────────────────────────
-// Helper Functions
-// ─────────────────────────────────────────────
-
-// enrichFromNugetOrg merges vulnerability, download, verification, and
-// ProjectURL data from a nuget.org lookup into a PackageInfo that was
-// originally fetched from a private feed.
+// enrichFromNugetOrg merges vulnerability, download, and verification data
+// from nuget.org into a PackageInfo fetched from a private feed.
 func enrichFromNugetOrg(info, nugetInfo *PackageInfo) {
 	// Build a version→vulnerabilities map from nuget.org data.
 	nugetVulns := make(map[string][]PackageVulnerability, len(nugetInfo.Versions))

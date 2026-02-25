@@ -12,10 +12,6 @@ import (
 
 )
 
-// ─────────────────────────────────────────────
-// NuGet V3 API types
-// ─────────────────────────────────────────────
-
 type serviceIndex struct {
 	Resources []struct {
 		ID   string `json:"@id"`
@@ -162,12 +158,7 @@ type deprecationRaw struct {
 	} `json:"alternatePackage"`
 }
 
-// ─────────────────────────────────────────────
-// NugetService
-// ─────────────────────────────────────────────
-
-// authTransport injects Basic Auth into every outgoing request and retries on
-// HTTP 401 by invoking NuGet credential providers (e.g. Azure Artifacts).
+// authTransport injects Basic Auth and retries on 401 via credential providers.
 type authTransport struct {
 	base       http.RoundTripper
 	sourceURL  string
@@ -530,10 +521,6 @@ func (p *PackageInfo) VersionsSince(since string) []PackageVersion {
 	}
 	return result
 }
-
-// ─────────────────────────────────────────────
-// Helpers
-// ─────────────────────────────────────────────
 
 type StringOrArray []string
 

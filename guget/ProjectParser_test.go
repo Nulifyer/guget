@@ -18,10 +18,6 @@ func testDataDir(t *testing.T) string {
 	return filepath.Join(filepath.Dir(wd), "test-dotnet")
 }
 
-// ─────────────────────────────────────────────
-// findDirectoryBuildProps
-// ─────────────────────────────────────────────
-
 func TestFindDirectoryBuildProps_Found(t *testing.T) {
 	td := testDataDir(t)
 	// Starting from a subdirectory, should find Directory.Build.props at test-dotnet root
@@ -42,10 +38,6 @@ func TestFindDirectoryBuildProps_NotFound(t *testing.T) {
 		t.Fatalf("expected empty string, got %s", got)
 	}
 }
-
-// ─────────────────────────────────────────────
-// resolveImportPath
-// ─────────────────────────────────────────────
 
 func TestResolveImportPath_Relative(t *testing.T) {
 	got, err := resolveImportPath("build_info.props", "/proj/src", "/proj/src")
@@ -85,10 +77,6 @@ func TestResolveImportPath_UnresolvedVariable(t *testing.T) {
 	}
 }
 
-// ─────────────────────────────────────────────
-// ParseCsproj — Directory.Build.props (implicit)
-// ─────────────────────────────────────────────
-
 func TestParseCsproj_ImplicitBuildProps(t *testing.T) {
 	td := testDataDir(t)
 	// HttpHelper has only Newtonsoft.Json in its csproj.
@@ -118,10 +106,6 @@ func TestParseCsproj_ImplicitBuildProps(t *testing.T) {
 	}
 }
 
-// ─────────────────────────────────────────────
-// ParseCsproj — nested import (Directory.Build.props → shared_versions.props)
-// ─────────────────────────────────────────────
-
 func TestParseCsproj_NestedPropsImport(t *testing.T) {
 	td := testDataDir(t)
 	proj, err := ParseCsproj(filepath.Join(td, "Serialization", "Serialization.csproj"))
@@ -138,10 +122,6 @@ func TestParseCsproj_NestedPropsImport(t *testing.T) {
 		t.Fatalf("expected source shared_versions.props, got %s", source)
 	}
 }
-
-// ─────────────────────────────────────────────
-// ParseCsproj — explicit <Import> in csproj
-// ─────────────────────────────────────────────
 
 func TestParseCsproj_ExplicitImport(t *testing.T) {
 	td := testDataDir(t)
@@ -166,10 +146,6 @@ func TestParseCsproj_ExplicitImport(t *testing.T) {
 	}
 }
 
-// ─────────────────────────────────────────────
-// ParseCsproj — .fsproj works the same way
-// ─────────────────────────────────────────────
-
 func TestParseCsproj_FSharpProject(t *testing.T) {
 	td := testDataDir(t)
 	proj, err := ParseCsproj(filepath.Join(td, "FSharpLib", "FSharpLib.fsproj"))
@@ -191,10 +167,6 @@ func TestParseCsproj_FSharpProject(t *testing.T) {
 	}
 }
 
-// ─────────────────────────────────────────────
-// ParseCsproj — csproj-defined package takes precedence over props
-// ─────────────────────────────────────────────
-
 func TestParseCsproj_CsprojTakesPrecedence(t *testing.T) {
 	td := testDataDir(t)
 	// CapchaValidator.csproj has its own packages.
@@ -210,10 +182,6 @@ func TestParseCsproj_CsprojTakesPrecedence(t *testing.T) {
 		t.Fatalf("Microsoft.Extensions.Logging source should be CapchaValidator.csproj, got %s", loggingSource)
 	}
 }
-
-// ─────────────────────────────────────────────
-// ParseCsproj — circular ProjectReference (ServiceA ↔ ServiceB)
-// ─────────────────────────────────────────────
 
 func TestParseCsproj_CircularRefServiceA(t *testing.T) {
 	td := testDataDir(t)
@@ -259,10 +227,6 @@ func TestParseCsproj_CircularRefServiceB(t *testing.T) {
 	}
 }
 
-// ─────────────────────────────────────────────
-// Shared package across circular-ref projects gets same props source
-// ─────────────────────────────────────────────
-
 func TestParseCsproj_CircularRefSharedPropsSource(t *testing.T) {
 	td := testDataDir(t)
 	projA, err := ParseCsproj(filepath.Join(td, "ServiceA", "ServiceA.csproj"))
@@ -285,10 +249,6 @@ func TestParseCsproj_CircularRefSharedPropsSource(t *testing.T) {
 	}
 }
 
-// ─────────────────────────────────────────────
-// SourceFileForPackage — fallback to FilePath
-// ─────────────────────────────────────────────
-
 func TestSourceFileForPackage_Fallback(t *testing.T) {
 	pp := &ParsedProject{
 		FilePath:       "/some/project.csproj",
@@ -299,10 +259,6 @@ func TestSourceFileForPackage_Fallback(t *testing.T) {
 		t.Fatalf("expected fallback to FilePath, got %s", got)
 	}
 }
-
-// ─────────────────────────────────────────────
-// parsePropsFile
-// ─────────────────────────────────────────────
 
 func TestParsePropsFile_Valid(t *testing.T) {
 	td := testDataDir(t)
@@ -324,10 +280,6 @@ func TestParsePropsFile_NotFound(t *testing.T) {
 		t.Fatal("expected error for nonexistent file")
 	}
 }
-
-// ─────────────────────────────────────────────
-// ParsePropsAsProject — Directory.Build.props
-// ─────────────────────────────────────────────
 
 func TestParsePropsAsProject_DirectoryBuildProps(t *testing.T) {
 	td := testDataDir(t)
@@ -353,10 +305,6 @@ func TestParsePropsAsProject_DirectoryBuildProps(t *testing.T) {
 	}
 }
 
-// ─────────────────────────────────────────────
-// ParsePropsAsProject — shared_versions.props
-// ─────────────────────────────────────────────
-
 func TestParsePropsAsProject_SharedVersionsProps(t *testing.T) {
 	td := testDataDir(t)
 	proj, err := ParsePropsAsProject(filepath.Join(td, "shared_versions.props"))
@@ -371,10 +319,6 @@ func TestParsePropsAsProject_SharedVersionsProps(t *testing.T) {
 		t.Fatalf("expected 1 package, got %d", proj.Packages.Len())
 	}
 }
-
-// ─────────────────────────────────────────────
-// ParsePropsAsProject — explicit import (build_info.props)
-// ─────────────────────────────────────────────
 
 func TestParsePropsAsProject_BuildInfoProps(t *testing.T) {
 	td := testDataDir(t)
@@ -391,10 +335,6 @@ func TestParsePropsAsProject_BuildInfoProps(t *testing.T) {
 	}
 }
 
-// ─────────────────────────────────────────────
-// ParsePropsAsProject — sources map to the props file itself
-// ─────────────────────────────────────────────
-
 func TestParsePropsAsProject_SourceMapping(t *testing.T) {
 	td := testDataDir(t)
 	proj, err := ParsePropsAsProject(filepath.Join(td, "Directory.Build.props"))
@@ -408,20 +348,12 @@ func TestParsePropsAsProject_SourceMapping(t *testing.T) {
 	}
 }
 
-// ─────────────────────────────────────────────
-// ParsePropsAsProject — nonexistent file returns error
-// ─────────────────────────────────────────────
-
 func TestParsePropsAsProject_NotFound(t *testing.T) {
 	_, err := ParsePropsAsProject("/nonexistent/file.props")
 	if err == nil {
 		t.Fatal("expected error for nonexistent file")
 	}
 }
-
-// ─────────────────────────────────────────────
-// helpers
-// ─────────────────────────────────────────────
 
 func pkgNameSet(proj *ParsedProject) map[string]bool {
 	names := make(map[string]bool)

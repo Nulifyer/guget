@@ -8,40 +8,32 @@ import (
 	"testing"
 )
 
-// ─────────────────────────────────────────────
-// matchPattern
-// ─────────────────────────────────────────────
-
 func TestMatchPattern(t *testing.T) {
 	tests := []struct {
 		packageID string
 		pattern   string
 		want      bool
 	}{
-		// wildcard
 		{"Newtonsoft.Json", "*", true},
 		{"Serilog", "*", true},
 		{"", "*", true},
 
-		// prefix matching
 		{"Newtonsoft.Json", "Newtonsoft.*", true},
 		{"Newtonsoft.Json.Bson", "Newtonsoft.*", true},
-		{"newtonsoft.json", "Newtonsoft.*", true}, // case-insensitive
+		{"newtonsoft.json", "Newtonsoft.*", true},
 		{"Newtonsoft.Json", "newtonsoft.*", true},
 		{"Other.Package", "Newtonsoft.*", false},
-		{"Serilog", "Serilog.*", false},                   // no dot after "Serilog" in ID
-		{"Serilog.Sinks.Console", "Serilog.*", true},      // has dot
-		{"SerilogExtra", "Serilog.*", false},               // must match "serilog." prefix
+		{"Serilog", "Serilog.*", false},
+		{"Serilog.Sinks.Console", "Serilog.*", true},
+		{"SerilogExtra", "Serilog.*", false},
 		{"Microsoft.Extensions.Logging", "Microsoft.*", true},
 		{"Microsoft.Extensions.Logging", "Microsoft.Extensions.*", true},
 
-		// exact matching
 		{"Newtonsoft.Json", "Newtonsoft.Json", true},
-		{"newtonsoft.json", "Newtonsoft.Json", true}, // case-insensitive
+		{"newtonsoft.json", "Newtonsoft.Json", true},
 		{"Newtonsoft.Json", "Newtonsoft.Xml", false},
 		{"Serilog", "Serilog", true},
 
-		// edge: empty pattern never matches
 		{"Something", "", false},
 	}
 	for _, tt := range tests {
@@ -51,10 +43,6 @@ func TestMatchPattern(t *testing.T) {
 		}
 	}
 }
-
-// ─────────────────────────────────────────────
-// IsConfigured
-// ─────────────────────────────────────────────
 
 func TestIsConfigured(t *testing.T) {
 	var nilMapping *PackageSourceMapping
@@ -72,10 +60,6 @@ func TestIsConfigured(t *testing.T) {
 		t.Fatal("mapping with entries should be configured")
 	}
 }
-
-// ─────────────────────────────────────────────
-// SourcesForPackage
-// ─────────────────────────────────────────────
 
 func TestSourcesForPackage(t *testing.T) {
 	m := &PackageSourceMapping{
@@ -101,16 +85,9 @@ func TestSourcesForPackage(t *testing.T) {
 		}
 	}
 
-	// Newtonsoft.Json matches only nuget.org (wildcard)
 	assertSources("Newtonsoft.Json", []string{"nuget.org"})
-
-	// Redacted.Lib matches nuget.org (*) AND custom_github (redacted.*)
 	assertSources("Redacted.Lib", []string{"custom_github", "nuget.org"})
-
-	// MyCompany.Core matches nuget.org (*) AND internal_feed (mycompany.*, mycompany.core)
 	assertSources("MyCompany.Core", []string{"internal_feed", "nuget.org"})
-
-	// MyCompany.Utils matches nuget.org (*) AND internal_feed (mycompany.*)
 	assertSources("MyCompany.Utils", []string{"internal_feed", "nuget.org"})
 }
 
@@ -122,29 +99,38 @@ func TestSourcesForPackage_NotConfigured(t *testing.T) {
 	}
 }
 
-// ─────────────────────────────────────────────
-// FilterServices
-// ─────────────────────────────────────────────
+func TestSourcesForPackage_OverlappingPatterns(t *testing.T) {
+	m := &PackageSourceMapping{
+		Entries: map[string][]string{
+			"nuget.org":     {"*"},
+			"dotnet-public": {"microsoft.*", "system.*"},
+			"dotnet9":       {"microsoft.extensions.*"},
+		},
+	}
 
-// mockNugetService is a minimal stand-in so we can test FilterServices
-// without needing real HTTP services. We just need SourceName().
-type mockNugetService struct {
-	name string
+	assert := func(packageID string, want []string) {
+		t.Helper()
+		got := m.SourcesForPackage(packageID)
+		sort.Strings(got)
+		sort.Strings(want)
+		if len(got) != len(want) {
+			t.Errorf("SourcesForPackage(%q) = %v, want %v", packageID, got, want)
+			return
+		}
+		for i := range got {
+			if got[i] != want[i] {
+				t.Errorf("SourcesForPackage(%q) = %v, want %v", packageID, got, want)
+				return
+			}
+		}
+	}
+
+	assert("Microsoft.Extensions.Logging", []string{"dotnet-public", "dotnet9", "nuget.org"})
+	assert("Microsoft.CodeAnalysis", []string{"dotnet-public", "nuget.org"})
+	assert("Newtonsoft.Json", []string{"nuget.org"})
+	assert("System.Text.Json", []string{"dotnet-public", "nuget.org"})
+	assert("microsoft.extensions.logging", []string{"dotnet-public", "dotnet9", "nuget.org"})
 }
-
-func makeMockServices(names ...string) []*NugetService {
-	// We can't easily construct real NugetService instances without HTTP,
-	// so we'll test the core logic (SourcesForPackage + matchPattern)
-	// and cover FilterServices via an integration-style approach.
-	// For a direct unit test we'd need to refactor NugetService to use
-	// an interface, which is out of scope. The matchPattern and
-	// SourcesForPackage tests cover the critical logic.
-	return nil
-}
-
-// ─────────────────────────────────────────────
-// XML parsing of <packageSourceMapping>
-// ─────────────────────────────────────────────
 
 func TestPackageSourceMappingXMLParsing(t *testing.T) {
 	xmlData := `<?xml version="1.0" encoding="utf-8"?>
@@ -174,7 +160,6 @@ func TestPackageSourceMappingXMLParsing(t *testing.T) {
 	if len(sources) != 2 {
 		t.Fatalf("expected 2 sources, got %d", len(sources))
 	}
-
 	if mr == nil {
 		t.Fatal("expected non-nil mapping result")
 	}
@@ -248,10 +233,6 @@ func TestPackageSourceMappingXML_Empty(t *testing.T) {
 	}
 }
 
-// ─────────────────────────────────────────────
-// Verify <packageSourceMapping> in test-dotnet data
-// ─────────────────────────────────────────────
-
 func TestDetectSources_WithMapping(t *testing.T) {
 	td := testDataDir(t)
 	detected := DetectSources(td)
@@ -262,33 +243,27 @@ func TestDetectSources_WithMapping(t *testing.T) {
 
 	m := detected.Mapping
 	if !m.IsConfigured() {
-		t.Fatal("test-dotnet nuget.config has packageSourceMapping; expected configured")
+		t.Fatal("expected mapping to be configured")
 	}
-
-	// Verify the expected mapping entries were parsed
 	if len(m.Entries) != 4 {
 		t.Fatalf("expected 4 mapping entries, got %d: %v", len(m.Entries), m.Entries)
 	}
 
-	// nuget.org has wildcard
 	nugetPatterns := m.Entries["nuget.org"]
 	if len(nugetPatterns) != 1 || nugetPatterns[0] != "*" {
 		t.Fatalf("expected nuget.org patterns [*], got %v", nugetPatterns)
 	}
 
-	// dotnet-public has Microsoft.* and System.*
 	dpPatterns := m.Entries["dotnet-public"]
 	if len(dpPatterns) != 2 {
 		t.Fatalf("expected 2 dotnet-public patterns, got %v", dpPatterns)
 	}
 
-	// dotnet9 has Microsoft.Extensions.*
 	d9Patterns := m.Entries["dotnet9"]
 	if len(d9Patterns) != 1 || d9Patterns[0] != "microsoft.extensions.*" {
 		t.Fatalf("expected dotnet9 patterns [microsoft.extensions.*], got %v", d9Patterns)
 	}
 
-	// github has Guget.*
 	ghPatterns := m.Entries["github"]
 	if len(ghPatterns) != 1 || ghPatterns[0] != "guget.*" {
 		t.Fatalf("expected github patterns [guget.*], got %v", ghPatterns)
@@ -304,7 +279,6 @@ func TestDetectSources_MappingFiltersByPattern(t *testing.T) {
 		t.Fatal("expected mapping to be configured")
 	}
 
-	// Newtonsoft.Json should only match nuget.org (wildcard)
 	assertMappedSources := func(packageID string, want []string) {
 		t.Helper()
 		got := m.SourcesForPackage(packageID)
@@ -320,76 +294,12 @@ func TestDetectSources_MappingFiltersByPattern(t *testing.T) {
 		}
 	}
 
-	// Serilog only matches nuget.org (wildcard)
 	assertMappedSources("Serilog", []string{"nuget.org"})
-
-	// Microsoft.Extensions.Logging matches all three: nuget.org (*), dotnet-public (Microsoft.*), dotnet9 (Microsoft.Extensions.*)
 	assertMappedSources("Microsoft.Extensions.Logging", []string{"dotnet-public", "dotnet9", "nuget.org"})
-
-	// System.Text.Json matches nuget.org (*) and dotnet-public (System.*)
 	assertMappedSources("System.Text.Json", []string{"dotnet-public", "nuget.org"})
-
-	// Microsoft.CodeAnalysis matches nuget.org (*) and dotnet-public (Microsoft.*)
 	assertMappedSources("Microsoft.CodeAnalysis", []string{"dotnet-public", "nuget.org"})
-
-	// Guget.TestPackage matches nuget.org (*) and github (Guget.*)
 	assertMappedSources("Guget.TestPackage", []string{"github", "nuget.org"})
 }
-
-// ─────────────────────────────────────────────
-// Overlapping patterns — multiple sources match
-// ─────────────────────────────────────────────
-
-func TestSourcesForPackage_OverlappingPatterns(t *testing.T) {
-	// Simulates a config where a broad pattern (Microsoft.*) and a narrower
-	// pattern (Microsoft.Extensions.*) are on different sources. Both should
-	// match — source mapping is additive, not most-specific-wins.
-	m := &PackageSourceMapping{
-		Entries: map[string][]string{
-			"nuget.org":     {"*"},
-			"dotnet-public": {"microsoft.*", "system.*"},
-			"dotnet9":       {"microsoft.extensions.*"},
-		},
-	}
-
-	assert := func(packageID string, want []string) {
-		t.Helper()
-		got := m.SourcesForPackage(packageID)
-		sort.Strings(got)
-		sort.Strings(want)
-		if len(got) != len(want) {
-			t.Errorf("SourcesForPackage(%q) = %v, want %v", packageID, got, want)
-			return
-		}
-		for i := range got {
-			if got[i] != want[i] {
-				t.Errorf("SourcesForPackage(%q) = %v, want %v", packageID, got, want)
-				return
-			}
-		}
-	}
-
-	// Microsoft.Extensions.Logging matches all three sources
-	// (wildcard, Microsoft.*, and Microsoft.Extensions.*)
-	assert("Microsoft.Extensions.Logging", []string{"dotnet-public", "dotnet9", "nuget.org"})
-
-	// Microsoft.CodeAnalysis matches nuget.org + dotnet-public but NOT dotnet9
-	// (Microsoft.Extensions.* doesn't match Microsoft.CodeAnalysis)
-	assert("Microsoft.CodeAnalysis", []string{"dotnet-public", "nuget.org"})
-
-	// Newtonsoft.Json matches only nuget.org (wildcard)
-	assert("Newtonsoft.Json", []string{"nuget.org"})
-
-	// System.Text.Json matches nuget.org + dotnet-public
-	assert("System.Text.Json", []string{"dotnet-public", "nuget.org"})
-
-	// Case-insensitive: microsoft.extensions.logging still matches all three
-	assert("microsoft.extensions.logging", []string{"dotnet-public", "dotnet9", "nuget.org"})
-}
-
-// ─────────────────────────────────────────────
-// packageSourceMappingXML struct unmarshalling
-// ─────────────────────────────────────────────
 
 func TestPackageSourceMappingXML_Unmarshal(t *testing.T) {
 	data := []byte(`<packageSourceMapping>

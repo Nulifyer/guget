@@ -4,10 +4,6 @@ import (
 	"testing"
 )
 
-// ─────────────────────────────────────────────
-// ParseSemVer
-// ─────────────────────────────────────────────
-
 func TestParseSemVer_Standard(t *testing.T) {
 	tests := []struct {
 		input              string
@@ -88,10 +84,6 @@ func TestParseSemVer_PreservesRaw(t *testing.T) {
 	}
 }
 
-// ─────────────────────────────────────────────
-// IsPreRelease
-// ─────────────────────────────────────────────
-
 func TestIsPreRelease(t *testing.T) {
 	tests := []struct {
 		input string
@@ -114,10 +106,6 @@ func TestIsPreRelease(t *testing.T) {
 		})
 	}
 }
-
-// ─────────────────────────────────────────────
-// IsNewerThan
-// ─────────────────────────────────────────────
 
 func TestIsNewerThan_MajorMinorPatch(t *testing.T) {
 	tests := []struct {
@@ -236,10 +224,6 @@ func TestIsNewerThan_FourPartVersions(t *testing.T) {
 	}
 }
 
-// ─────────────────────────────────────────────
-// Real-world NuGet version strings
-// ─────────────────────────────────────────────
-
 func TestParseSemVer_NuGetRealWorld(t *testing.T) {
 	tests := []struct {
 		input              string
@@ -273,10 +257,6 @@ func TestParseSemVer_NuGetRealWorld(t *testing.T) {
 		})
 	}
 }
-
-// ─────────────────────────────────────────────
-// Sorting sanity check
-// ─────────────────────────────────────────────
 
 func TestIsNewerThan_SortOrder(t *testing.T) {
 	// These versions should sort in descending order (newest first).

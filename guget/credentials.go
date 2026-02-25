@@ -138,10 +138,6 @@ func parseCredentials(data []byte) map[string]sourceCredential {
 	return creds
 }
 
-// ─────────────────────────────────────────────
-// NuGet credential provider protocol
-// ─────────────────────────────────────────────
-
 // fetchFromCredentialProvider tries all discovered credential providers for the given source URL.
 func fetchFromCredentialProvider(sourceURL, sourceName string) (*sourceCredential, error) {
 	providers := findCredentialProviders()
@@ -160,9 +156,6 @@ func fetchFromCredentialProvider(sourceURL, sourceName string) (*sourceCredentia
 }
 
 // findCredentialProviders returns paths to NuGet credential provider executables.
-// It checks NUGET_CREDENTIALPROVIDER_PLUGIN_PATHS first, then the standard
-// ~/.nuget/plugins/netcore/ directory (which is where the Azure Artifacts
-// Credential Provider installs itself on all platforms).
 func findCredentialProviders() []string {
 	var providers []string
 

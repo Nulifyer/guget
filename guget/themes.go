@@ -6,10 +6,6 @@ import (
 	lipgloss "github.com/charmbracelet/lipgloss"
 )
 
-// ─────────────────────────────────────────────
-// Theme definition
-// ─────────────────────────────────────────────
-
 type Theme struct {
 	Border lipgloss.TerminalColor
 	Muted  lipgloss.TerminalColor
@@ -22,10 +18,6 @@ type Theme struct {
 	Purple lipgloss.TerminalColor
 	Cyan   lipgloss.TerminalColor
 }
-
-// ─────────────────────────────────────────────
-// Built-in themes
-// ─────────────────────────────────────────────
 
 var validThemeNames = []string{
 	"auto", "auto-light", "auto-dark", "dracula",
@@ -179,10 +171,6 @@ var themes = map[string]Theme{
 		Cyan:   lipgloss.Color("#8ec07c"),
 	},
 }
-
-// ─────────────────────────────────────────────
-// Theme initialisation
-// ─────────────────────────────────────────────
 
 // initTheme applies the named theme to the package-level color and style vars.
 // Call this before NewModel. If noColor is true, all color output is disabled.

@@ -11,10 +11,6 @@ import (
 
 const defaultNugetSource = "https://api.nuget.org/v3/index.json"
 
-// ─────────────────────────────────────────────
-// NuGet.config XML types
-// ─────────────────────────────────────────────
-
 type nugetConfig struct {
 	XMLName              xml.Name                 `xml:"configuration"`
 	PackageSources       []packageSource          `xml:"packageSources>add"`
@@ -29,20 +25,12 @@ type packageSource struct {
 	Value string `xml:"value,attr"`
 }
 
-// ─────────────────────────────────────────────
-// NugetSource
-// ─────────────────────────────────────────────
-
 type NugetSource struct {
 	Name     string
 	URL      string
 	Username string // from <packageSourceCredentials> (cleartext or DPAPI-decrypted)
 	Password string
 }
-
-// ─────────────────────────────────────────────
-// Detection
-// ─────────────────────────────────────────────
 
 // DetectedConfig holds everything discovered from the nuget.config hierarchy.
 type DetectedConfig struct {
@@ -57,12 +45,8 @@ type parsedMappingResult struct {
 	cleared bool               // <clear/> inside <packageSourceMapping>
 }
 
-// DetectSources finds all NuGet sources and package-source mapping rules
-// relevant to the given project directory.
-// Sources are collected in priority order: solution/project → parents → user → machine.
-// A <clear /> element inside <packageSources> stops source inheritance.
-// A <clear /> element inside <packageSourceMapping> resets inherited mappings.
-// Duplicates (by URL) are removed. Falls back to nuget.org if nothing is found.
+// DetectSources walks from projectDir up to root collecting NuGet sources and
+// package-source mapping rules. <clear/> stops inheritance. Falls back to nuget.org.
 func DetectSources(projectDir string) DetectedConfig {
 	seen := NewSet[string]()
 	var sources []NugetSource
@@ -160,13 +144,7 @@ func DetectSources(projectDir string) DetectedConfig {
 	return DetectedConfig{Sources: sources, Mapping: mapping}
 }
 
-// ─────────────────────────────────────────────
-// Parsers
-// ─────────────────────────────────────────────
-
-// sourcesFromNugetConfig parses a NuGet.Config file and returns its sources,
-// whether a <clear /> was found in <packageSources>, and any
-// <packageSourceMapping> entries defined in this file.
+// sourcesFromNugetConfig parses a single NuGet.Config file.
 func sourcesFromNugetConfig(path string) ([]NugetSource, bool, *parsedMappingResult) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -182,9 +160,7 @@ func sourcesFromNugetConfig(path string) ([]NugetSource, bool, *parsedMappingRes
 
 	cleared := len(cfg.PackageSourcesClear) > 0
 
-	// Build the disabled-sources set from this file only. Inherited disabled
-	// sources are not tracked here; each config file is parsed independently
-	// and the caller controls inheritance via the cleared flag.
+	// Build disabled-sources set from this file only.
 	disabled := NewSet[string]()
 	for _, d := range cfg.DisabledSources {
 		disabled.Add(strings.ToLower(d.Key))
@@ -270,10 +246,6 @@ func sourcesFromBuildProps(path string) []NugetSource {
 	}
 	return sources
 }
-
-// ─────────────────────────────────────────────
-// OS-specific config paths
-// ─────────────────────────────────────────────
 
 func userNugetConfigPath() string {
 	if runtime.GOOS == "windows" {

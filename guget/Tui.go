@@ -15,10 +15,6 @@ import (
 	lipgloss "github.com/charmbracelet/lipgloss"
 )
 
-// ─────────────────────────────────────────────
-// Log panel dimensions
-// ─────────────────────────────────────────────
-
 const (
 	logPanelLines       = 6
 	logPanelOuterHeight = logPanelLines + 4 // border(2) + title(1) + divider(1)
@@ -34,10 +30,6 @@ func (m *Model) layoutWidth() int {
 	return m.width
 }
 
-// ─────────────────────────────────────────────
-// Panel focus
-// ─────────────────────────────────────────────
-
 type focusPanel int
 
 const (
@@ -46,10 +38,6 @@ const (
 	focusDetail
 	focusLog
 )
-
-// ─────────────────────────────────────────────
-// Messages
-// ─────────────────────────────────────────────
 
 // packageReadyMsg is sent by the background loader for each package as its
 // NuGet metadata resolves, enabling progressive UI updates.
@@ -101,10 +89,6 @@ type depTreeReadyMsg struct {
 	err     error
 }
 
-// ─────────────────────────────────────────────
-// Dependency tree overlay
-// ─────────────────────────────────────────────
-
 type depTreeOverlay struct {
 	active  bool
 	loading bool // true while dotnet list is running (T key)
@@ -113,10 +97,6 @@ type depTreeOverlay struct {
 	vp      bubbles_viewport.Model
 	title   string
 }
-
-// ─────────────────────────────────────────────
-// Project list item
-// ─────────────────────────────────────────────
 
 type projectItem struct {
 	name    string
@@ -145,10 +125,6 @@ func (p projectItem) Description() string {
 }
 
 func (p projectItem) FilterValue() string { return p.name }
-
-// ─────────────────────────────────────────────
-// Package row
-// ─────────────────────────────────────────────
 
 type packageRow struct {
 	ref              PackageReference
@@ -212,10 +188,6 @@ func (r packageRow) statusStyle() lipgloss.Style {
 	return styleGreen
 }
 
-// ─────────────────────────────────────────────
-// Version picker overlay
-// ─────────────────────────────────────────────
-
 type versionPicker struct {
 	active        bool
 	pkgName       string
@@ -233,10 +205,6 @@ func (vp *versionPicker) selectedVersion() *PackageVersion {
 	return nil
 }
 
-// ─────────────────────────────────────────────
-// Package search overlay
-// ─────────────────────────────────────────────
-
 type packageSearch struct {
 	active          bool
 	input           bubbles_textinpute.Model
@@ -251,18 +219,10 @@ type packageSearch struct {
 	fetchedSource   string
 }
 
-// ─────────────────────────────────────────────
-// Confirm remove overlay
-// ─────────────────────────────────────────────
-
 type confirmRemove struct {
 	active  bool
 	pkgName string
 }
-
-// ─────────────────────────────────────────────
-// Model
-// ─────────────────────────────────────────────
 
 type Model struct {
 	width  int
@@ -367,17 +327,9 @@ func NewModel(parsedProjects []*ParsedProject, propsProjects []*ParsedProject, n
 	return m
 }
 
-// ─────────────────────────────────────────────
-// Init
-// ─────────────────────────────────────────────
-
 func (m Model) Init() bubble_tea.Cmd {
 	return m.spinner.Tick
 }
-
-// ─────────────────────────────────────────────
-// Update
-// ─────────────────────────────────────────────
 
 func (m Model) Update(msg bubble_tea.Msg) (bubble_tea.Model, bubble_tea.Cmd) {
 	var cmds []bubble_tea.Cmd
@@ -758,10 +710,6 @@ func (m *Model) handleSearchKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 	return cmd
 }
 
-// ─────────────────────────────────────────────
-// Actions
-// ─────────────────────────────────────────────
-
 func (m *Model) updateSelected(useLatest bool) bubble_tea.Cmd {
 	if m.packageCursor >= len(m.packageRows) {
 		return nil
@@ -1087,7 +1035,6 @@ func (m *Model) buildDepTreeContent() string {
 	return m.depTree.content
 }
 
-// ── dotnet list output parser ──────────────────────────────────────────────
 
 type dotnetListPkg struct {
 	Name      string
@@ -1595,10 +1542,6 @@ func (m Model) renderConfirmOverlay() string {
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
 }
 
-// ─────────────────────────────────────────────
-// Data helpers
-// ─────────────────────────────────────────────
-
 func (m *Model) selectedProject() *ParsedProject {
 	if item, ok := m.projectList.SelectedItem().(projectItem); ok {
 		return item.project
@@ -1843,10 +1786,6 @@ func (m *Model) panelWidths() (left, mid, right int) {
 
 	return
 }
-
-// ─────────────────────────────────────────────
-// View
-// ─────────────────────────────────────────────
 
 func (m Model) View() string {
 	if m.width == 0 {
@@ -2871,10 +2810,6 @@ func (m Model) renderFooter() string {
 		Width(m.layoutWidth()).
 		Render(statusStr + "\n" + keybinds)
 }
-
-// ─────────────────────────────────────────────
-// Helpers
-// ─────────────────────────────────────────────
 
 // padRight pads a styled string to the given visible width.
 // Uses lipgloss.Width to measure, ignoring ANSI escape codes.

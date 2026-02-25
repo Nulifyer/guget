@@ -2,10 +2,6 @@ package main
 
 import lipgloss "github.com/charmbracelet/lipgloss"
 
-// ─────────────────────────────────────────────
-// Color palette
-// ─────────────────────────────────────────────
-
 var (
 	colorBorder lipgloss.TerminalColor = lipgloss.Color("#30363d")
 	colorMuted  lipgloss.TerminalColor = lipgloss.Color("#484f58")
@@ -18,10 +14,6 @@ var (
 	colorPurple lipgloss.TerminalColor = lipgloss.Color("#bc8cff")
 	colorCyan   lipgloss.TerminalColor = lipgloss.Color("#56d7c2")
 )
-
-// ─────────────────────────────────────────────
-// Reusable styles
-// ─────────────────────────────────────────────
 
 var (
 	// text styles
