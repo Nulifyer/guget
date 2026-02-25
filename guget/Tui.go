@@ -291,10 +291,10 @@ type Model struct {
 	confirm confirmRemove
 	depTree depTreeOverlay
 
-	sources        []NugetSource
-	sourceMapping  *PackageSourceMapping
-	showSources    bool
-	showHelp    bool
+	sources       []NugetSource
+	sourceMapping *PackageSourceMapping
+	showSources   bool
+	showHelp      bool
 
 	statusLine  string
 	statusIsErr bool
@@ -1359,17 +1359,59 @@ func (m *Model) searchDebounceCmd(query string) bubble_tea.Cmd {
 
 func (m *Model) doSearchCmd(query string) bubble_tea.Cmd {
 	services := m.nugetServices
+	sourceMapping := m.sourceMapping
 	return func() bubble_tea.Msg {
-		var lastErr error
-		for _, svc := range services {
-			results, err := svc.Search(query, 20)
-			if err == nil {
-				return searchResultsMsg{results: results, query: query}
-			}
-			lastErr = err
-			logWarn("search source [%s] failed: %v", svc.SourceName(), err)
+		type sourceResult struct {
+			results []SearchResult
+			err     error
+			source  string
 		}
-		return searchResultsMsg{query: query, err: lastErr}
+
+		ch := make(chan sourceResult, len(services))
+		for _, svc := range services {
+			go func(svc *NugetService) {
+				results, err := svc.Search(query, 20)
+				ch <- sourceResult{results: results, err: err, source: svc.SourceName()}
+			}(svc)
+		}
+
+		seen := NewSet[string]()
+		var merged []SearchResult
+		var lastErr error
+		for range services {
+			sr := <-ch
+			if sr.err != nil {
+				lastErr = sr.err
+				logWarn("search source [%s] failed: %v", sr.source, sr.err)
+				continue
+			}
+			for _, r := range sr.results {
+				key := strings.ToLower(r.ID)
+				if seen.Contains(key) {
+					continue
+				}
+				// If source mapping is configured, only include results
+				// whose package ID is allowed on the source that found it.
+				if sourceMapping.IsConfigured() {
+					allowed := sourceMapping.SourcesForPackage(r.ID)
+					if len(allowed) > 0 {
+						allowedSet := NewSet[string]()
+						for _, k := range allowed {
+							allowedSet.Add(strings.ToLower(k))
+						}
+						if !allowedSet.Contains(strings.ToLower(sr.source)) {
+							continue
+						}
+					}
+				}
+				seen.Add(key)
+				merged = append(merged, r)
+			}
+		}
+		if len(merged) == 0 && lastErr != nil {
+			return searchResultsMsg{query: query, err: lastErr}
+		}
+		return searchResultsMsg{results: merged, query: query}
 	}
 }
 
@@ -2861,7 +2903,7 @@ func hyperlink(url, text string) string {
 	if !hyperlinkEnabled || url == "" {
 		return text
 	}
-	return "\x1b]8;;" + url + "\x1b\\" + text + " ↗" + "\x1b]8;;\x1b\\"
+	return "\x1b]8;;" + url + "\x1b\\" + text + "\x1b]8;;\x1b\\ ↗"
 }
 
 // advisoryLabel extracts a short display label from an advisory URL.

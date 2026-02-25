@@ -300,6 +300,10 @@ func (s *NugetService) resolveEndpoints() error {
 	if s.regBase == "" {
 		return fmt.Errorf("RegistrationsBaseUrl not found in service index")
 	}
+	// Ensure trailing slash so callers can simply append path segments.
+	if !strings.HasSuffix(s.regBase, "/") {
+		s.regBase += "/"
+	}
 	logDebug("[%s] endpoints resolved: search=%s reg=%s", s.sourceName, s.searchBase, s.regBase)
 	return nil
 }
