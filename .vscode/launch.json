@@ -9,6 +9,7 @@
             "program": "${workspaceFolder}/guget",
             "console": "integratedTerminal",
             "internalConsoleOptions": "neverOpen",
+            "postDebugTask": "reset-test-dotnet",
             "cwd": "${workspaceFolder}",
             "env": {
                 "LOG_LEVEL": "trace"
