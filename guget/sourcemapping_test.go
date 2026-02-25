@@ -266,8 +266,8 @@ func TestDetectSources_WithMapping(t *testing.T) {
 	}
 
 	// Verify the expected mapping entries were parsed
-	if len(m.Entries) != 3 {
-		t.Fatalf("expected 3 mapping entries, got %d: %v", len(m.Entries), m.Entries)
+	if len(m.Entries) != 4 {
+		t.Fatalf("expected 4 mapping entries, got %d: %v", len(m.Entries), m.Entries)
 	}
 
 	// nuget.org has wildcard
@@ -286,6 +286,12 @@ func TestDetectSources_WithMapping(t *testing.T) {
 	d9Patterns := m.Entries["dotnet9"]
 	if len(d9Patterns) != 1 || d9Patterns[0] != "microsoft.extensions.*" {
 		t.Fatalf("expected dotnet9 patterns [microsoft.extensions.*], got %v", d9Patterns)
+	}
+
+	// github has Guget.*
+	ghPatterns := m.Entries["github"]
+	if len(ghPatterns) != 1 || ghPatterns[0] != "guget.*" {
+		t.Fatalf("expected github patterns [guget.*], got %v", ghPatterns)
 	}
 }
 
@@ -325,6 +331,9 @@ func TestDetectSources_MappingFiltersByPattern(t *testing.T) {
 
 	// Microsoft.CodeAnalysis matches nuget.org (*) and dotnet-public (Microsoft.*)
 	assertMappedSources("Microsoft.CodeAnalysis", []string{"dotnet-public", "nuget.org"})
+
+	// Guget.TestPackage matches nuget.org (*) and github (Guget.*)
+	assertMappedSources("Guget.TestPackage", []string{"github", "nuget.org"})
 }
 
 // ─────────────────────────────────────────────
