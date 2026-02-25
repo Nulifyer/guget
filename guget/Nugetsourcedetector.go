@@ -192,6 +192,15 @@ func sourcesFromNugetConfig(path string) ([]NugetSource, bool, *parsedMappingRes
 		}
 	}
 
+	// GitHub Packages NuGet feeds accept "nobody" with an empty password for
+	// public packages. Set a dummy username so Basic Auth is sent.
+	for i := range sources {
+		if strings.Contains(strings.ToLower(sources[i].URL), "nuget.pkg.github.com") && sources[i].Username == "" {
+			sources[i].Username = "nobody"
+			logTrace("sourcesFromNugetConfig: [%s] set default GitHub username %q", sources[i].Name, sources[i].Username)
+		}
+	}
+
 	// Extract <packageSourceMapping> entries
 	var mr *parsedMappingResult
 	if cfg.SourceMapping != nil {

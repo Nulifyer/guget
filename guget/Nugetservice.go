@@ -9,7 +9,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-
 )
 
 type serviceIndex struct {
@@ -68,11 +67,11 @@ type searchVersion struct {
 
 // PackageVersion is an enriched version with semver + framework info.
 type PackageVersion struct {
-	SemVer          SemVer
-	Downloads       int
-	Frameworks      []TargetFramework      // target frameworks this version supports
-	Vulnerabilities []PackageVulnerability // CVE advisories for this specific version
-	DependencyGroups []dependencyGroup     // declared dependencies, for dep tree overlay
+	SemVer           SemVer
+	Downloads        int
+	Frameworks       []TargetFramework      // target frameworks this version supports
+	Vulnerabilities  []PackageVulnerability // CVE advisories for this specific version
+	DependencyGroups []dependencyGroup      // declared dependencies, for dep tree overlay
 }
 
 // PackageInfo is the full picture of a package.
@@ -115,10 +114,16 @@ type registrationLeaf struct {
 	Authors          StringOrArray          `json:"authors"`
 	Tags             StringOrArray          `json:"tags"`
 	ProjectURL       string                 `json:"projectUrl"`
+	Repository       *repositoryMeta        `json:"repository"`
 	Listed           *bool                  `json:"listed"`
 	DependencyGroups []dependencyGroup      `json:"dependencyGroups"`
 	Vulnerabilities  []PackageVulnerability `json:"vulnerabilities"`
 	Deprecation      *deprecationRaw        `json:"deprecation"`
+}
+
+type repositoryMeta struct {
+	Type string `json:"type"`
+	URL  string `json:"url"`
 }
 
 type dependencyGroup struct {
@@ -241,14 +246,172 @@ func (t *authTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 
 // NugetService talks to a single NuGet v3 feed.
 type NugetService struct {
-	sourceURL  string
-	sourceName string
-	client     *http.Client
-	searchBase string // resolved from service index
-	regBase    string // RegistrationsBaseUrl
+	sourceURL      string
+	sourceName     string
+	client         *http.Client
+	searchBase     string // resolved from service index
+	regBase        string // RegistrationsBaseUrl
+	detailTemplate string // PackageDetailsUriTemplate (e.g. "https://…/packages/{id}/{version}")
 }
 
 func (s *NugetService) SourceName() string { return s.sourceName }
+
+// PackageURL returns a browsable web URL for the given package, or "" if unknown.
+// projectURL is the package's ProjectURL metadata (may be empty).
+func (s *NugetService) PackageURL(id, version, projectURL string) string {
+	if s.detailTemplate != "" {
+		u := strings.NewReplacer("{id}", id, "{version}", version).Replace(s.detailTemplate)
+		// Strip query params like ?_src=template
+		if i := strings.Index(u, "?"); i >= 0 {
+			u = u[:i]
+		}
+		return u
+	}
+	return inferPackageURL(s.sourceURL, id, version, projectURL)
+}
+
+// inferPackageURL constructs a browsable package URL for known hosting services
+// based on the source's API URL pattern.
+func inferPackageURL(sourceURL, id, version, projectURL string) string {
+	lower := strings.ToLower(sourceURL)
+
+	// Azure DevOps Artifacts:
+	// https://pkgs.dev.azure.com/{org}[/{project}]/_packaging/{feed}/nuget/v3/index.json
+	// → https://dev.azure.com/{org}[/{project}]/_artifacts/feed/{feed}/NuGet/{id}/overview/{version}
+	if strings.Contains(lower, "pkgs.dev.azure.com") {
+		if idx := strings.Index(lower, "/_packaging/"); idx >= 0 {
+			prefix := sourceURL[:idx] // e.g. "https://pkgs.dev.azure.com/org/project"
+			rest := sourceURL[idx+len("/_packaging/"):]
+			feed := rest
+			if sl := strings.Index(feed, "/"); sl >= 0 {
+				feed = feed[:sl]
+			}
+			prefix = strings.Replace(prefix, "pkgs.dev.azure.com", "dev.azure.com", 1)
+			return prefix + "/_artifacts/feed/" + feed + "/NuGet/" + id + "/overview/" + version
+		}
+	}
+
+	// MyGet:
+	// https://www.myget.org/F/{feed}/api/v3/index.json
+	// → https://www.myget.org/feed/{feed}/package/nuget/{id}/{version}
+	if strings.Contains(lower, "myget.org/f/") {
+		if idx := strings.Index(lower, "/f/"); idx >= 0 {
+			base := sourceURL[:idx] // e.g. "https://www.myget.org"
+			rest := sourceURL[idx+len("/F/"):]
+			feed := rest
+			if sl := strings.Index(feed, "/"); sl >= 0 {
+				feed = feed[:sl]
+			}
+			return base + "/feed/" + feed + "/package/nuget/" + id + "/" + version
+		}
+	}
+
+	// GitHub Packages:
+	// https://nuget.pkg.github.com/{owner}/index.json
+	// → https://github.com/{owner}/{repo}/pkgs/nuget/{package}
+	if strings.Contains(lower, "nuget.pkg.github.com") {
+		owner := extractGitHubOwner(sourceURL)
+		if owner == "" {
+			return ""
+		}
+		// Try to derive {owner}/{repo} from ProjectURL for a direct package link.
+		if projectURL != "" {
+			projLower := strings.ToLower(projectURL)
+			if strings.Contains(projLower, "github.com/") {
+				idx := strings.Index(projLower, "github.com/")
+				ownerRepo := projectURL[idx+len("github.com/"):]
+				ownerRepo = strings.TrimRight(ownerRepo, "/")
+				parts := strings.SplitN(ownerRepo, "/", 3)
+				if len(parts) >= 2 {
+					return "https://github.com/" + parts[0] + "/" + parts[1] + "/pkgs/nuget/" + id
+				}
+			}
+		}
+		// Fallback: link to the owner's packages filtered by this package name.
+		return "https://github.com/" + owner + "?tab=packages&q=" + id + "&type=nuget"
+	}
+
+	return ""
+}
+
+// extractGitHubOwner returns the owner from a GitHub Packages NuGet source URL,
+// e.g. "https://nuget.pkg.github.com/Nulifyer/index.json" → "Nulifyer".
+func extractGitHubOwner(sourceURL string) string {
+	lower := strings.ToLower(sourceURL)
+	idx := strings.Index(lower, "nuget.pkg.github.com")
+	if idx < 0 {
+		return ""
+	}
+	after := sourceURL[idx+len("nuget.pkg.github.com"):]
+	after = strings.TrimLeft(after, "/")
+	if sl := strings.Index(after, "/"); sl > 0 {
+		return after[:sl]
+	}
+	return after
+}
+
+type ghPackageResponse struct {
+	Repository struct {
+		FullName string `json:"full_name"`
+		HTMLURL  string `json:"html_url"`
+	} `json:"repository"`
+}
+
+// fetchGitHubPackage calls the GitHub API to get package metadata including
+// the linked repository. Returns nil on any error (best-effort).
+func (s *NugetService) fetchGitHubPackage(owner, packageName string) *ghPackageResponse {
+	// Extract the PAT from the auth transport for Bearer auth to the GitHub REST API.
+	at, _ := s.client.Transport.(*authTransport)
+	if at == nil {
+		return nil
+	}
+	at.mu.Lock()
+	token := at.password
+	at.mu.Unlock()
+	if token == "" {
+		return nil
+	}
+
+	// Try user endpoint first, then org endpoint.
+	for _, tmpl := range []string{
+		"https://api.github.com/users/%s/packages/nuget/%s",
+		"https://api.github.com/orgs/%s/packages/nuget/%s",
+	} {
+		apiURL := fmt.Sprintf(tmpl, owner, packageName)
+		req, err := http.NewRequest("GET", apiURL, nil)
+		if err != nil {
+			continue
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("Accept", "application/vnd.github+json")
+		resp, err := http.DefaultTransport.RoundTrip(req)
+		if err != nil || resp.StatusCode != http.StatusOK {
+			if resp != nil {
+				resp.Body.Close()
+			}
+			continue
+		}
+		var ghResp ghPackageResponse
+		decErr := json.NewDecoder(resp.Body).Decode(&ghResp)
+		resp.Body.Close()
+		if decErr == nil && ghResp.Repository.HTMLURL != "" {
+			return &ghResp
+		}
+	}
+	return nil
+}
+
+// projectOrRepoURL returns projectUrl if set, otherwise falls back to the
+// repository URL from the catalog entry (common on GitHub Packages).
+func projectOrRepoURL(leaf *registrationLeaf) string {
+	if leaf.ProjectURL != "" {
+		return leaf.ProjectURL
+	}
+	if leaf.Repository != nil && leaf.Repository.URL != "" {
+		return leaf.Repository.URL
+	}
+	return ""
+}
 
 // NewNugetService creates and initialises a service for the given NugetSource.
 func NewNugetService(source NugetSource) (*NugetService, error) {
@@ -282,6 +445,8 @@ func (s *NugetService) resolveEndpoints() error {
 				s.regBase = r.ID
 				regVer = v
 			}
+		case strings.HasPrefix(r.Type, "PackageDetailsUriTemplate"):
+			s.detailTemplate = r.ID
 		}
 	}
 	if s.searchBase == "" {
@@ -411,8 +576,20 @@ func (s *NugetService) SearchExact(packageID string) (*PackageInfo, error) {
 		Description:   meta.Description,
 		Authors:       authors,
 		Tags:          tags,
-		ProjectURL:    meta.ProjectURL,
+		ProjectURL:    projectOrRepoURL(meta),
 		Versions:      versions,
+	}
+	// For GitHub Packages, call the GitHub API to resolve the source repo.
+	if pkg.ProjectURL == "" {
+		if owner := extractGitHubOwner(s.sourceURL); owner != "" {
+			if ghPkg := s.fetchGitHubPackage(owner, packageID); ghPkg != nil {
+				if ghPkg.Repository.HTMLURL != "" {
+					pkg.ProjectURL = ghPkg.Repository.HTMLURL
+				} else {
+					pkg.ProjectURL = "https://github.com/" + owner
+				}
+			}
+		}
 	}
 	if meta.Deprecation != nil {
 		pkg.Deprecated = true

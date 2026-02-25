@@ -264,9 +264,9 @@ func TestDetectSources_WithMapping(t *testing.T) {
 		t.Fatalf("expected dotnet9 patterns [microsoft.extensions.*], got %v", d9Patterns)
 	}
 
-	ghPatterns := m.Entries["github"]
+	ghPatterns := m.Entries["github-nulifyer"]
 	if len(ghPatterns) != 1 || ghPatterns[0] != "guget.*" {
-		t.Fatalf("expected github patterns [guget.*], got %v", ghPatterns)
+		t.Fatalf("expected github-nulifyer patterns [guget.*], got %v", ghPatterns)
 	}
 }
 
@@ -298,7 +298,7 @@ func TestDetectSources_MappingFiltersByPattern(t *testing.T) {
 	assertMappedSources("Microsoft.Extensions.Logging", []string{"dotnet-public", "dotnet9", "nuget.org"})
 	assertMappedSources("System.Text.Json", []string{"dotnet-public", "nuget.org"})
 	assertMappedSources("Microsoft.CodeAnalysis", []string{"dotnet-public", "nuget.org"})
-	assertMappedSources("Guget.TestPackage", []string{"github", "nuget.org"})
+	assertMappedSources("Guget.TestPackage", []string{"github-nulifyer", "nuget.org"})
 }
 
 func TestPackageSourceMappingXML_Unmarshal(t *testing.T) {

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -495,15 +496,26 @@ func (m Model) Update(msg bubble_tea.Msg) (bubble_tea.Model, bubble_tea.Cmd) {
 	if !m.picker.active && !m.search.active && !m.confirm.active {
 		switch m.focus {
 		case focusProjects:
-			var cmd bubble_tea.Cmd
-			prev := m.projectList.Index()
-			m.projectList, cmd = m.projectList.Update(msg)
-			cmds = append(cmds, cmd)
-			if m.projectList.Index() != prev {
-				m.packageCursor = 0
-				m.packageOffset = 0
-				m.rebuildPackageRows()
-				m.refreshDetail()
+			// Don't forward package-panel keys to the bubbles list component
+			// (e.g. 'd' triggers half-page-down in the list's vim bindings).
+			skip := false
+			if keyMsg, ok := msg.(bubble_tea.KeyMsg); ok {
+				switch keyMsg.String() {
+				case "d", "u", "U", "r", "a", "t", "T", "R", "/":
+					skip = true
+				}
+			}
+			if !skip {
+				var cmd bubble_tea.Cmd
+				prev := m.projectList.Index()
+				m.projectList, cmd = m.projectList.Update(msg)
+				cmds = append(cmds, cmd)
+				if m.projectList.Index() != prev {
+					m.packageCursor = 0
+					m.packageOffset = 0
+					m.rebuildPackageRows()
+					m.refreshDetail()
+				}
 			}
 		case focusDetail:
 			var cmd bubble_tea.Cmd
@@ -1370,7 +1382,7 @@ func (m *Model) doSearchCmd(query string) bubble_tea.Cmd {
 		ch := make(chan sourceResult, len(services))
 		for _, svc := range services {
 			go func(svc *NugetService) {
-				results, err := svc.Search(query, 20)
+				results, err := svc.Search(query, 50)
 				ch <- sourceResult{results: results, err: err, source: svc.SourceName()}
 			}(svc)
 		}
@@ -1412,6 +1424,13 @@ func (m *Model) doSearchCmd(query string) bubble_tea.Cmd {
 		if len(merged) == 0 && lastErr != nil {
 			return searchResultsMsg{query: query, err: lastErr}
 		}
+		// Push exact matches to the top.
+		lowerQ := strings.ToLower(query)
+		sort.SliceStable(merged, func(i, j int) bool {
+			iExact := strings.ToLower(merged[i].ID) == lowerQ
+			jExact := strings.ToLower(merged[j].ID) == lowerQ
+			return iExact && !jExact
+		})
 		return searchResultsMsg{results: merged, query: query}
 	}
 }
@@ -2217,14 +2236,10 @@ func (m Model) renderDetail(row packageRow) string {
 
 	// source — link to the package page on the source
 	sourceURL := ""
-	if strings.EqualFold(row.source, "nuget.org") {
-		sourceURL = "https://www.nuget.org/packages/" + row.info.ID
-	} else {
-		for _, src := range m.sources {
-			if strings.EqualFold(src.Name, row.source) {
-				sourceURL = src.URL
-				break
-			}
+	for _, svc := range m.nugetServices {
+		if strings.EqualFold(svc.SourceName(), row.source) {
+			sourceURL = svc.PackageURL(row.info.ID, row.ref.Version.String(), row.info.ProjectURL)
+			break
 		}
 	}
 	s.WriteString(label("Source") + "\n")
@@ -2605,8 +2620,14 @@ func (m Model) renderSearchOverlay() string {
 		colID = 20
 	}
 
-	// Body
-	maxVisible := 10
+	// Body — scale with terminal height but cap at 20 rows
+	maxVisible := m.height - 8
+	if maxVisible < 5 {
+		maxVisible = 5
+	}
+	if maxVisible > 20 {
+		maxVisible = 20
+	}
 	switch {
 	case m.search.fetchingVersion:
 		lines = append(lines,
