@@ -159,7 +159,7 @@ type packageRow struct {
 
 func (r packageRow) statusIcon() string {
 	if r.vulnerable {
-		return "⚠"
+		return "▲"
 	}
 	if r.err != nil {
 		return "✗"
@@ -396,7 +396,7 @@ func (m Model) Update(msg bubble_tea.Msg) (bubble_tea.Model, bubble_tea.Cmd) {
 
 	case writeResultMsg:
 		if msg.err != nil {
-			m.statusLine = "⚠ Save failed: " + msg.err.Error()
+			m.statusLine = "▲ Save failed: " + msg.err.Error()
 			m.statusIsErr = true
 		} else {
 			m.statusLine = "✓ Saved"
@@ -622,7 +622,7 @@ func (m *Model) handleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 
 	case "/":
 		if m.selectedProject() == nil {
-			m.statusLine = "⚠ Select project"
+			m.statusLine = "▲ Select project"
 			m.statusIsErr = true
 			return nil
 		}
@@ -693,7 +693,7 @@ func (m *Model) handleSearchKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 		if proj := m.selectedProject(); proj != nil {
 			for ref := range proj.Packages {
 				if strings.EqualFold(ref.Name, selected.ID) {
-					m.statusLine = "⚠ " + selected.ID + " is in project"
+					m.statusLine = "▲ " + selected.ID + " is in project"
 					m.statusIsErr = true
 					m.search.active = false
 					m.search.input.Blur()
@@ -882,7 +882,7 @@ func (m *Model) openDepTree() bubble_tea.Cmd {
 func (m *Model) openTransitiveDepTree() bubble_tea.Cmd {
 	proj := m.selectedProject()
 	if proj == nil {
-		m.statusLine = "⚠ Select a project first"
+		m.statusLine = "▲ Select a project first"
 		m.statusIsErr = true
 		return nil
 	}
@@ -2574,7 +2574,7 @@ func (m Model) renderPickerOverlay() string {
 
 		extras := ""
 		if isVulnerable {
-			extras += styleRed.Render(" ⚠")
+			extras += styleRed.Render(" ▲")
 		}
 		if isPre {
 			extras += styleMuted.Render(" pre")
@@ -2600,7 +2600,7 @@ func (m Model) renderPickerOverlay() string {
 	legend := styleGreen.Render("■") + " compat  " +
 		styleYellow.Render("■") + " pre  " +
 		styleRed.Render("■") + " incompat  " +
-		styleRed.Render("⚠") + " vuln"
+		styleRed.Render("▲") + " vuln"
 	lines = append(lines, styleMuted.Render(legend))
 	lines = append(lines,
 		styleMuted.
