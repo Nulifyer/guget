@@ -47,9 +47,13 @@ A terminal UI for managing NuGet packages across .NET projects.
 
 ## Requirements
 
+To run:
+- The [guget](https://github.com/nulifyer/guget) CLI binary
+- [.NET SDK](https://dotnet.microsoft.com/download) dotnet CLI
+
+To build:
 - [Go](https://go.dev/) 1.25+
-- [.NET SDK](https://dotnet.microsoft.com/download) (for project discovery and `dotnet restore`)
-- A terminal with ANSI color support
+- [.NET SDK](https://dotnet.microsoft.com/download) dotnet CLI
 
 ---
 

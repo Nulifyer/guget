@@ -32,8 +32,8 @@ Manage NuGet packages across .NET projects with an interactive TUI, right inside
 
 ## Requirements
 
-- The [guget](https://github.com/nulifyer/guget) CLI binary must be installed
-- [.NET SDK](https://dotnet.microsoft.com/download) (for project discovery and `dotnet restore`)
+- The [guget](https://github.com/nulifyer/guget) CLI binary
+- [.NET SDK](https://dotnet.microsoft.com/download) dotnet CLI
 
 ## Installation
 
