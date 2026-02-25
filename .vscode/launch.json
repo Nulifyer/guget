@@ -9,15 +9,13 @@
             "program": "${workspaceFolder}/guget",
             "console": "integratedTerminal",
             "internalConsoleOptions": "neverOpen",
-            "preLaunchTask": "create-debug-dotnet",
-            "postDebugTask": "remove-debug-dotnet",
             "cwd": "${workspaceFolder}",
             "env": {
                 "LOG_LEVEL": "trace"
             },
             "args": [
                 "-v", "dbg",
-                "-p", "./debug-dotnet",
+                "-p", "./test-dotnet",
                 "-lf", "./guget.log.txt",
                 "--", "--extra-arg1", "value1", "--extra-arg2", "value2", "-p", "./fake-project"
             ]
@@ -30,12 +28,11 @@
             "program": "${workspaceFolder}/guget/main.go",
             "console": "integratedTerminal",
             "internalConsoleOptions": "neverOpen",
-            "preLaunchTask": "create-debug-dotnet",
-            "postDebugTask": "remove-debug-dotnet",
+            "postDebugTask": "reset-test-dotnet",
             "cwd": "${workspaceFolder}",
             "args": [
                 "-v", "trc",
-                "-p", "./debug-dotnet",
+                "-p", "./test-dotnet",
             ]
         },
         {

@@ -2,32 +2,11 @@
     "version": "2.0.0",
     "tasks": [
         {
-            "label": "create-debug-dotnet",
+            "label": "reset-test-dotnet",
             "type": "shell",
-            "dependsOn": "remove-debug-dotnet",
-            "windows": {
-                "command": "Copy-Item -Recurse '${workspaceFolder}/test-dotnet' '${workspaceFolder}/debug-dotnet'; exit"
-            },
-            "linux": {
-                "command": "cp -r '${workspaceFolder}/test-dotnet' '${workspaceFolder}/debug-dotnet'; exit"
-            },
-            "hide": true,
-            "presentation": {
-                "reveal": "silent",
-                "panel": "shared",
-                "close": true,
-                "echo": true,
-                "focus": false
-            }
-        },
-        {
-            "label": "remove-debug-dotnet",
-            "type": "shell",
-            "windows": {
-                "command": "Remove-Item -Recurse -Force -ErrorAction SilentlyContinue '${workspaceFolder}/debug-dotnet'; exit"
-            },
-            "linux": {
-                "command": "rm -rf '${workspaceFolder}/debug-dotnet'; exit"
+            "command": "git checkout -- test-dotnet/",
+            "options": {
+                "cwd": "${workspaceFolder}"
             },
             "hide": true,
             "presentation": {
