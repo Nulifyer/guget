@@ -265,6 +265,10 @@ type Model struct {
 	showLogs bool
 
 	resizeDebounceID int
+
+	leftWidthOffset    int // projects panel width offset ([ / ])
+	rightWidthOffset   int // detail panel width offset ([ / ])
+	overlayWidthOffset int // active overlay width offset, reset on close
 }
 
 func NewModel(parsedProjects []*ParsedProject, propsProjects []*ParsedProject, nugetServices []*NugetService, sources []NugetSource, sourceMapping *PackageSourceMapping, initialLogLines []string, loadingTotal int) Model {
@@ -418,6 +422,7 @@ func (m Model) Update(msg bubble_tea.Msg) (bubble_tea.Model, bubble_tea.Cmd) {
 		}
 		m.search.fetchedInfo = msg.info
 		m.search.fetchedSource = msg.source
+		m.overlayWidthOffset = 0
 		m.search.active = false
 		m.search.input.Blur()
 		m.picker = versionPicker{
@@ -450,14 +455,24 @@ func (m Model) Update(msg bubble_tea.Msg) (bubble_tea.Model, bubble_tea.Cmd) {
 		}
 		if m.showSources {
 			switch msg.String() {
+			case "[":
+				m.overlayWidthOffset -= 4
+			case "]":
+				m.overlayWidthOffset += 4
 			case "esc", "s", "q":
+				m.overlayWidthOffset = 0
 				m.showSources = false
 			}
 			return m, bubble_tea.Batch(cmds...)
 		}
 		if m.showHelp {
 			switch msg.String() {
+			case "[":
+				m.overlayWidthOffset -= 4
+			case "]":
+				m.overlayWidthOffset += 4
 			case "esc", "?", "q":
+				m.overlayWidthOffset = 0
 				m.showHelp = false
 			}
 			return m, bubble_tea.Batch(cmds...)
@@ -608,6 +623,15 @@ func (m *Model) handleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 		m.search.active = true
 		return m.search.input.Focus()
 
+	case "[":
+		m.resizeFocused(-4)
+		m.relayout()
+		return nil
+	case "]":
+		m.resizeFocused(4)
+		m.relayout()
+		return nil
+
 	case "enter":
 		if m.focus == focusProjects {
 			m.focus = focusPackages
@@ -616,9 +640,27 @@ func (m *Model) handleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 	return nil
 }
 
+func (m *Model) resizeFocused(delta int) {
+	switch m.focus {
+	case focusProjects:
+		m.leftWidthOffset += delta
+	case focusPackages:
+		m.rightWidthOffset -= delta
+	case focusDetail:
+		m.rightWidthOffset += delta
+	}
+}
+
 func (m *Model) handlePickerKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 	switch msg.String() {
+	case "[":
+		m.overlayWidthOffset -= 4
+		return nil
+	case "]":
+		m.overlayWidthOffset += 4
+		return nil
 	case "esc", "q":
+		m.overlayWidthOffset = 0
 		m.picker.active = false
 		m.picker.addMode = false
 		m.picker.targetProject = nil
@@ -632,6 +674,7 @@ func (m *Model) handlePickerKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 		}
 	case "enter":
 		if v := m.picker.selectedVersion(); v != nil {
+			m.overlayWidthOffset = 0
 			m.picker.active = false
 			if m.picker.addMode && m.picker.targetProject != nil {
 				return m.addPackageToProject(m.picker.pkgName, v.SemVer.String(), m.picker.targetProject)
@@ -644,7 +687,14 @@ func (m *Model) handlePickerKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 
 func (m *Model) handleSearchKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 	switch msg.String() {
+	case "[":
+		m.overlayWidthOffset -= 4
+		return nil
+	case "]":
+		m.overlayWidthOffset += 4
+		return nil
 	case "esc":
+		m.overlayWidthOffset = 0
 		m.search.active = false
 		m.search.input.Blur()
 		return nil
@@ -672,6 +722,7 @@ func (m *Model) handleSearchKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 				if strings.EqualFold(ref.Name, selected.ID) {
 					m.statusLine = "▲ " + selected.ID + " is in project"
 					m.statusIsErr = true
+					m.overlayWidthOffset = 0
 					m.search.active = false
 					m.search.input.Blur()
 					return nil
@@ -912,9 +963,12 @@ func (m *Model) openTransitiveDepTree() bubble_tea.Cmd {
 }
 
 func (m Model) depTreeOverlaySize() (w, h int) {
-	w = m.width * 80 / 100
+	w = m.width*80/100 + m.overlayWidthOffset
 	if w < 40 {
 		w = 40
+	}
+	if w > m.width-4 {
+		w = m.width - 4
 	}
 	h = m.height * 80 / 100
 	if h < 10 {
@@ -1410,9 +1464,17 @@ func (m *Model) addPackageToProject(pkgName, version string, project *ParsedProj
 
 func (m *Model) handleConfirmKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 	switch msg.String() {
+	case "[":
+		m.overlayWidthOffset -= 4
+		return nil
+	case "]":
+		m.overlayWidthOffset += 4
+		return nil
 	case "esc", "n", "q":
+		m.overlayWidthOffset = 0
 		m.confirm.active = false
 	case "enter", "y":
+		m.overlayWidthOffset = 0
 		m.confirm.active = false
 		return m.removePackage(m.confirm.pkgName)
 	}
@@ -1518,7 +1580,14 @@ func (m *Model) removePackage(pkgName string) bubble_tea.Cmd {
 
 func (m *Model) handleDepTreeKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 	switch msg.String() {
+	case "[":
+		m.overlayWidthOffset -= 4
+		return nil
+	case "]":
+		m.overlayWidthOffset += 4
+		return nil
 	case "esc", "q":
+		m.overlayWidthOffset = 0
 		m.depTree.active = false
 		return nil
 	default:
@@ -1529,7 +1598,13 @@ func (m *Model) handleDepTreeKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 }
 
 func (m Model) renderConfirmOverlay() string {
-	w := 48
+	w := 48 + m.overlayWidthOffset
+	if w < 36 {
+		w = 36
+	}
+	if w > m.width-4 {
+		w = m.width - 4
+	}
 	lines := []string{
 		styleRedBold.Render("Remove package?"),
 		styleSubtle.Render(m.confirm.pkgName),
@@ -1751,8 +1826,14 @@ func (m *Model) panelWidths() (left, mid, right int) {
 	lw := m.layoutWidth()
 	const borders = 6 // 2 per panel (left+right rounded border chars)
 
-	left = 30
-	right = 60
+	left = 30 + m.leftWidthOffset
+	right = 60 + m.rightWidthOffset
+	if left < 18 {
+		left = 18
+	}
+	if right < 24 {
+		right = 24
+	}
 	mid = lw - left - right - borders
 
 	if mid > 130 {
@@ -2379,6 +2460,7 @@ func (m Model) renderHelpOverlay() string {
 		{
 			title: "View toggles",
 			rows: [][2]string{
+				{"[ / ]", "resize focused panel"},
 				{"l", "toggle log panel"},
 				{"s", "toggle sources panel"},
 				{"?", "toggle this help"},
@@ -2419,9 +2501,12 @@ func (m Model) renderHelpOverlay() string {
 	lines = append(lines, "")
 	lines = append(lines, dimStyle.Render("esc · ? · q  close"))
 
-	w := m.width * 60 / 100
+	w := m.width*60/100 + m.overlayWidthOffset
 	if w < 56 {
 		w = 56
+	}
+	if w > m.width-4 {
+		w = m.width - 4
 	}
 	box := styleOverlay.
 		Width(w).
@@ -2431,7 +2516,13 @@ func (m Model) renderHelpOverlay() string {
 }
 
 func (m Model) renderSourcesOverlay() string {
-	w := 62
+	w := 90 + m.overlayWidthOffset
+	if w < 40 {
+		w = 40
+	}
+	if w > m.width-4 {
+		w = m.width - 4
+	}
 	innerW := w - 6 // border (2) + padding (2*2)
 
 	var lines []string
@@ -2477,7 +2568,13 @@ func (m Model) renderSourcesOverlay() string {
 }
 
 func (m Model) renderSearchOverlay() string {
-	w := 90
+	w := 90 + m.overlayWidthOffset
+	if w < 56 {
+		w = 56
+	}
+	if w > m.width-4 {
+		w = m.width - 4
+	}
 	innerW := w - 6 // border (2) + padding (2*2)
 
 	var lines []string
@@ -2500,10 +2597,13 @@ func (m Model) renderSearchOverlay() string {
 		styleBorder.Render(strings.Repeat("─", innerW)),
 	)
 
-	// Column widths: prefix(2) + id(45) + source(18) + version(12) + suffix
-	const colID = 45
+	// Column widths: prefix(2) + id(flex) + source(18) + version(12) + suffix
 	const colSource = 18
 	const colVer = 12
+	colID := innerW - colSource - colVer - 2 // 2 for prefix
+	if colID < 20 {
+		colID = 20
+	}
 
 	// Body
 	maxVisible := 10
@@ -2531,10 +2631,10 @@ func (m Model) renderSearchOverlay() string {
 			styleMuted.Render("Type to search NuGet…"))
 
 	default:
-		alreadyHas := NewSet[string]()
+		installedVer := make(map[string]SemVer)
 		if proj != nil {
 			for ref := range proj.Packages {
-				alreadyHas.Add(strings.ToLower(ref.Name))
+				installedVer[strings.ToLower(ref.Name)] = ref.Version
 			}
 		}
 
@@ -2560,16 +2660,27 @@ func (m Model) renderSearchOverlay() string {
 
 			pkgID := padRight(idStyle.Render(truncate(r.ID, colID-1)), colID)
 			source := padRight(styleMuted.Render(truncate(r.Source, colSource-2)), colSource)
-			ver := styleSubtle.Render(truncate(r.Version, colVer))
 
-			suffix := ""
-			if alreadyHas.Contains(strings.ToLower(r.ID)) {
-				suffix = " " + styleMuted.Render("(installed)")
-			} else if r.Verified {
-				suffix = " " + styleGreen.Render("✓")
+			icon := " "
+			if iv, ok := installedVer[strings.ToLower(r.ID)]; ok {
+				searchVer := ParseSemVer(r.Version)
+				if searchVer.IsNewerThan(iv) {
+					icon = styleYellow.Render("↑")
+				} else if iv.IsNewerThan(searchVer) {
+					icon = styleMuted.Render("↓")
+				} else {
+					icon = styleGreen.Render("✓")
+				}
 			}
 
-			line := prefix + pkgID + source + ver + suffix
+			verText := truncate(r.Version, colVer-2)
+			verPad := colVer - 2 - lipgloss.Width(verText)
+			if verPad < 0 {
+				verPad = 0
+			}
+			ver := icon + strings.Repeat(" ", verPad) + styleSubtle.Render(verText)
+
+			line := prefix + pkgID + source + ver
 			lines = append(lines, line)
 		}
 	}
@@ -2589,7 +2700,13 @@ func (m Model) renderSearchOverlay() string {
 }
 
 func (m Model) renderPickerOverlay() string {
-	w := 56
+	w := 76 + m.overlayWidthOffset
+	if w < 40 {
+		w = 40
+	}
+	if w > m.width-4 {
+		w = m.width - 4
+	}
 	maxVisible := 16
 	versions := m.picker.versions
 
