@@ -2558,7 +2558,7 @@ func (m Model) renderPickerOverlay() string {
 
 		extras := ""
 		if isVulnerable {
-			extras += vulnStyle.Render(" ⚠")
+			extras += styleRed.Render(" ⚠")
 		}
 		if isPre {
 			extras += styleMuted.Render(" pre")
@@ -2571,11 +2571,12 @@ func (m Model) renderPickerOverlay() string {
 			}
 		}
 
-		verText := style.Render(prefix + v.SemVer.String())
+		verStr := style.Render(v.SemVer.String())
 		if strings.EqualFold(pkgSource, "nuget.org") {
 			verURL := "https://www.nuget.org/packages/" + m.picker.pkgName + "/" + v.SemVer.String()
-			verText = hyperlink(verURL, verText)
+			verStr = hyperlink(verURL, verStr)
 		}
+		verText := style.Render(prefix) + verStr
 		lines = append(lines, verText+extras)
 	}
 
