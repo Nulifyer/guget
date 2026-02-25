@@ -30,7 +30,7 @@ type Theme struct {
 // ─────────────────────────────────────────────
 
 var validThemeNames = []string{
-	"auto", "dracula",
+	"auto", "auto-light", "auto-dark", "dracula",
 	"catppuccin-mocha", "catppuccin-macchiato", "catppuccin-frappe", "catppuccin-latte",
 	"nord", "tokyo-night", "everforest", "gruvbox",
 }
@@ -47,6 +47,30 @@ var themes = map[string]Theme{
 		Red:    lipgloss.AdaptiveColor{Dark: "#f85149", Light: "#cf222e"},
 		Purple: lipgloss.AdaptiveColor{Dark: "#bc8cff", Light: "#8250df"},
 		Cyan:   lipgloss.AdaptiveColor{Dark: "#56d7c2", Light: "#0d7680"},
+	},
+	"auto-light": {
+		Border: lipgloss.Color("#d0d7de"),
+		Muted:  lipgloss.Color("#8c959f"),
+		Text:   lipgloss.Color("#1f2328"),
+		Subtle: lipgloss.Color("#656d76"),
+		Accent: lipgloss.Color("#0969da"),
+		Green:  lipgloss.Color("#1a7f37"),
+		Yellow: lipgloss.Color("#9a6700"),
+		Red:    lipgloss.Color("#cf222e"),
+		Purple: lipgloss.Color("#8250df"),
+		Cyan:   lipgloss.Color("#0d7680"),
+	},
+	"auto-dark": {
+		Border: lipgloss.Color("#30363d"),
+		Muted:  lipgloss.Color("#484f58"),
+		Text:   lipgloss.Color("#e6edf3"),
+		Subtle: lipgloss.Color("#8b949e"),
+		Accent: lipgloss.Color("#58a6ff"),
+		Green:  lipgloss.Color("#3fb950"),
+		Yellow: lipgloss.Color("#d29922"),
+		Red:    lipgloss.Color("#f85149"),
+		Purple: lipgloss.Color("#bc8cff"),
+		Cyan:   lipgloss.Color("#56d7c2"),
 	},
 	"dracula": {
 		Border: lipgloss.Color("#44475a"),

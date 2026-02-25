@@ -142,7 +142,7 @@ func initCLI() BuiltFlags {
 		Name:           Flag_Theme,
 		Aliases:        []string{"-t", "--theme"},
 		Default:        arger.Optional("auto"),
-		Description:    "Color theme (auto, dracula, catppuccin-mocha, catppuccin-macchiato, catppuccin-frappe, catppuccin-latte, nord, tokyo-night, everforest, gruvbox)",
+		Description:    "Color theme",
 		ExpectedValues: validThemeNames,
 	})
 
