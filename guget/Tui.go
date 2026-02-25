@@ -1620,9 +1620,30 @@ func (m *Model) clampOffset() {
 	}
 }
 
+func (m *Model) footerLines() int {
+	// Count how many lines the keybind bar will need at the current width.
+	// Each entry is roughly "key desc" joined by "  ·  " (5 chars).
+	entryWidths := []int{10, 10, 9, 12, 9, 5, 5, 8, 6, 9, 6, 6} // approximate visible widths of each keybind entry
+	w := m.layoutWidth() - 4
+	lines, curW := 1, 0
+	for _, ew := range entryWidths {
+		needed := ew
+		if curW > 0 {
+			needed += 5
+		}
+		if curW+needed > w && curW > 0 {
+			lines++
+			curW = ew
+		} else {
+			curW += needed
+		}
+	}
+	return lines + 1 // +1 for status row
+}
+
 func (m *Model) bodyOuterHeight() int {
-	// 5 = header row (1) + header border (1) + footer border (1) + status row (1) + keybinds row (1)
-	h := m.height - 5
+	// 3 = header row (1) + header border (1) + footer border (1)
+	h := m.height - 3 - m.footerLines()
 	if m.showLogs {
 		h -= logPanelOuterHeight
 	}
@@ -1648,21 +1669,41 @@ func (m *Model) relayout() {
 
 func (m *Model) panelWidths() (left, mid, right int) {
 	lw := m.layoutWidth()
+	const borders = 6 // 2 per panel (left+right rounded border chars)
+
 	left = 30
-	right = 60 // comfortable width for the detail panel
-	mid = lw - left - right - 6
+	right = 60
+	mid = lw - left - right - borders
+
 	if mid > 130 {
 		// Cap the package list — beyond this the columns just float apart.
 		mid = 130
-		right = lw - left - mid - 6
+		right = lw - left - mid - borders
 	}
-	if right < 30 {
-		right = 30
-		mid = lw - left - right - 6
+
+	// Shrink panels proportionally when the terminal is too narrow.
+	minLeft, minMid, minRight := 18, 30, 24
+	total := left + mid + right + borders
+	if total > lw {
+		// First shrink right panel
+		right = lw - left - borders - mid
+		if right < minRight {
+			right = minRight
+		}
+		mid = lw - left - right - borders
+		// Then shrink left panel if still too wide
+		if mid < minMid {
+			left = lw - minMid - right - borders
+			if left < minLeft {
+				left = minLeft
+			}
+			mid = lw - left - right - borders
+		}
+		if mid < minMid {
+			mid = minMid
+		}
 	}
-	if mid < 40 {
-		mid = 40
-	}
+
 	return
 }
 
@@ -1754,26 +1795,56 @@ func (m Model) renderPackagePanel(w int) string {
 	visibleH := m.packageListHeight()
 	var lines []string
 
-	// Fixed columns: prefix(2) + icon+space(2) + Current(19) + Compatible(13) + Latest(14) + Source(16) = 66
-	// The Package (name) column gets whatever's left.
 	innerW := w - 4 // border + padding
-	fixedCols := 2 + 2 + 19 + 13 + 14 + 16
-	nameW := innerW - fixedCols
-	if nameW < 20 {
-		nameW = 20
+
+	// Determine which columns to show based on available width.
+	// Always shown: prefix(2) + icon+space(2) + name(variable) + current(19)
+	// Progressively hidden: source(16) → latest(14) → compatible(13)
+	const (
+		colPrefix  = 4  // "▶ " + icon + space
+		colCurrent = 19 // version column
+		colCompat  = 13
+		colLatest  = 14
+		colSource  = 16
+		minNameW   = 14
+	)
+
+	// Reserve space for columns in priority order: Compatible > Latest > Source.
+	// Each column is shown only if there's room after higher-priority columns.
+	budget := innerW - colPrefix - colCurrent
+	showCompat := budget >= minNameW+colCompat
+	if showCompat {
+		budget -= colCompat
+	}
+	showLatest := budget >= minNameW+colLatest
+	if showLatest {
+		budget -= colLatest
+	}
+	showSource := budget >= minNameW+colSource
+	if showSource {
+		budget -= colSource
+	}
+	nameW := budget
+	if nameW < minNameW {
+		nameW = minNameW
 	}
 
+	// Header
 	hStyle := styleSubtleBold
+	header := "  " + padRight(hStyle.Render("Package"), nameW) +
+		padRight(hStyle.Render("Current"), colCurrent)
+	if showCompat {
+		header += padRight(hStyle.Render("Compatible"), colCompat)
+	}
+	if showLatest {
+		header += padRight(hStyle.Render("Latest"), colLatest)
+	}
+	if showSource {
+		header += hStyle.Render("Source")
+	}
+	lines = append(lines, header)
 	lines = append(lines,
-		"  "+
-			padRight(hStyle.Render("Package"), nameW)+
-			padRight(hStyle.Render("Current"), 19)+
-			padRight(hStyle.Render("Compatible"), 13)+
-			padRight(hStyle.Render("Latest"), 14)+
-			hStyle.Render("Source"),
-	)
-	lines = append(lines,
-		styleBorder.Render(strings.Repeat("─", w-4)),
+		styleBorder.Render(strings.Repeat("─", innerW)),
 	)
 
 	// rows
@@ -1804,48 +1875,54 @@ func (m Model) renderPackagePanel(w int) string {
 			low := styleSubtle.Render(truncate(row.oldest.String(), 6))
 			sep := styleMuted.Render("–")
 			high := styleYellow.Render(truncate(rawCurrent, 10))
-			current = padRight(low+sep+high, 19)
+			current = padRight(low+sep+high, colCurrent)
 		} else {
 			current = padRight(
-				styleSubtle.Render(rawCurrent), 19)
+				styleSubtle.Render(rawCurrent), colCurrent)
 		}
 
-		// compatible
-		rawComp := "-"
-		compStyle := styleSubtle
-		if row.latestCompatible != nil {
-			rawComp = truncate(row.latestCompatible.SemVer.String(), 12)
-			if row.latestCompatible.SemVer.IsNewerThan(row.ref.Version) {
-				compStyle = styleYellow
-			} else {
-				compStyle = styleGreen
-			}
-		}
-		comp := padRight(compStyle.Render(rawComp), 13)
-
-		// latest
-		rawLatest := "-"
-		latestStyle := styleSubtle
-		if row.latestStable != nil {
-			rawLatest = truncate(row.latestStable.SemVer.String(), 12)
-			if row.latestStable.SemVer.IsNewerThan(row.ref.Version) {
-				latestStyle = stylePurple
-			} else {
-				latestStyle = styleGreen
-			}
-		}
-		latest := padRight(latestStyle.Render(rawLatest), 14)
-
-		// source
-		src := truncate(row.source, 16)
-		source := styleMuted.Render(src)
-
+		line := ""
 		prefix := "  "
 		if selected && focused {
 			prefix = styleAccent.Render("▶ ")
 		}
+		line += prefix + icon + " " + name + current
 
-		line := prefix + icon + " " + name + current + comp + latest + source
+		// compatible
+		if showCompat {
+			rawComp := "-"
+			compStyle := styleSubtle
+			if row.latestCompatible != nil {
+				rawComp = truncate(row.latestCompatible.SemVer.String(), 12)
+				if row.latestCompatible.SemVer.IsNewerThan(row.ref.Version) {
+					compStyle = styleYellow
+				} else {
+					compStyle = styleGreen
+				}
+			}
+			line += padRight(compStyle.Render(rawComp), colCompat)
+		}
+
+		// latest
+		if showLatest {
+			rawLatest := "-"
+			latestStyle := styleSubtle
+			if row.latestStable != nil {
+				rawLatest = truncate(row.latestStable.SemVer.String(), 12)
+				if row.latestStable.SemVer.IsNewerThan(row.ref.Version) {
+					latestStyle = stylePurple
+				} else {
+					latestStyle = styleGreen
+				}
+			}
+			line += padRight(latestStyle.Render(rawLatest), colLatest)
+		}
+
+		// source
+		if showSource {
+			src := truncate(row.source, colSource)
+			line += styleMuted.Render(src)
+		}
 
 		lines = append(lines, line)
 	}
@@ -2577,13 +2654,38 @@ func (m Model) renderFooter() string {
 		{"q", "quit"},
 	}
 
-	var parts []string
+	w := m.layoutWidth() - 4 // padding
+	var lines []string
+	var cur []string
+	curW := 0
+	sep := "  ·  "
+	sepW := 5
+
 	for _, pair := range keys {
 		k := styleAccentBold.Render(pair.k)
 		v := styleSubtle.Render(pair.v)
-		parts = append(parts, k+" "+v)
+		entry := k + " " + v
+		entryW := lipgloss.Width(pair.k) + 1 + lipgloss.Width(pair.v)
+
+		needed := entryW
+		if len(cur) > 0 {
+			needed += sepW
+		}
+		if curW+needed > w && len(cur) > 0 {
+			lines = append(lines, strings.Join(cur, sep))
+			cur = nil
+			curW = 0
+		}
+		cur = append(cur, entry)
+		if curW > 0 {
+			curW += sepW
+		}
+		curW += entryW
 	}
-	keybinds := strings.Join(parts, "  ·  ")
+	if len(cur) > 0 {
+		lines = append(lines, strings.Join(cur, sep))
+	}
+	keybinds := strings.Join(lines, "\n")
 
 	// Status line — always reserve the row so height is stable.
 	statusStr := ""
