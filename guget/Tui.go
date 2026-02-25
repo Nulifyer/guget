@@ -1035,7 +1035,6 @@ func (m *Model) buildDepTreeContent() string {
 	return m.depTree.content
 }
 
-
 type dotnetListPkg struct {
 	Name      string
 	Requested string // empty for transitive packages
@@ -1352,6 +1351,7 @@ func (m *Model) doSearchCmd(query string) bubble_tea.Cmd {
 					}
 				}
 				seen.Add(key)
+				r.Source = sr.source
 				merged = append(merged, r)
 			}
 		}
@@ -2477,7 +2477,7 @@ func (m Model) renderSourcesOverlay() string {
 }
 
 func (m Model) renderSearchOverlay() string {
-	w := 56
+	w := 90
 	innerW := w - 6 // border (2) + padding (2*2)
 
 	var lines []string
@@ -2499,6 +2499,11 @@ func (m Model) renderSearchOverlay() string {
 	lines = append(lines,
 		styleBorder.Render(strings.Repeat("─", innerW)),
 	)
+
+	// Column widths: prefix(2) + id(45) + source(18) + version(12) + suffix
+	const colID = 45
+	const colSource = 18
+	const colVer = 12
 
 	// Body
 	maxVisible := 10
@@ -2526,7 +2531,6 @@ func (m Model) renderSearchOverlay() string {
 			styleMuted.Render("Type to search NuGet…"))
 
 	default:
-		// Build already-installed set for the current project
 		alreadyHas := NewSet[string]()
 		if proj != nil {
 			for ref := range proj.Packages {
@@ -2554,8 +2558,9 @@ func (m Model) renderSearchOverlay() string {
 				idStyle = styleAccentBold
 			}
 
-			pkgID := padRight(idStyle.Render(truncate(r.ID, 34)), 35)
-			ver := styleSubtle.Render(truncate(r.Version, 12))
+			pkgID := padRight(idStyle.Render(truncate(r.ID, colID-1)), colID)
+			source := padRight(styleMuted.Render(truncate(r.Source, colSource-2)), colSource)
+			ver := styleSubtle.Render(truncate(r.Version, colVer))
 
 			suffix := ""
 			if alreadyHas.Contains(strings.ToLower(r.ID)) {
@@ -2564,7 +2569,7 @@ func (m Model) renderSearchOverlay() string {
 				suffix = " " + styleGreen.Render("✓")
 			}
 
-			line := prefix + pkgID + ver + suffix
+			line := prefix + pkgID + source + ver + suffix
 			lines = append(lines, line)
 		}
 	}

@@ -58,6 +58,7 @@ type SearchResult struct {
 	TotalDownloads int             `json:"totalDownloads"`
 	Verified       bool            `json:"verified"`
 	Versions       []searchVersion `json:"versions"`
+	Source         string          `json:"-"` // set after search, not from JSON
 }
 
 type searchVersion struct {
