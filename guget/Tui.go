@@ -71,6 +71,10 @@ type restoreResultMsg struct {
 	err error
 }
 
+type resizeDebounceMsg struct {
+	id int
+}
+
 type searchDebounceMsg struct {
 	id    int
 	query string
@@ -294,6 +298,8 @@ type Model struct {
 	logLines []string
 	logView  bubbles_viewport.Model
 	showLogs bool
+
+	resizeDebounceID int
 }
 
 func NewModel(parsedProjects []*ParsedProject, nugetServices []*NugetService, sources []NugetSource, initialLogLines []string, loadingTotal int) Model {
@@ -371,7 +377,16 @@ func (m Model) Update(msg bubble_tea.Msg) (bubble_tea.Model, bubble_tea.Cmd) {
 	case bubble_tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		m.relayout()
+		m.resizeDebounceID++
+		id := m.resizeDebounceID
+		cmds = append(cmds, bubble_tea.Tick(50*time.Millisecond, func(t time.Time) bubble_tea.Msg {
+			return resizeDebounceMsg{id: id}
+		}))
+
+	case resizeDebounceMsg:
+		if msg.id == m.resizeDebounceID {
+			m.relayout()
+		}
 
 	case bubbles_spinner.TickMsg:
 		var cmd bubble_tea.Cmd
@@ -1286,7 +1301,7 @@ func (m *Model) openVersionPicker() {
 func (m *Model) searchDebounceCmd(query string) bubble_tea.Cmd {
 	m.search.debounceID++
 	id := m.search.debounceID
-	return bubble_tea.Tick(300*time.Millisecond, func(t time.Time) bubble_tea.Msg {
+	return bubble_tea.Tick(500*time.Millisecond, func(t time.Time) bubble_tea.Msg {
 		return searchDebounceMsg{id: id, query: query}
 	})
 }
@@ -1848,6 +1863,12 @@ func (m Model) renderPackagePanel(w int) string {
 	)
 
 	// rows
+	if len(m.packageRows) == 0 {
+		lines = append(lines, "")
+		lines = append(lines, styleMuted.Render("  No packages found"))
+		lines = append(lines, styleMuted.Render("  Press / to search NuGet"))
+	}
+
 	end := m.packageOffset + visibleH
 	if end > len(m.packageRows) {
 		end = len(m.packageRows)
