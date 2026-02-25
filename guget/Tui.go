@@ -2048,9 +2048,20 @@ func (m Model) renderDetail(row packageRow) string {
 	s.WriteString(label("Downloads") + "\n")
 	s.WriteString(value(formatDownloads(row.info.TotalDownloads)) + "\n\n")
 
-	// source
+	// source — link to the package page on the source
+	sourceURL := ""
+	if strings.EqualFold(row.source, "nuget.org") {
+		sourceURL = "https://www.nuget.org/packages/" + row.info.ID
+	} else {
+		for _, src := range m.sources {
+			if strings.EqualFold(src.Name, row.source) {
+				sourceURL = src.URL
+				break
+			}
+		}
+	}
 	s.WriteString(label("Source") + "\n")
-	s.WriteString(styleSubtle.Render(row.source) + "\n\n")
+	s.WriteString(hyperlink(sourceURL, styleSubtle.Render(row.source)) + "\n\n")
 
 	// show defining file if it's from a .props file
 	if sel := m.selectedProject(); sel != nil {
@@ -2157,7 +2168,12 @@ func (m Model) renderDetail(row packageRow) string {
 			extras += styleMuted.
 				Render(fmt.Sprintf(" (%s)", formatDownloads(v.Downloads)))
 		}
-		s.WriteString(vStyle.Render(marker+v.SemVer.String()) + extras + "\n")
+		verText := vStyle.Render(v.SemVer.String())
+		if strings.EqualFold(row.source, "nuget.org") {
+			verURL := "https://www.nuget.org/packages/" + row.info.ID + "/" + v.SemVer.String()
+			verText = hyperlink(verURL, verText)
+		}
+		s.WriteString(vStyle.Render(marker) + verText + extras + "\n")
 	}
 
 	for i, v := range displayVersions {
@@ -2736,7 +2752,7 @@ func hyperlink(url, text string) string {
 	if !hyperlinkEnabled || url == "" {
 		return text
 	}
-	return "\x1b]8;;" + url + "\x1b\\" + text + "\x1b]8;;\x1b\\"
+	return "\x1b]8;;" + url + "\x1b\\" + text + " ↗" + "\x1b]8;;\x1b\\"
 }
 
 // advisoryLabel extracts a short display label from an advisory URL.
@@ -2747,7 +2763,6 @@ func advisoryLabel(url string) string {
 	}
 	return url
 }
-
 
 func wordWrap(s string, width int) string {
 	words := strings.Fields(s)
