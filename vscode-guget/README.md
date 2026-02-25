@@ -6,6 +6,10 @@
 
 Manage NuGet packages across .NET projects with an interactive TUI, right inside VS Code.
 
+[![Visual Studio Marketplace](https://img.shields.io/visual-studio-marketplace/v/nulifyer.guget)](https://marketplace.visualstudio.com/items?itemName=nulifyer.guget)
+[![Installs](https://img.shields.io/visual-studio-marketplace/i/nulifyer.guget)](https://marketplace.visualstudio.com/items?itemName=nulifyer.guget)
+[![GitHub Release](https://img.shields.io/github/v/release/nulifyer/guget?label=CLI&logo=github&color=brightgreen)](https://github.com/nulifyer/guget/releases)
+
 </div>
 
 ![Screenshot placeholder](https://raw.githubusercontent.com/nulifyer/guget/main/docs/screenshot.png)

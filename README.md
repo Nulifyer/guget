@@ -6,6 +6,8 @@
 
 ![Go](https://img.shields.io/badge/Go-1.25%2B-00ADD8?style=flat&logo=go)
 [![Platform](https://img.shields.io/badge/Platform-Linux%20|%20macOS%20|%20Windows-orange.svg)]()
+[![GitHub Release](https://img.shields.io/github/v/release/nulifyer/guget?logo=github&color=brightgreen)](https://github.com/nulifyer/guget/releases)
+[![VS Code Extension](https://img.shields.io/visual-studio-marketplace/v/nulifyer.guget?label=VS%20Code&logo=visualstudiocode)](https://marketplace.visualstudio.com/items?itemName=nulifyer.guget)
 
 A terminal UI for managing NuGet packages across .NET projects.
 </div>
