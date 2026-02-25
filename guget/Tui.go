@@ -22,16 +22,16 @@ import (
 // ─────────────────────────────────────────────
 
 var (
-	colorBorder = lipgloss.Color("#30363d")
-	colorMuted  = lipgloss.Color("#484f58")
-	colorText   = lipgloss.Color("#e6edf3")
-	colorSubtle = lipgloss.Color("#8b949e")
-	colorAccent = lipgloss.Color("#58a6ff")
-	colorGreen  = lipgloss.Color("#3fb950")
-	colorYellow = lipgloss.Color("#d29922")
-	colorRed    = lipgloss.Color("#f85149")
-	colorPurple = lipgloss.Color("#bc8cff")
-	colorCyan   = lipgloss.Color("#56d7c2")
+	colorBorder lipgloss.TerminalColor = lipgloss.Color("#30363d")
+	colorMuted  lipgloss.TerminalColor = lipgloss.Color("#484f58")
+	colorText   lipgloss.TerminalColor = lipgloss.Color("#e6edf3")
+	colorSubtle lipgloss.TerminalColor = lipgloss.Color("#8b949e")
+	colorAccent lipgloss.TerminalColor = lipgloss.Color("#58a6ff")
+	colorGreen  lipgloss.TerminalColor = lipgloss.Color("#3fb950")
+	colorYellow lipgloss.TerminalColor = lipgloss.Color("#d29922")
+	colorRed    lipgloss.TerminalColor = lipgloss.Color("#f85149")
+	colorPurple lipgloss.TerminalColor = lipgloss.Color("#bc8cff")
+	colorCyan   lipgloss.TerminalColor = lipgloss.Color("#56d7c2")
 )
 
 // ─────────────────────────────────────────────
@@ -333,7 +333,6 @@ type Model struct {
 	search  packageSearch
 	confirm confirmRemove
 	depTree depTreeOverlay
-	noColor bool
 
 	sources     []NugetSource
 	showSources bool
@@ -348,11 +347,7 @@ type Model struct {
 	showLogs bool
 }
 
-func NewModel(parsedProjects []*ParsedProject, nugetServices []*NugetService, sources []NugetSource, noColor bool, initialLogLines []string, loadingTotal int) Model {
-	if noColor {
-		lipgloss.SetColorProfile(0)
-	}
-
+func NewModel(parsedProjects []*ParsedProject, nugetServices []*NugetService, sources []NugetSource, initialLogLines []string, loadingTotal int) Model {
 	sp := bubbles_spinner.New()
 	sp.Spinner = bubbles_spinner.Dot
 	sp.Style = styleAccent
@@ -399,7 +394,6 @@ func NewModel(parsedProjects []*ParsedProject, nugetServices []*NugetService, so
 		spinner:        sp,
 		projectList:    l,
 		detailView:     dv,
-		noColor:        noColor,
 		search:         packageSearch{input: ti},
 		logLines:       initialLogLines,
 		logView:        lv,

@@ -67,6 +67,7 @@ const (
 	Flag_ProjectDir = "project"
 	Flag_Version    = "version"
 	Flag_LogFile    = "log-file"
+	Flag_Theme      = "theme"
 )
 
 type BuiltFlags struct {
@@ -75,6 +76,7 @@ type BuiltFlags struct {
 	ProjectDir string
 	Version    bool
 	LogFile    string
+	Theme      string
 }
 
 func BuildFlags(flags map[string]arger.IParsedFlag) BuiltFlags {
@@ -84,6 +86,7 @@ func BuildFlags(flags map[string]arger.IParsedFlag) BuiltFlags {
 		ProjectDir: arger.Get[string](flags, Flag_ProjectDir),
 		Version:    arger.Get[bool](flags, Flag_Version),
 		LogFile:    arger.Get[string](flags, Flag_LogFile),
+		Theme:      arger.Get[string](flags, Flag_Theme),
 	}
 }
 
@@ -135,6 +138,13 @@ func initCLI() BuiltFlags {
 		Default:     arger.Optional(""),
 		Description: "Write all log output to this file (in addition to the TUI log panel)",
 	})
+	arger.RegisterFlag(arger.Flag[string]{
+		Name:           Flag_Theme,
+		Aliases:        []string{"-t", "--theme"},
+		Default:        arger.Optional("auto"),
+		Description:    "Color theme (auto, dracula, catppuccin-mocha, catppuccin-macchiato, catppuccin-frappe, catppuccin-latte, nord, tokyo-night, everforest, gruvbox)",
+		ExpectedValues: validThemeNames,
+	})
 
 	parsedFlags, _ := arger.Parse()
 	builtFlags := BuildFlags(parsedFlags)
@@ -166,6 +176,7 @@ type nugetResult struct {
 
 func main() {
 	builtFlags := initCLI()
+	initTheme(builtFlags.Theme, builtFlags.NoColor)
 
 	// Redirect logger to an in-memory buffer immediately so that all startup
 	// logs are captured for the TUI log panel. Before p.Send is wired up,
@@ -234,7 +245,7 @@ func main() {
 		}
 	}
 
-	m := NewModel(parsedProjects, nugetServices, sources, builtFlags.NoColor, buf.Lines(), distinctPackages.Len())
+	m := NewModel(parsedProjects, nugetServices, sources, buf.Lines(), distinctPackages.Len())
 
 	p := tea.NewProgram(
 		m,
