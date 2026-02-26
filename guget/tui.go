@@ -24,6 +24,10 @@ const (
 // layoutWidth returns the effective width for the main content area,
 // capped at maxLayoutWidth so the UI stays readable on ultra-wide terminals.
 func (m *Model) layoutWidth() int {
+	const minLayoutWidth = 80
+	if m.width < minLayoutWidth {
+		return minLayoutWidth
+	}
 	if m.width > maxLayoutWidth {
 		return maxLayoutWidth
 	}
@@ -676,11 +680,11 @@ func (m *Model) handleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 		return m.search.input.Focus()
 
 	case "[":
-		m.resizeFocused(-4)
+		m.resizeFocused(-2)
 		m.relayout()
 		return nil
 	case "]":
-		m.resizeFocused(4)
+		m.resizeFocused(2)
 		m.relayout()
 		return nil
 
@@ -693,6 +697,12 @@ func (m *Model) handleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 }
 
 func (m *Model) resizeFocused(delta int) {
+	const (
+		borders = 6
+		minW    = 10
+	)
+	lw := m.layoutWidth()
+
 	switch m.focus {
 	case focusProjects:
 		m.leftWidthOffset += delta
@@ -702,6 +712,21 @@ func (m *Model) resizeFocused(delta int) {
 	case focusDetail:
 		m.rightWidthOffset += delta
 		m.refreshDetail()
+	}
+
+	left := 30 + m.leftWidthOffset
+	right := 50 + m.rightWidthOffset
+	mid := lw - left - right - borders
+
+	if left < minW || mid < minW || right < minW {
+		switch m.focus {
+		case focusProjects:
+			m.leftWidthOffset -= delta
+		case focusPackages:
+			m.rightWidthOffset += delta
+		case focusDetail:
+			m.rightWidthOffset -= delta
+		}
 	}
 }
 
@@ -1030,13 +1055,7 @@ func (m Model) overlayHeight() int {
 }
 
 func (m Model) depTreeOverlaySize() (w, h int) {
-	w = m.width*80/100 + m.overlayWidthOffset
-	if w < 40 {
-		w = 40
-	}
-	if w > m.width-4 {
-		w = m.width - 4
-	}
+	w = clampW(m.width*80/100+m.overlayWidthOffset, 40, m.width-4)
 	h = m.overlayHeight() - 4 // fill available space (minus box chrome)
 	return
 }
@@ -1670,13 +1689,7 @@ func (m *Model) handleDepTreeKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 }
 
 func (m Model) renderConfirmOverlay() string {
-	w := 48 + m.overlayWidthOffset
-	if w < 36 {
-		w = 36
-	}
-	if w > m.width-4 {
-		w = m.width - 4
-	}
+	w := clampW(48+m.overlayWidthOffset, 36, m.width-4)
 	lines := []string{
 		styleRedBold.Render("Remove package?"),
 		styleSubtle.Render(m.confirm.pkgName),
@@ -2015,11 +2028,11 @@ func (m *Model) panelWidths() (left, mid, right int) {
 
 	left = 30 + m.leftWidthOffset
 	right = 50 + m.rightWidthOffset
-	if left < 18 {
-		left = 18
+	if left < 10 {
+		left = 10
 	}
-	if right < 24 {
-		right = 24
+	if right < 10 {
+		right = 10
 	}
 	mid = lw - left - right - borders
 
@@ -2030,7 +2043,7 @@ func (m *Model) panelWidths() (left, mid, right int) {
 	}
 
 	// Shrink panels proportionally when the terminal is too narrow.
-	minLeft, minMid, minRight := 18, 30, 24
+	minLeft, minMid, minRight := 10, 10, 10
 	total := left + mid + right + borders
 	if total > lw {
 		// First shrink right panel
@@ -2756,13 +2769,7 @@ func (m *Model) refreshHelpView() {
 			lines = append(lines, k+"  "+d)
 		}
 	}
-	w := m.width*60/100 + m.overlayWidthOffset
-	if w < 56 {
-		w = 56
-	}
-	if w > m.width-4 {
-		w = m.width - 4
-	}
+	w := clampW(m.width*60/100+m.overlayWidthOffset, 56, m.width-4)
 
 	content := strings.Join(lines, "\n")
 	// Available height for content inside the overlay box:
@@ -2778,13 +2785,7 @@ func (m *Model) refreshHelpView() {
 }
 
 func (m Model) renderHelpOverlay() string {
-	w := m.width*60/100 + m.overlayWidthOffset
-	if w < 56 {
-		w = 56
-	}
-	if w > m.width-4 {
-		w = m.width - 4
-	}
+	w := clampW(m.width*60/100+m.overlayWidthOffset, 56, m.width-4)
 
 	content := m.helpView.View()
 
@@ -2796,13 +2797,7 @@ func (m Model) renderHelpOverlay() string {
 }
 
 func (m Model) renderSourcesOverlay() string {
-	w := 90 + m.overlayWidthOffset
-	if w < 40 {
-		w = 40
-	}
-	if w > m.width-4 {
-		w = m.width - 4
-	}
+	w := clampW(90+m.overlayWidthOffset, 40, m.width-4)
 	innerW := w - 6 // border (2) + padding (2*2)
 
 	var lines []string
@@ -2841,13 +2836,7 @@ func (m Model) renderSourcesOverlay() string {
 }
 
 func (m Model) renderSearchOverlay() string {
-	w := 90 + m.overlayWidthOffset
-	if w < 56 {
-		w = 56
-	}
-	if w > m.width-4 {
-		w = m.width - 4
-	}
+	w := clampW(90+m.overlayWidthOffset, 56, m.width-4)
 	innerW := w - 6 // border (2) + padding (2*2)
 
 	var lines []string
@@ -2973,13 +2962,7 @@ func (m Model) renderSearchOverlay() string {
 }
 
 func (m Model) renderPickerOverlay() string {
-	w := 76 + m.overlayWidthOffset
-	if w < 40 {
-		w = 40
-	}
-	if w > m.width-4 {
-		w = m.width - 4
-	}
+	w := clampW(76+m.overlayWidthOffset, 40, m.width-4)
 	maxVisible := 16
 	versions := m.picker.versions
 
@@ -3128,8 +3111,8 @@ func (m Model) renderLogPanel() string {
 	}
 
 	title := styleAccentBold.Render("Logs")
-	divider := styleBorder.Render(strings.Repeat("─", m.layoutWidth()-6))
-	content := lipgloss.JoinVertical(lipgloss.Left, title, divider, m.logView.View())
+	div := styleBorder.Render(strings.Repeat("─", m.layoutWidth()-6))
+	content := lipgloss.JoinVertical(lipgloss.Left, title, div, m.logView.View())
 
 	return s.Width(m.layoutWidth()).
 		Render(content)
@@ -3190,6 +3173,19 @@ func (m Model) renderFooter() string {
 
 // padRight pads a styled string to the given visible width.
 // Uses lipgloss.Width to measure, ignoring ANSI escape codes.
+func clampW(w, minW, maxW int) int {
+	if w < minW {
+		w = minW
+	}
+	if w > maxW {
+		w = maxW
+	}
+	if w < 10 {
+		w = 10
+	}
+	return w
+}
+
 func padRight(s string, width int) string {
 	visible := lipgloss.Width(s)
 	if visible >= width {
