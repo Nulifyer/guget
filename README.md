@@ -33,7 +33,7 @@ A terminal UI for managing NuGet packages across .NET projects.
 - **Version picker** — choose any specific version with target-framework and vulnerability indicators
 - **Dependency tree** — `t` shows a package's declared dependencies; `T` runs `dotnet list --include-transitive` and displays the full transitive tree with status icons
 - **Add packages** — search NuGet and add new package references
-- **Bulk sync** — apply a compatible version across all projects at once
+- **Bulk operations** — update a package across all projects at once
 - **Restore** — run `dotnet restore` without leaving the TUI
 - **Log panel** — real-time internal logs, toggleable with `l`
 - **Sources panel** — view configured NuGet sources, toggleable with `s`
@@ -150,24 +150,37 @@ guget -t dracula
 | `↑` / `k` | Move up |
 | `↓` / `j` | Move down |
 | `Enter` | Confirm / move focus from Projects to Packages |
-| `q` / `Ctrl+C` | Quit |
+| `Esc` / `q` / `Ctrl+C` | Quit (main screen) / Close (overlay) |
 
-### Package Actions
+### Package Actions (packages panel)
 
 | Key | Action |
 |-----|--------|
-| `u` | Update selected package to latest **compatible** version |
-| `U` | Update selected package to latest **stable** version |
-| `r` | Open version picker overlay |
-| `a` | Sync compatible version across **all** projects |
-| `R` | Run `dotnet restore` |
-| `/` | Search NuGet and add a new package |
+| `u` | Update to latest **compatible** version (this project) |
+| `U` | Update to latest **compatible** version (all projects) |
+| `a` | Update to latest **stable** version (this project) |
+| `A` | Update to latest **stable** version (all projects) |
+| `v` | Open version picker overlay |
 | `d` | Remove selected package (prompts for confirmation) |
 | `t` | Show declared dependency tree for the selected package |
-| `T` | Show full transitive dependency tree for the selected project |
+
+### Project Actions
+
+| Key | Action |
+|-----|--------|
+| `r` | Run `dotnet restore` (selected project) |
+| `R` | Run `dotnet restore` (all projects) |
+| `T` | Show full transitive dependency tree |
+| `/` | Search NuGet and add a new package |
+
+### General
+
+| Key | Action |
+|-----|--------|
 | `l` | Toggle log panel |
 | `s` | Toggle sources panel |
 | `?` | Toggle keybinding help |
+| `[` / `]` | Resize focused panel |
 
 ### Search Overlay (`/`)
 
@@ -176,16 +189,18 @@ guget -t dracula
 | `↑` / `Ctrl+P` | Previous result |
 | `↓` / `Ctrl+N` | Next result |
 | `Enter` | Select package |
-| `Esc` | Cancel |
+| `Esc` | Close |
 
-### Version Picker (`r`)
+### Version Picker (`v`)
 
 | Key | Action |
 |-----|--------|
 | `↑` / `k` | Previous version |
 | `↓` / `j` | Next version |
-| `Enter` | Select version |
-| `Esc` / `q` | Cancel |
+| `u` | Apply version (this project) |
+| `U` | Apply version (all projects) |
+| `Enter` | Apply version |
+| `Esc` / `q` | Close |
 
 ---
 

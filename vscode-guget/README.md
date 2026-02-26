@@ -23,7 +23,7 @@ Manage NuGet packages across .NET projects with an interactive TUI, right inside
 - **Version picker** — choose any specific version with target-framework and vulnerability indicators
 - **Dependency tree** — view declared and full transitive dependency trees
 - **Add packages** — search NuGet and add new package references
-- **Bulk sync** — apply a compatible version across all projects at once
+- **Bulk operations** — update a package across all projects at once
 - **Restore** — run `dotnet restore` without leaving the TUI
 - **Multi-source** — respects `NuGet.config` and global NuGet source configuration. Packages found on private feeds are supplemented with metadata from nuget.org.
 - **Clickable hyperlinks** — package names, advisory IDs, versions, and source URLs are clickable in terminals that support OSC 8 hyperlinks
@@ -89,13 +89,14 @@ guget opens as a full editor tab with complete keyboard support.
 |-----|--------|
 | `Tab` / `Shift+Tab` | Cycle panel focus |
 | `↑` / `k` / `↓` / `j` | Navigate |
-| `u` / `U` | Update to latest compatible / stable version |
-| `r` | Open version picker |
-| `a` | Sync version across all projects |
+| `u` / `U` | Update to latest compatible — this / all projects |
+| `a` / `A` | Update to latest stable — this / all projects |
+| `v` | Open version picker |
+| `r` / `R` | Run `dotnet restore` — selected / all projects |
 | `/` | Search and add a new package |
 | `d` | Remove package |
 | `t` / `T` | Dependency tree / transitive tree |
 | `l` | Toggle log panel |
 | `s` | Toggle sources panel |
 | `?` | Toggle help overlay |
-| `q` / `Ctrl+C` | Quit |
+| `Esc` / `q` | Quit (main) / Close (overlay) |
