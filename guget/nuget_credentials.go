@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
@@ -13,7 +15,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
 )
 
 // sourceCredential holds decoded credentials for a NuGet source.
@@ -28,11 +29,28 @@ type credentialProvider struct {
 	isDLL bool   // true if the provider is a .dll requiring "dotnet exec"
 }
 
-// credentialProviderResponse is the JSON payload returned by NuGet credential providers.
+// credentialProviderResponse is the JSON payload returned by V1 NuGet credential providers.
 type credentialProviderResponse struct {
 	Username  string   `json:"Username"`
 	Password  string   `json:"Password"`
 	AuthTypes []string `json:"AuthTypes"`
+}
+
+// pluginMessage is the envelope for V2 cross-platform plugin protocol messages.
+type pluginMessage struct {
+	RequestId string          `json:"RequestId"`
+	Type      string          `json:"Type"`   // "Request", "Response", "Cancel"
+	Method    string          `json:"Method"` // "Handshake", "GetAuthenticationCredentials", etc.
+	Payload   json.RawMessage `json:"Payload"`
+}
+
+// v2CredentialPayload is the Payload for a V2 GetAuthenticationCredentials response.
+type v2CredentialPayload struct {
+	ResponseCode        string   `json:"ResponseCode"`
+	Username            string   `json:"Username"`
+	Password            string   `json:"Password"`
+	Message             string   `json:"Message"`
+	AuthenticationTypes []string `json:"AuthenticationTypes"`
 }
 
 // normalizeCredentialKey decodes NuGet XML name encoding (e.g. _x0020_ → space)
@@ -391,9 +409,27 @@ func findPluginsOnPath() []credentialProvider {
 	return providers
 }
 
-// invokeProvider calls a credential provider executable using the NuGet plugin protocol
-// and parses the JSON response. DLL-based providers are invoked via "dotnet exec".
+// invokeProvider tries the V1 command-line protocol first, and automatically
+// falls back to the V2 cross-platform stdin/stdout protocol if the provider
+// responds with a V2 Handshake instead of V1 credentials.
 func invokeProvider(provider credentialProvider, sourceURL string) (*sourceCredential, error) {
+	name := filepath.Base(provider.path)
+
+	// Try V1 first (command-line args).
+	cred, err := invokeProviderV1(provider, sourceURL)
+	if err == nil && (cred.Username != "" || cred.Password != "") {
+		return cred, nil
+	}
+
+	// V1 returned empty credentials or failed — check if it was a V2 handshake.
+	// V2-only providers (e.g. AWS CodeArtifact) output a Handshake request and exit
+	// when invoked with V1 args, so V1 succeeds but yields no credentials.
+	logDebug("[%s] V1 returned no credentials, trying V2 protocol", name)
+	return invokeProviderV2(provider, sourceURL)
+}
+
+// invokeProviderV1 calls a credential provider using the legacy V1 command-line protocol.
+func invokeProviderV1(provider credentialProvider, sourceURL string) (*sourceCredential, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -402,7 +438,7 @@ func invokeProvider(provider credentialProvider, sourceURL string) (*sourceCrede
 	if provider.isDLL {
 		dotnetArgs := append([]string{"exec", provider.path}, args...)
 		cmd = exec.CommandContext(ctx, "dotnet", dotnetArgs...)
-		logTrace("invokeProvider: running dotnet exec %s", filepath.Base(provider.path))
+		logTrace("invokeProviderV1: running dotnet exec %s", filepath.Base(provider.path))
 	} else {
 		cmd = exec.CommandContext(ctx, provider.path, args...)
 	}
@@ -410,33 +446,151 @@ func invokeProvider(provider credentialProvider, sourceURL string) (*sourceCrede
 	if err != nil {
 		return nil, fmt.Errorf("provider exited non-zero: %w", err)
 	}
-	logTrace("invokeProvider: %s produced %d bytes of output", filepath.Base(provider.path), len(out))
+	logTrace("invokeProviderV1: %s produced %d bytes of output", filepath.Base(provider.path), len(out))
 
 	// Credential providers sometimes emit informational lines to stdout before
 	// the JSON payload (e.g. "INFO: ..."). Find the first '{' to locate the JSON.
 	jsonStart := bytes.IndexByte(out, '{')
 	if jsonStart >= 0 {
-		logTrace("invokeProvider: JSON found at offset %d (preamble: %d bytes)", jsonStart, jsonStart)
+		logTrace("invokeProviderV1: JSON found at offset %d (preamble: %d bytes)", jsonStart, jsonStart)
 		var resp credentialProviderResponse
 		if err := json.Unmarshal(out[jsonStart:], &resp); err != nil {
 			return nil, fmt.Errorf("parsing provider output: %w", err)
 		}
-		logTrace("invokeProvider: JSON parsed OK (username=%q, password=%d chars)", resp.Username, len(resp.Password))
+		logTrace("invokeProviderV1: JSON parsed OK (username=%q, password=%d chars)", resp.Username, len(resp.Password))
 		return &sourceCredential{Username: resp.Username, Password: resp.Password}, nil
 	}
 
 	// Fallback: some providers emit credentials as log lines instead of JSON, e.g.:
 	//   [Information] [CredentialProvider]Username: VssSessionToken
 	//   [Information] [CredentialProvider]Password: abc123
-	logTrace("invokeProvider: no JSON found, trying log-line parse")
+	logTrace("invokeProviderV1: no JSON found, trying log-line parse")
 	cred := parseLogLineCredentials(out)
 	if cred != nil {
-		logTrace("invokeProvider: log-line parse OK (username=%q, password=%d chars)", cred.Username, len(cred.Password))
+		logTrace("invokeProviderV1: log-line parse OK (username=%q, password=%d chars)", cred.Username, len(cred.Password))
 		return cred, nil
 	}
 
-	logTrace("invokeProvider: raw output: %q", string(out))
-	return nil, fmt.Errorf("parsing provider output: no JSON object or recognisable credential lines found in output")
+	return nil, fmt.Errorf("no credentials in V1 output")
+}
+
+// invokeProviderV2 communicates with a credential provider using the V2
+// cross-platform plugin protocol (JSON messages over stdin/stdout).
+//
+// Protocol flow:
+//  1. Plugin writes Handshake Request to stdout
+//  2. We write Handshake Response to stdin
+//  3. We write GetAuthenticationCredentials Request to stdin
+//  4. Plugin writes GetAuthenticationCredentials Response to stdout
+func invokeProviderV2(provider credentialProvider, sourceURL string) (*sourceCredential, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	var cmd *exec.Cmd
+	if provider.isDLL {
+		cmd = exec.CommandContext(ctx, "dotnet", "exec", provider.path)
+		logTrace("invokeProviderV2: running dotnet exec %s", filepath.Base(provider.path))
+	} else {
+		cmd = exec.CommandContext(ctx, provider.path)
+	}
+
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, fmt.Errorf("creating stdin pipe: %w", err)
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, fmt.Errorf("creating stdout pipe: %w", err)
+	}
+
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("starting provider: %w", err)
+	}
+	defer func() {
+		stdin.Close()
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	}()
+
+	scanner := bufio.NewScanner(stdout)
+
+	// 1. Read Handshake Request from plugin.
+	if !scanner.Scan() {
+		return nil, fmt.Errorf("V2: no handshake from plugin")
+	}
+	var handshake pluginMessage
+	if err := json.Unmarshal(scanner.Bytes(), &handshake); err != nil {
+		return nil, fmt.Errorf("V2: parsing handshake: %w", err)
+	}
+	if handshake.Method != "Handshake" {
+		return nil, fmt.Errorf("V2: expected Handshake, got %q", handshake.Method)
+	}
+	logTrace("invokeProviderV2: received Handshake (RequestId=%s)", handshake.RequestId)
+
+	// 2. Send Handshake Response.
+	writePluginMessage(stdin, pluginMessage{
+		RequestId: handshake.RequestId,
+		Type:      "Response",
+		Method:    "Handshake",
+		Payload:   json.RawMessage(`{"ResponseCode":"Success","ProtocolVersion":"2.0.0"}`),
+	})
+	logTrace("invokeProviderV2: sent Handshake response")
+
+	// 3. Send GetAuthenticationCredentials Request.
+	credReqId := newRequestID()
+	payloadJSON, _ := json.Marshal(map[string]any{
+		"Uri":              sourceURL,
+		"IsRetry":          false,
+		"IsNonInteractive": true,
+		"CanShowDialog":    false,
+	})
+	writePluginMessage(stdin, pluginMessage{
+		RequestId: credReqId,
+		Type:      "Request",
+		Method:    "GetAuthenticationCredentials",
+		Payload:   json.RawMessage(payloadJSON),
+	})
+	logTrace("invokeProviderV2: sent GetAuthenticationCredentials (RequestId=%s, Uri=%s)", credReqId, sourceURL)
+
+	// 4. Read messages until we get the credential response.
+	for scanner.Scan() {
+		var msg pluginMessage
+		if err := json.Unmarshal(scanner.Bytes(), &msg); err != nil {
+			logTrace("invokeProviderV2: skipping unparseable line: %s", scanner.Text())
+			continue
+		}
+		logTrace("invokeProviderV2: received %s/%s (RequestId=%s)", msg.Type, msg.Method, msg.RequestId)
+
+		if msg.RequestId == credReqId && msg.Type == "Response" {
+			var creds v2CredentialPayload
+			if err := json.Unmarshal(msg.Payload, &creds); err != nil {
+				return nil, fmt.Errorf("V2: parsing credential payload: %w", err)
+			}
+			if creds.ResponseCode != "Success" {
+				return nil, fmt.Errorf("V2: provider returned %s: %s", creds.ResponseCode, creds.Message)
+			}
+			logTrace("invokeProviderV2: credentials received (username=%q, password=%d chars)", creds.Username, len(creds.Password))
+			return &sourceCredential{Username: creds.Username, Password: creds.Password}, nil
+		}
+	}
+
+	return nil, fmt.Errorf("V2: plugin closed stdout without credential response")
+}
+
+// writePluginMessage writes a JSON-encoded plugin message followed by a newline to w.
+func writePluginMessage(w interface{ Write([]byte) (int, error) }, msg pluginMessage) {
+	data, _ := json.Marshal(msg)
+	data = append(data, '\n')
+	_, _ = w.Write(data)
+}
+
+// newRequestID generates a random UUID v4 string for V2 plugin protocol request IDs.
+func newRequestID() string {
+	var b [16]byte
+	_, _ = rand.Read(b[:])
+	b[6] = (b[6] & 0x0f) | 0x40 // version 4
+	b[8] = (b[8] & 0x3f) | 0x80 // variant 10
+	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:])
 }
 
 // parseLogLineCredentials handles providers that write credentials as log lines rather
