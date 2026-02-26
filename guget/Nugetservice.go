@@ -472,6 +472,7 @@ func (s *NugetService) Search(query string, take int) ([]SearchResult, error) {
 	params.Set("q", query)
 	params.Set("take", strconv.Itoa(take))
 	params.Set("prerelease", "false")
+	params.Set("semVerLevel", "2.0.0")
 	var resp searchResponse
 	if err := s.getJSON(s.searchBase+"?"+params.Encode(), &resp); err != nil {
 		return nil, err
