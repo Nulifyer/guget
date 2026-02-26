@@ -40,6 +40,13 @@ const (
 	focusLog
 )
 
+type actionScope int
+
+const (
+	scopeSelected actionScope = iota // this project (nil when "All Projects" → becomes all)
+	scopeAll                         // always all projects
+)
+
 // packageReadyMsg is sent by the background loader for each package as its
 // NuGet metadata resolves, enabling progressive UI updates.
 type packageReadyMsg struct {
@@ -141,6 +148,16 @@ type packageRow struct {
 	deprecated       bool // package is deprecated in the registry
 }
 
+// effectiveVersion returns the version used for status comparisons.
+// When diverged (All Projects view), use the oldest version so the icon
+// reflects the least-up-to-date project.
+func (r packageRow) effectiveVersion() SemVer {
+	if r.diverged {
+		return r.oldest
+	}
+	return r.ref.Version
+}
+
 func (r packageRow) statusIcon() string {
 	if r.vulnerable {
 		return "▲"
@@ -148,11 +165,12 @@ func (r packageRow) statusIcon() string {
 	if r.err != nil {
 		return "✗"
 	}
+	ver := r.effectiveVersion()
 	check := r.latestCompatible
 	if check == nil {
 		check = r.latestStable
 	}
-	if check != nil && check.SemVer.IsNewerThan(r.ref.Version) {
+	if check != nil && check.SemVer.IsNewerThan(ver) {
 		if r.latestStable != nil && r.latestCompatible != nil &&
 			r.latestStable.SemVer.IsNewerThan(r.latestCompatible.SemVer) {
 			return "⬆"
@@ -172,11 +190,12 @@ func (r packageRow) statusStyle() lipgloss.Style {
 	if r.err != nil {
 		return styleRed
 	}
+	ver := r.effectiveVersion()
 	check := r.latestCompatible
 	if check == nil {
 		check = r.latestStable
 	}
-	if check != nil && check.SemVer.IsNewerThan(r.ref.Version) {
+	if check != nil && check.SemVer.IsNewerThan(ver) {
 		if r.latestStable != nil && r.latestCompatible != nil &&
 			r.latestStable.SemVer.IsNewerThan(r.latestCompatible.SemVer) {
 			return stylePurple
@@ -256,6 +275,7 @@ type Model struct {
 	sourceMapping *PackageSourceMapping
 	showSources   bool
 	showHelp      bool
+	helpView      bubbles_viewport.Model
 
 	statusLine  string
 	statusIsErr bool
@@ -353,6 +373,9 @@ func (m Model) Update(msg bubble_tea.Msg) (bubble_tea.Model, bubble_tea.Cmd) {
 	case resizeDebounceMsg:
 		if msg.id == m.resizeDebounceID {
 			m.relayout()
+			if m.showHelp {
+				m.refreshHelpView()
+			}
 		}
 
 	case bubbles_spinner.TickMsg:
@@ -378,21 +401,18 @@ func (m Model) Update(msg bubble_tea.Msg) (bubble_tea.Model, bubble_tea.Cmd) {
 
 	case writeResultMsg:
 		if msg.err != nil {
-			m.statusLine = "▲ Save failed: " + msg.err.Error()
-			m.statusIsErr = true
+			cmds = append(cmds, m.setStatus("▲ Save failed: "+msg.err.Error(), true))
 		} else {
-			m.statusLine = "✓ Saved"
-			m.statusIsErr = false
+			cmds = append(cmds, m.setStatus("✓ Saved", false))
 		}
 
 	case restoreResultMsg:
 		m.restoring = false
 		if msg.err != nil {
-			m.statusLine = "✗ Restore failed: " + msg.err.Error()
-			m.statusIsErr = true
+			logError("restore failed: %v", msg.err)
+			cmds = append(cmds, m.setStatus("✗ Restore failed (see logs)", true))
 		} else {
-			m.statusLine = "✓ Restore complete"
-			m.statusIsErr = false
+			cmds = append(cmds, m.setStatus("✓ Restore complete", false))
 		}
 
 	case searchDebounceMsg:
@@ -449,7 +469,6 @@ func (m Model) Update(msg bubble_tea.Msg) (bubble_tea.Model, bubble_tea.Cmd) {
 		m.depTree.vp.SetContent(m.buildDepTreeContent())
 
 	case bubble_tea.KeyMsg:
-		m.statusLine = ""
 		if m.depTree.active {
 			cmds = append(cmds, m.handleDepTreeKey(msg))
 			return m, bubble_tea.Batch(cmds...)
@@ -463,6 +482,7 @@ func (m Model) Update(msg bubble_tea.Msg) (bubble_tea.Model, bubble_tea.Cmd) {
 			case "esc", "s", "q":
 				m.overlayWidthOffset = 0
 				m.showSources = false
+				m.statusLine = ""
 			}
 			return m, bubble_tea.Batch(cmds...)
 		}
@@ -470,11 +490,18 @@ func (m Model) Update(msg bubble_tea.Msg) (bubble_tea.Model, bubble_tea.Cmd) {
 			switch msg.String() {
 			case "[":
 				m.overlayWidthOffset -= 4
+				m.refreshHelpView()
 			case "]":
 				m.overlayWidthOffset += 4
+				m.refreshHelpView()
 			case "esc", "?", "q":
 				m.overlayWidthOffset = 0
 				m.showHelp = false
+				m.statusLine = ""
+			default:
+				var cmd bubble_tea.Cmd
+				m.helpView, cmd = m.helpView.Update(msg)
+				cmds = append(cmds, cmd)
 			}
 			return m, bubble_tea.Batch(cmds...)
 		}
@@ -501,7 +528,7 @@ func (m Model) Update(msg bubble_tea.Msg) (bubble_tea.Model, bubble_tea.Cmd) {
 			skip := false
 			if keyMsg, ok := msg.(bubble_tea.KeyMsg); ok {
 				switch keyMsg.String() {
-				case "d", "u", "U", "r", "a", "t", "T", "R", "/":
+				case "d", "u", "U", "r", "a", "A", "v", "t", "T", "R", "/":
 					skip = true
 				}
 			}
@@ -533,9 +560,23 @@ func (m Model) Update(msg bubble_tea.Msg) (bubble_tea.Model, bubble_tea.Cmd) {
 	return m, bubble_tea.Batch(cmds...)
 }
 
+func (m *Model) setStatus(text string, isErr bool) bubble_tea.Cmd {
+	// Strip newlines and truncate to keep the status on a single line.
+	if i := strings.IndexByte(text, '\n'); i >= 0 {
+		text = text[:i]
+	}
+	maxW := m.layoutWidth() - 6 // padding + border
+	if lipgloss.Width(text) > maxW && maxW > 3 {
+		text = text[:maxW-3] + "..."
+	}
+	m.statusLine = text
+	m.statusIsErr = isErr
+	return nil
+}
+
 func (m *Model) handleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 	switch msg.String() {
-	case "ctrl+c", "q":
+	case "ctrl+c", "q", "esc":
 		return bubble_tea.Quit
 
 	case "tab":
@@ -565,9 +606,16 @@ func (m *Model) handleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 
 	case "s":
 		m.showSources = !m.showSources
+		if m.showSources {
+			m.statusLine = ""
+		}
 
 	case "?":
 		m.showHelp = !m.showHelp
+		if m.showHelp {
+			m.statusLine = ""
+			m.refreshHelpView()
+		}
 
 	case "up", "k":
 		if m.focus == focusPackages && m.packageCursor > 0 {
@@ -585,27 +633,37 @@ func (m *Model) handleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 
 	case "u":
 		if m.focus == focusPackages {
-			return m.updateSelected(false)
+			return m.updatePackage(false, scopeSelected)
 		}
 
 	case "U":
 		if m.focus == focusPackages {
-			return m.updateSelected(true)
-		}
-
-	case "r":
-		if m.focus == focusPackages {
-			m.openVersionPicker()
+			return m.updatePackage(false, scopeAll)
 		}
 
 	case "a":
 		if m.focus == focusPackages {
-			return m.updateAllProjects()
+			return m.updatePackage(true, scopeSelected)
+		}
+
+	case "A":
+		if m.focus == focusPackages {
+			return m.updatePackage(true, scopeAll)
+		}
+
+	case "v":
+		if m.focus == focusPackages {
+			m.openVersionPicker()
+		}
+
+	case "r":
+		if !m.restoring {
+			return m.restore(scopeSelected)
 		}
 
 	case "R":
 		if !m.restoring {
-			return m.triggerRestore()
+			return m.restore(scopeAll)
 		}
 
 	case "t":
@@ -622,17 +680,17 @@ func (m *Model) handleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 				active:  true,
 				pkgName: m.packageRows[m.packageCursor].ref.Name,
 			}
+			m.statusLine = ""
 		}
 
 	case "/":
 		if m.selectedProject() == nil {
-			m.statusLine = "▲ Select project"
-			m.statusIsErr = true
-			return nil
+			return m.setStatus("▲ Select project", true)
 		}
 		m.search = packageSearch{input: m.search.input}
 		m.search.input.Reset()
 		m.search.active = true
+		m.statusLine = ""
 		return m.search.input.Focus()
 
 	case "[":
@@ -676,6 +734,7 @@ func (m *Model) handlePickerKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 		m.picker.active = false
 		m.picker.addMode = false
 		m.picker.targetProject = nil
+		m.statusLine = ""
 	case "up", "k":
 		if m.picker.cursor > 0 {
 			m.picker.cursor--
@@ -684,6 +743,10 @@ func (m *Model) handlePickerKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 		if m.picker.cursor < len(m.picker.versions)-1 {
 			m.picker.cursor++
 		}
+	case "u":
+		return m.applyPickerVersion(scopeSelected)
+	case "U":
+		return m.applyPickerVersion(scopeAll)
 	case "enter":
 		if v := m.picker.selectedVersion(); v != nil {
 			m.overlayWidthOffset = 0
@@ -709,6 +772,7 @@ func (m *Model) handleSearchKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 		m.overlayWidthOffset = 0
 		m.search.active = false
 		m.search.input.Blur()
+		m.statusLine = ""
 		return nil
 
 	case "up", "ctrl+p":
@@ -732,12 +796,10 @@ func (m *Model) handleSearchKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 		if proj := m.selectedProject(); proj != nil {
 			for ref := range proj.Packages {
 				if strings.EqualFold(ref.Name, selected.ID) {
-					m.statusLine = "▲ " + selected.ID + " is in project"
-					m.statusIsErr = true
 					m.overlayWidthOffset = 0
 					m.search.active = false
 					m.search.input.Blur()
-					return nil
+					return m.setStatus("▲ "+selected.ID+" is in project", true)
 				}
 			}
 		}
@@ -773,7 +835,7 @@ func (m *Model) handleSearchKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 	return cmd
 }
 
-func (m *Model) updateSelected(useLatest bool) bubble_tea.Cmd {
+func (m *Model) updatePackage(useStable bool, scope actionScope) bubble_tea.Cmd {
 	if m.packageCursor >= len(m.packageRows) {
 		return nil
 	}
@@ -782,7 +844,7 @@ func (m *Model) updateSelected(useLatest bool) bubble_tea.Cmd {
 		return nil
 	}
 	var target *PackageVersion
-	if useLatest {
+	if useStable {
 		target = row.latestStable
 	} else {
 		target = row.latestCompatible
@@ -790,7 +852,11 @@ func (m *Model) updateSelected(useLatest bool) bubble_tea.Cmd {
 	if target == nil {
 		return nil
 	}
-	return m.applyVersion(row.ref.Name, target.SemVer.String(), m.selectedProject())
+	var project *ParsedProject
+	if scope == scopeSelected {
+		project = m.selectedProject()
+	}
+	return m.applyVersion(row.ref.Name, target.SemVer.String(), project)
 }
 
 func (m *Model) isPropsProject(p *ParsedProject) bool {
@@ -883,17 +949,16 @@ func (m *Model) applyVersion(pkgName, version string, targetProject *ParsedProje
 	}
 }
 
-func (m *Model) triggerRestore() bubble_tea.Cmd {
+func (m *Model) restore(scope actionScope) bubble_tea.Cmd {
 	m.restoring = true
-	var projects []*ParsedProject
-	sel := m.selectedProject()
-	if sel != nil && !m.isPropsProject(sel) {
-		projects = []*ParsedProject{sel}
-	} else {
-		// "All Projects" or a .props file — restore all actual project files.
-		projects = m.parsedProjects
+	if scope == scopeSelected {
+		sel := m.selectedProject()
+		if sel != nil && !m.isPropsProject(sel) {
+			return runDotnetRestore([]*ParsedProject{sel})
+		}
 	}
-	return runDotnetRestore(projects)
+	// scopeAll, or "All Projects" selected, or .props file — restore all actual project files.
+	return runDotnetRestore(m.parsedProjects)
 }
 
 func runDotnetRestore(projects []*ParsedProject) bubble_tea.Cmd {
@@ -936,6 +1001,7 @@ func (m *Model) openDepTree() bubble_tea.Cmd {
 	if row.info == nil {
 		return nil
 	}
+	m.statusLine = ""
 	// Find the installed version's dependency groups.
 	var installedVer *PackageVersion
 	for i := range row.info.Versions {
@@ -959,10 +1025,9 @@ func (m *Model) openDepTree() bubble_tea.Cmd {
 func (m *Model) openTransitiveDepTree() bubble_tea.Cmd {
 	proj := m.selectedProject()
 	if proj == nil {
-		m.statusLine = "▲ Select a project first"
-		m.statusIsErr = true
-		return nil
+		return m.setStatus("▲ Select a project first", true)
 	}
+	m.statusLine = ""
 	overlayW, overlayH := m.depTreeOverlaySize()
 	vp := bubbles_viewport.New(overlayW-6, overlayH-8)
 	m.depTree = depTreeOverlay{
@@ -974,6 +1039,12 @@ func (m *Model) openTransitiveDepTree() bubble_tea.Cmd {
 	return runDepTreeCmd(proj)
 }
 
+// overlayHeight returns the number of terminal rows available for overlay
+// content (full height minus the footer).
+func (m Model) overlayHeight() int {
+	return m.height - m.footerLines() - 1 // -1 for footer top border
+}
+
 func (m Model) depTreeOverlaySize() (w, h int) {
 	w = m.width*80/100 + m.overlayWidthOffset
 	if w < 40 {
@@ -982,10 +1053,7 @@ func (m Model) depTreeOverlaySize() (w, h int) {
 	if w > m.width-4 {
 		w = m.width - 4
 	}
-	h = m.height * 80 / 100
-	if h < 10 {
-		h = 10
-	}
+	h = m.overlayHeight() - 4 // fill available space (minus box chrome)
 	return
 }
 
@@ -1317,30 +1385,28 @@ func (m Model) renderDepTreeOverlay() string {
 		lines = append(lines, m.depTree.vp.View())
 	}
 
-	lines = append(lines,
-		styleBorder.Render(strings.Repeat("─", innerW)),
-	)
-	lines = append(lines,
-		styleMuted.Render("esc close · ↑/↓ scroll"),
-	)
-
 	box := styleOverlay.
 		Width(overlayW).
 		Render(strings.Join(lines, "\n"))
 
-	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
+	return lipgloss.Place(m.width, m.overlayHeight(), lipgloss.Center, lipgloss.Center, box)
 }
 
-func (m *Model) updateAllProjects() bubble_tea.Cmd {
-	if m.packageCursor >= len(m.packageRows) {
+func (m *Model) applyPickerVersion(scope actionScope) bubble_tea.Cmd {
+	v := m.picker.selectedVersion()
+	if v == nil {
 		return nil
 	}
-	row := m.packageRows[m.packageCursor]
-	if row.latestCompatible == nil {
-		return nil
+	m.overlayWidthOffset = 0
+	m.picker.active = false
+	if m.picker.addMode && m.picker.targetProject != nil {
+		return m.addPackageToProject(m.picker.pkgName, v.SemVer.String(), m.picker.targetProject)
 	}
-	// Always syncs all projects regardless of the current project selection.
-	return m.applyVersion(row.ref.Name, row.latestCompatible.SemVer.String(), nil)
+	var project *ParsedProject
+	if scope == scopeSelected {
+		project = m.selectedProject()
+	}
+	return m.applyVersion(m.picker.pkgName, v.SemVer.String(), project)
 }
 
 func (m *Model) openVersionPicker() {
@@ -1351,6 +1417,7 @@ func (m *Model) openVersionPicker() {
 	if row.info == nil {
 		return
 	}
+	m.statusLine = ""
 	m.picker = versionPicker{
 		active:        true,
 		pkgName:       row.ref.Name,
@@ -1492,6 +1559,7 @@ func (m *Model) handleConfirmKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 	case "esc", "n", "q":
 		m.overlayWidthOffset = 0
 		m.confirm.active = false
+		m.statusLine = ""
 	case "enter", "y":
 		m.overlayWidthOffset = 0
 		m.confirm.active = false
@@ -1608,6 +1676,7 @@ func (m *Model) handleDepTreeKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 	case "esc", "q":
 		m.overlayWidthOffset = 0
 		m.depTree.active = false
+		m.statusLine = ""
 		return nil
 	default:
 		var cmd bubble_tea.Cmd
@@ -1627,13 +1696,11 @@ func (m Model) renderConfirmOverlay() string {
 	lines := []string{
 		styleRedBold.Render("Remove package?"),
 		styleSubtle.Render(m.confirm.pkgName),
-		"",
-		styleMuted.Render("enter / y confirm  ·  esc / n cancel"),
 	}
 	box := styleOverlayDanger.
 		Width(w).
 		Render(strings.Join(lines, "\n"))
-	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
+	return lipgloss.Place(m.width, m.overlayHeight(), lipgloss.Center, lipgloss.Center, box)
 }
 
 func (m *Model) selectedProject() *ParsedProject {
@@ -1697,10 +1764,15 @@ func (m *Model) rebuildPackageRows() {
 				row.latestCompatible = res.pkg.LatestStableForFramework(g.project.TargetFrameworks)
 				row.latestStable = res.pkg.LatestStable()
 				row.deprecated = res.pkg.Deprecated
+				// Check both newest and oldest versions for vulnerabilities
+				// so the icon reflects the worst case across all projects.
 				for _, v := range res.pkg.Versions {
-					if v.SemVer.String() == newest.String() {
-						row.vulnerable = len(v.Vulnerabilities) > 0
-						break
+					vs := v.SemVer.String()
+					if vs == newest.String() || vs == oldest.String() {
+						if len(v.Vulnerabilities) > 0 {
+							row.vulnerable = true
+							break
+						}
 					}
 				}
 			}
@@ -1757,11 +1829,12 @@ func sortPackageRowsByStatus(rows []packageRow) {
 		if r.vulnerable {
 			return 1
 		}
+		ver := r.effectiveVersion()
 		check := r.latestCompatible
 		if check == nil {
 			check = r.latestStable
 		}
-		if check != nil && check.SemVer.IsNewerThan(r.ref.Version) {
+		if check != nil && check.SemVer.IsNewerThan(ver) {
 			return 2
 		}
 		if r.deprecated {
@@ -1794,13 +1867,100 @@ func (m *Model) clampOffset() {
 	}
 }
 
+func (m Model) footerKeys() []struct{ k, v string } {
+	type kv = struct{ k, v string }
+
+	// Overlay contexts — show only the overlay's keys.
+	if m.depTree.active {
+		return []kv{{"↑↓", "scroll"}, {"esc", "close"}}
+	}
+	if m.search.active {
+		return []kv{{"↑↓", "nav"}, {"enter", "select"}, {"esc", "close"}}
+	}
+	if m.picker.active {
+		return []kv{{"↑↓", "nav"}, {"u/U", "update/all"}, {"esc", "close"}}
+	}
+	if m.confirm.active {
+		return []kv{{"enter/y", "confirm"}, {"esc", "cancel"}}
+	}
+	if m.showSources {
+		return []kv{{"esc", "close"}}
+	}
+	if m.showHelp {
+		return []kv{{"↑↓", "scroll"}, {"esc", "close"}}
+	}
+
+	// Main screen — varies by focused panel.
+	isAllProjects := m.selectedProject() == nil
+
+	switch m.focus {
+	case focusProjects:
+		return []kv{
+			{"tab/↑↓", "nav"},
+			{"enter", "packages"},
+			{"r/R", "restore/all"},
+			{"T", "deps"},
+			{"/", "add"},
+			{"?", "help"},
+			{"esc/q", "quit"},
+		}
+
+	case focusPackages:
+		if isAllProjects {
+			return []kv{
+				{"tab/↑↓", "nav"},
+				{"u/U", "update compat"},
+				{"a/A", "update stable"},
+				{"v", "version"},
+				{"d", "del"},
+				{"t/T", "deps"},
+				{"r/R", "restore"},
+				{"/", "add"},
+				{"?", "help"},
+				{"esc/q", "quit"},
+			}
+		}
+		return []kv{
+			{"tab/↑↓", "nav"},
+			{"u/U", "update/all"},
+			{"a/A", "stable/all"},
+			{"v", "version"},
+			{"d", "del"},
+			{"t/T", "deps"},
+			{"r/R", "restore/all"},
+			{"/", "add"},
+			{"?", "help"},
+			{"esc/q", "quit"},
+		}
+
+	case focusDetail:
+		return []kv{
+			{"tab", "focus"},
+			{"↑↓", "scroll"},
+			{"r/R", "restore/all"},
+			{"?", "help"},
+			{"esc/q", "quit"},
+		}
+
+	case focusLog:
+		return []kv{
+			{"tab", "focus"},
+			{"↑↓", "scroll"},
+			{"l", "close"},
+			{"?", "help"},
+			{"esc/q", "quit"},
+		}
+	}
+
+	return []kv{{"?", "help"}, {"esc/q", "quit"}}
+}
+
 func (m *Model) footerLines() int {
-	// Count how many lines the keybind bar will need at the current width.
-	// Each entry is roughly "key desc" joined by "  ·  " (5 chars).
-	entryWidths := []int{10, 10, 9, 12, 9, 5, 5, 8, 6, 9, 6, 6} // approximate visible widths of each keybind entry
+	keys := m.footerKeys()
 	w := m.layoutWidth() - 4
 	lines, curW := 1, 0
-	for _, ew := range entryWidths {
+	for _, pair := range keys {
+		ew := lipgloss.Width(pair.k) + 1 + lipgloss.Width(pair.v)
 		needed := ew
 		if curW > 0 {
 			needed += 5
@@ -1901,28 +2061,36 @@ func (m Model) View() string {
 		)
 	}
 
-	if m.depTree.active {
-		return m.renderDepTreeOverlay()
+	footer := m.renderFooter()
+	footerH := lipgloss.Height(footer)
+
+	// Overlay views — render in the space above the footer.
+	var overlay string
+	switch {
+	case m.depTree.active:
+		overlay = m.renderDepTreeOverlay()
+	case m.search.active:
+		overlay = m.renderSearchOverlay()
+	case m.picker.active:
+		overlay = m.renderPickerOverlay()
+	case m.confirm.active:
+		overlay = m.renderConfirmOverlay()
+	case m.showSources:
+		overlay = m.renderSourcesOverlay()
+	case m.showHelp:
+		overlay = m.renderHelpOverlay()
 	}
 
-	if m.search.active {
-		return m.renderSearchOverlay()
-	}
-
-	if m.picker.active {
-		return m.renderPickerOverlay()
-	}
-
-	if m.confirm.active {
-		return m.renderConfirmOverlay()
-	}
-
-	if m.showSources {
-		return m.renderSourcesOverlay()
-	}
-
-	if m.showHelp {
-		return m.renderHelpOverlay()
+	if overlay != "" {
+		// Overlay renderers use overlayHeight() to fit above the footer.
+		// Safety trim in case the overlay output still exceeds the space.
+		overlayLines := strings.Split(overlay, "\n")
+		maxLines := m.height - footerH
+		if len(overlayLines) > maxLines {
+			overlayLines = overlayLines[:maxLines]
+		}
+		trimmed := strings.Join(overlayLines, "\n")
+		return trimmed + "\n" + footer
 	}
 
 	leftW, midW, rightW := m.panelWidths()
@@ -1937,7 +2105,7 @@ func (m Model) View() string {
 	if m.showLogs {
 		parts = append(parts, m.renderLogPanel())
 	}
-	parts = append(parts, m.renderFooter())
+	parts = append(parts, footer)
 	content := lipgloss.JoinVertical(lipgloss.Left, parts...)
 
 	// Center the content when the terminal is wider than the max layout width.
@@ -2424,7 +2592,9 @@ func defaultVersionCursor(versions []PackageVersion, targets Set[TargetFramework
 	return 0
 }
 
-func (m Model) renderHelpOverlay() string {
+// refreshHelpView rebuilds the help content and configures the viewport.
+// Must be called on a *Model (not value receiver) so changes persist.
+func (m *Model) refreshHelpView() {
 	type section struct {
 		title string
 		rows  [][2]string // [key, description]
@@ -2441,10 +2611,11 @@ func (m Model) renderHelpOverlay() string {
 		{
 			title: "Package actions  (packages panel)",
 			rows: [][2]string{
-				{"u", "update to latest compatible version"},
-				{"U", "update to absolute latest version"},
-				{"r", "pick a specific version from the list"},
-				{"a", "update all packages across all projects"},
+				{"u", "update to latest compatible (this project)"},
+				{"U", "update to latest compatible (all projects)"},
+				{"a", "update to latest stable (this project)"},
+				{"A", "update to latest stable (all projects)"},
+				{"v", "pick a specific version from the list"},
 				{"d", "delete selected package from project"},
 				{"t", "show declared dependency tree for package"},
 			},
@@ -2452,16 +2623,19 @@ func (m Model) renderHelpOverlay() string {
 		{
 			title: "Project actions",
 			rows: [][2]string{
+				{"r", "run dotnet restore (selected project)"},
+				{"R", "run dotnet restore (all projects)"},
 				{"T", "show full transitive dependency tree"},
-				{"R", "run dotnet restore"},
 				{"/", "search NuGet and add a package"},
 			},
 		},
 		{
-			title: "Version picker  (r)",
+			title: "Version picker  (v)",
 			rows: [][2]string{
 				{"↑ / ↓  or  j / k", "move cursor"},
-				{"enter", "apply selected version"},
+				{"u", "apply version (this project)"},
+				{"U", "apply version (all projects)"},
+				{"enter", "apply version"},
 				{"esc / q", "close picker"},
 			},
 		},
@@ -2479,7 +2653,7 @@ func (m Model) renderHelpOverlay() string {
 				{"l", "toggle log panel"},
 				{"s", "toggle sources panel"},
 				{"?", "toggle this help"},
-				{"q / ctrl+c", "quit"},
+				{"esc / q / ctrl+c", "quit"},
 			},
 		},
 	}
@@ -2513,9 +2687,6 @@ func (m Model) renderHelpOverlay() string {
 			lines = append(lines, k+"  "+d)
 		}
 	}
-	lines = append(lines, "")
-	lines = append(lines, dimStyle.Render("esc · ? · q  close"))
-
 	w := m.width*60/100 + m.overlayWidthOffset
 	if w < 56 {
 		w = 56
@@ -2523,11 +2694,36 @@ func (m Model) renderHelpOverlay() string {
 	if w > m.width-4 {
 		w = m.width - 4
 	}
+
+	content := strings.Join(lines, "\n")
+	// Available height for content inside the overlay box:
+	// overlay area - border (2) - padding (2) - margin (2)
+	maxH := m.overlayHeight() - 6
+	if maxH < 8 {
+		maxH = 8
+	}
+
+	m.helpView.Width = w - 4
+	m.helpView.Height = maxH
+	m.helpView.SetContent(content)
+}
+
+func (m Model) renderHelpOverlay() string {
+	w := m.width*60/100 + m.overlayWidthOffset
+	if w < 56 {
+		w = 56
+	}
+	if w > m.width-4 {
+		w = m.width - 4
+	}
+
+	content := m.helpView.View()
+
 	box := styleOverlay.
 		Width(w).
-		Render(strings.Join(lines, "\n"))
+		Render(content)
 
-	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
+	return lipgloss.Place(m.width, m.overlayHeight(), lipgloss.Center, lipgloss.Center, box)
 }
 
 func (m Model) renderSourcesOverlay() string {
@@ -2558,7 +2754,7 @@ func (m Model) renderSourcesOverlay() string {
 			name := nameStyle.Render(truncate(src.Name, innerW-18))
 			auth := ""
 			if src.Username != "" {
-				auth = "  " + styleGreen.Render("✓ authenticated")
+				auth = "  " + styleMuted.Render("🔒 "+src.Username)
 			}
 			lines = append(lines, name+auth)
 			lines = append(lines,
@@ -2568,18 +2764,11 @@ func (m Model) renderSourcesOverlay() string {
 		}
 	}
 
-	lines = append(lines,
-		styleBorder.Render(strings.Repeat("─", innerW)),
-	)
-	lines = append(lines,
-		styleMuted.Render("esc / s  close"),
-	)
-
 	box := styleOverlay.
 		Width(w).
 		Render(strings.Join(lines, "\n"))
 
-	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
+	return lipgloss.Place(m.width, m.overlayHeight(), lipgloss.Center, lipgloss.Center, box)
 }
 
 func (m Model) renderSearchOverlay() string {
@@ -2620,8 +2809,9 @@ func (m Model) renderSearchOverlay() string {
 		colID = 20
 	}
 
-	// Body — scale with terminal height but cap at 20 rows
-	maxVisible := m.height - 8
+	// Body — scale with terminal height but cap at 20 rows.
+	// 7 = 3 fixed content lines + 4 box chrome (border 2 + padding 2).
+	maxVisible := m.overlayHeight() - 7
 	if maxVisible < 5 {
 		maxVisible = 5
 	}
@@ -2706,18 +2896,11 @@ func (m Model) renderSearchOverlay() string {
 		}
 	}
 
-	// Help line
-	lines = append(lines, "")
-	lines = append(lines,
-		styleMuted.
-			Render("↑/↓ navigate · enter select · esc cancel"),
-	)
-
 	box := styleOverlay.
 		Width(w).
 		Render(strings.Join(lines, "\n"))
 
-	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
+	return lipgloss.Place(m.width, m.overlayHeight(), lipgloss.Center, lipgloss.Center, box)
 }
 
 func (m Model) renderPickerOverlay() string {
@@ -2835,16 +3018,12 @@ func (m Model) renderPickerOverlay() string {
 		styleRed.Render("■") + " incompat  " +
 		styleRed.Render("▲") + " vuln"
 	lines = append(lines, styleMuted.Render(legend))
-	lines = append(lines,
-		styleMuted.
-			Render("↑/↓ navigate · enter select · esc cancel"),
-	)
 
 	box := styleOverlay.
 		Width(w).
 		Render(strings.Join(lines, "\n"))
 
-	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
+	return lipgloss.Place(m.width, m.overlayHeight(), lipgloss.Center, lipgloss.Center, box)
 }
 
 func (m *Model) updateLogView() {
@@ -2888,21 +3067,7 @@ func (m Model) renderLogPanel() string {
 }
 
 func (m Model) renderFooter() string {
-	type kv struct{ k, v string }
-	keys := []kv{
-		{"tab/↑↓", "nav"},
-		{"u/U", "update"},
-		{"r", "version"},
-		{"a", "update all"},
-		{"R", "restore"},
-		{"/", "add"},
-		{"d", "del"},
-		{"t/T", "deps"},
-		{"l", "logs"},
-		{"s", "sources"},
-		{"?", "help"},
-		{"q", "quit"},
-	}
+	keys := m.footerKeys()
 
 	w := m.layoutWidth() - 4 // padding
 	var lines []string
