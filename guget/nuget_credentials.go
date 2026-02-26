@@ -472,12 +472,18 @@ func invokeProviderV2(provider credentialProvider, sourceURL string) (*sourceCre
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
+	// CredentialProvider.Microsoft requires -Plugin to enter V2 mode.
+	var args []string
+	if strings.Contains(strings.ToLower(filepath.Base(provider.path)), "credentialprovider.microsoft") {
+		args = []string{"-Plugin"}
+	}
+
 	var cmd *exec.Cmd
 	if provider.isDLL {
-		cmd = exec.CommandContext(ctx, "dotnet", "exec", provider.path)
-		logTrace("invokeProviderV2: running dotnet exec %s", filepath.Base(provider.path))
+		dotnetArgs := append([]string{"exec", provider.path}, args...)
+		cmd = exec.CommandContext(ctx, "dotnet", dotnetArgs...)
 	} else {
-		cmd = exec.CommandContext(ctx, provider.path)
+		cmd = exec.CommandContext(ctx, provider.path, args...)
 	}
 
 	stdin, err := cmd.StdinPipe()
