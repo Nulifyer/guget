@@ -50,6 +50,41 @@ const (
 	scopeAll                         // always all projects
 )
 
+type packageSortMode int
+
+const (
+	sortByStatus    packageSortMode = iota // status then name (default)
+	sortByName                             // name only
+	sortBySource                           // source then name
+	sortByPublished                        // last published (newest first)
+)
+
+func (s packageSortMode) label() string {
+	switch s {
+	case sortByName:
+		return "name"
+	case sortBySource:
+		return "source"
+	case sortByPublished:
+		return "published"
+	default:
+		return "status"
+	}
+}
+
+func (s packageSortMode) defaultDir() bool {
+	switch s {
+	case sortByPublished:
+		return false
+	default:
+		return true
+	}
+}
+
+func (s packageSortMode) next() packageSortMode {
+	return (s + 1) % 4
+}
+
 // packageReadyMsg is sent by the background loader for each package as its
 // NuGet metadata resolves, enabling progressive UI updates.
 type packageReadyMsg struct {
@@ -263,9 +298,11 @@ type Model struct {
 	projectCursor int
 	projectOffset int
 
-	packageRows   []packageRow
-	packageCursor int
-	packageOffset int
+	packageRows     []packageRow
+	packageCursor   int
+	packageOffset   int
+	packageSortMode packageSortMode
+	packageSortDir  bool
 
 	detailView bubbles_viewport.Model
 
@@ -319,20 +356,22 @@ func NewModel(parsedProjects []*ParsedProject, propsProjects []*ParsedProject, n
 	ti.Width = 44
 
 	m := Model{
-		parsedProjects: parsedProjects,
-		propsProjects:  propsProjects,
-		nugetServices:  nugetServices,
-		sources:        sources,
-		sourceMapping:  sourceMapping,
-		loading:        loadingTotal > 0,
-		loadingTotal:   loadingTotal,
-		spinner:        sp,
-		projectItems:   projItems,
-		detailView:     dv,
-		search:         packageSearch{input: ti},
-		logLines:       initialLogLines,
-		logView:        lv,
-		results:        make(map[string]nugetResult, loadingTotal),
+		parsedProjects:  parsedProjects,
+		propsProjects:   propsProjects,
+		nugetServices:   nugetServices,
+		sources:         sources,
+		sourceMapping:   sourceMapping,
+		loading:         loadingTotal > 0,
+		loadingTotal:    loadingTotal,
+		spinner:         sp,
+		projectItems:    projItems,
+		detailView:      dv,
+		search:          packageSearch{input: ti},
+		logLines:        initialLogLines,
+		logView:         lv,
+		results:         make(map[string]nugetResult, loadingTotal),
+		packageSortMode: sortByStatus,
+		packageSortDir:  sortByStatus.defaultDir(),
 	}
 	return m
 }
@@ -659,6 +698,19 @@ func (m *Model) handleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 
 	case "T":
 		return m.openTransitiveDepTree()
+
+	case "o":
+		if m.focus == focusPackages {
+			m.packageSortMode = m.packageSortMode.next()
+			m.packageSortDir = m.packageSortMode.defaultDir()
+			m.rebuildPackageRows()
+		}
+
+	case "O":
+		if m.focus == focusPackages {
+			m.packageSortDir = !m.packageSortDir
+			m.rebuildPackageRows()
+		}
 
 	case "d":
 		if m.focus == focusPackages && m.packageCursor < len(m.packageRows) {
@@ -1800,8 +1852,25 @@ func (m *Model) rebuildPackageRows() {
 		}
 	}
 
-	sortPackageRowsByName(rows)
-	sortPackageRowsByStatus(rows)
+	switch m.packageSortMode {
+	case sortByName:
+		sortPackageRowsByName(rows)
+	case sortBySource:
+		sortPackageRowsByName(rows)
+		sortPackageRowsBySource(rows)
+	case sortByPublished:
+		sortPackageRowsByName(rows)
+		sortPackageRowsByPublished(rows)
+	default: // sortByStatus
+		sortPackageRowsByName(rows)
+		sortPackageRowsByStatus(rows)
+	}
+
+	if !m.packageSortDir {
+		for i, j := 0, len(rows)-1; i < j; i, j = i+1, j-1 {
+			rows[i], rows[j] = rows[j], rows[i]
+		}
+	}
 
 	m.packageRows = rows
 	if m.packageCursor >= len(rows) {
@@ -1841,6 +1910,34 @@ func sortPackageRowsByStatus(rows []packageRow) {
 	}
 	for i := 1; i < len(rows); i++ {
 		for j := i; j > 0 && priority(rows[j]) < priority(rows[j-1]); j-- {
+			rows[j], rows[j-1] = rows[j-1], rows[j]
+		}
+	}
+}
+
+func sortPackageRowsBySource(rows []packageRow) {
+	for i := 1; i < len(rows); i++ {
+		for j := i; j > 0 && rows[j].source < rows[j-1].source; j-- {
+			rows[j], rows[j-1] = rows[j-1], rows[j]
+		}
+	}
+}
+
+// sortPackageRowsByPublished sorts by the published date of the installed
+// version's latest compatible (or latest stable) match, newest first.
+func sortPackageRowsByPublished(rows []packageRow) {
+	published := func(r packageRow) time.Time {
+		v := r.latestCompatible
+		if v == nil {
+			v = r.latestStable
+		}
+		if v != nil {
+			return v.Published
+		}
+		return time.Time{}
+	}
+	for i := 1; i < len(rows); i++ {
+		for j := i; j > 0 && published(rows[j]).Before(published(rows[j-1])); j-- {
 			rows[j], rows[j-1] = rows[j-1], rows[j]
 		}
 	}
@@ -1915,6 +2012,7 @@ func (m Model) footerKeys() []struct{ k, v string } {
 				{"a/A", "update stable"},
 				{"v", "version"},
 				{"d", "del"},
+				{"o/O", "sort/dir"},
 				{"t/T", "deps"},
 				{"r/R", "restore"},
 				{"/", "add"},
@@ -1928,6 +2026,7 @@ func (m Model) footerKeys() []struct{ k, v string } {
 			{"a/A", "stable/all"},
 			{"v", "version"},
 			{"d", "del"},
+			{"o/O", "sort/dir"},
 			{"t/T", "deps"},
 			{"r/R", "restore/all"},
 			{"/", "add"},
@@ -2284,7 +2383,12 @@ func (m Model) renderPackagePanel(w int) string {
 
 	// Header
 	hStyle := styleSubtleBold
-	header := "  " + padRight(hStyle.Render("Package"), nameW) +
+	sortArrow := "▼"
+	if m.packageSortDir {
+		sortArrow = "▲"
+	}
+	pkgHeader := "Package (by " + m.packageSortMode.label() + " " + sortArrow + ")"
+	header := "  " + padRight(hStyle.Render(pkgHeader), nameW) +
 		padRight(hStyle.Render("Current"), colCurrent)
 	if showAvail {
 		header += padRight(hStyle.Render("Available"), colAvail)
@@ -2700,6 +2804,8 @@ func (m *Model) refreshHelpView() {
 				{"v", "pick a specific version from the list"},
 				{"d", "delete selected package from project"},
 				{"t", "show declared dependency tree for package"},
+				{"o", "cycle sort order (status, name, source, published)"},
+				{"O", "change sort direction"},
 			},
 		},
 		{
@@ -3060,8 +3166,20 @@ func (m Model) renderPickerOverlay() string {
 			verURL := "https://www.nuget.org/packages/" + m.picker.pkgName + "/" + v.SemVer.String()
 			verStr = hyperlink(verURL, verStr)
 		}
-		verText := style.Render(prefix) + verStr
-		lines = append(lines, verText+extras)
+		verText := style.Render(prefix) + verStr + extras
+
+		ago := timeAgo(v.Published)
+		if ago != "" {
+			agoRendered := styleMuted.Render(ago)
+			leftW := lipgloss.Width(verText)
+			agoW := lipgloss.Width(agoRendered)
+			innerW := w - 6
+			gap := innerW - leftW - agoW
+			if gap > 0 {
+				verText += strings.Repeat(" ", gap) + agoRendered
+			}
+		}
+		lines = append(lines, verText)
 	}
 
 	lines = append(lines, "")
@@ -3173,6 +3291,35 @@ func (m Model) renderFooter() string {
 
 // padRight pads a styled string to the given visible width.
 // Uses lipgloss.Width to measure, ignoring ANSI escape codes.
+func timeAgo(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	d := time.Since(t)
+	days := int(d.Hours() / 24)
+	if days < 1 {
+		return "today"
+	}
+	months := days / 30
+	years := days / 365
+	if years > 0 {
+		if years == 1 {
+			return "1 year ago"
+		}
+		return fmt.Sprintf("%d years ago", years)
+	}
+	if months > 0 {
+		if months == 1 {
+			return "1 month ago"
+		}
+		return fmt.Sprintf("%d months ago", months)
+	}
+	if days == 1 {
+		return "1 day ago"
+	}
+	return fmt.Sprintf("%d days ago", days)
+}
+
 func clampW(w, minW, maxW int) int {
 	if w < minW {
 		w = minW

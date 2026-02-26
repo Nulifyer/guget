@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 type serviceIndex struct {
@@ -69,6 +70,7 @@ type searchVersion struct {
 type PackageVersion struct {
 	SemVer           SemVer
 	Downloads        int
+	Published        time.Time              // when this version was published
 	Frameworks       []TargetFramework      // target frameworks this version supports
 	Vulnerabilities  []PackageVulnerability // CVE advisories for this specific version
 	DependencyGroups []dependencyGroup      // declared dependencies, for dep tree overlay
@@ -116,6 +118,7 @@ type registrationLeaf struct {
 	ProjectURL       string                 `json:"projectUrl"`
 	Repository       *repositoryMeta        `json:"repository"`
 	Listed           *bool                  `json:"listed"`
+	Published        string                 `json:"published"`
 	DependencyGroups []dependencyGroup      `json:"dependencyGroups"`
 	Vulnerabilities  []PackageVulnerability `json:"vulnerabilities"`
 	Deprecation      *deprecationRaw        `json:"deprecation"`
@@ -538,8 +541,10 @@ func (s *NugetService) SearchExact(packageID string) (*PackageInfo, error) {
 					frameworks = append(frameworks, ParseTargetFramework(raw))
 				}
 			}
+			published, _ := time.Parse(time.RFC3339, ce.Published)
 			versions = append(versions, PackageVersion{
 				SemVer:           sv,
+				Published:        published,
 				Frameworks:       frameworks,
 				Vulnerabilities:  ce.Vulnerabilities,
 				DependencyGroups: ce.DependencyGroups,
