@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -14,37 +15,35 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
-// sourceCredential holds decoded credentials for a NuGet source.
+var errProviderNotApplicable = errors.New("provider does not handle this source")
+
 type sourceCredential struct {
 	Username string
 	Password string
 }
 
-// credentialProvider represents a discovered NuGet credential provider plugin.
 type credentialProvider struct {
-	path  string // full path to the executable or DLL
-	isDLL bool   // true if the provider is a .dll requiring "dotnet exec"
+	path  string
+	isDLL bool // requires "dotnet exec"
 }
 
-// credentialProviderResponse is the JSON payload returned by V1 NuGet credential providers.
 type credentialProviderResponse struct {
 	Username  string   `json:"Username"`
 	Password  string   `json:"Password"`
 	AuthTypes []string `json:"AuthTypes"`
 }
 
-// pluginMessage is the envelope for V2 cross-platform plugin protocol messages.
 type pluginMessage struct {
 	RequestId string          `json:"RequestId"`
-	Type      string          `json:"Type"`   // "Request", "Response", "Cancel"
-	Method    string          `json:"Method"` // "Handshake", "GetAuthenticationCredentials", etc.
+	Type      string          `json:"Type"`
+	Method    string          `json:"Method"`
 	Payload   json.RawMessage `json:"Payload"`
 }
 
-// v2CredentialPayload is the Payload for a V2 GetAuthenticationCredentials response.
 type v2CredentialPayload struct {
 	ResponseCode        string   `json:"ResponseCode"`
 	Username            string   `json:"Username"`
@@ -53,8 +52,7 @@ type v2CredentialPayload struct {
 	AuthenticationTypes []string `json:"AuthenticationTypes"`
 }
 
-// normalizeCredentialKey decodes NuGet XML name encoding (e.g. _x0020_ → space)
-// and returns a lowercase string suitable for credential-to-source matching.
+// normalizeCredentialKey decodes NuGet XML name encoding (e.g. _x0020_ → space).
 func normalizeCredentialKey(name string) string {
 	var result strings.Builder
 	i := 0
@@ -77,10 +75,8 @@ func normalizeCredentialKey(name string) string {
 	return strings.ToLower(result.String())
 }
 
-// parseCredentials extracts <packageSourceCredentials> entries from a NuGet.Config XML blob.
-// The element name under packageSourceCredentials is the source name (dynamic), so we walk
-// tokens manually rather than relying on static struct unmarshalling.
-// Returns a map of normalised source name → credentials.
+// parseCredentials extracts <packageSourceCredentials> from a NuGet.Config XML blob.
+// Element names under packageSourceCredentials are dynamic source names, so we walk tokens manually.
 func parseCredentials(data []byte) map[string]sourceCredential {
 	creds := make(map[string]sourceCredential)
 	dec := xml.NewDecoder(bytes.NewReader(data))
@@ -101,7 +97,7 @@ func parseCredentials(data []byte) map[string]sourceCredential {
 			case t.Name.Local == "packageSourceCredentials":
 				inSection = true
 			case inSection && currentSource == "":
-				// The element name IS the source name.
+				// Element name is the source name.
 				currentSource = t.Name.Local
 				logTrace("parseCredentials: found credential block for source %q", currentSource)
 			case inSection && currentSource != "" && t.Name.Local == "add":
@@ -122,7 +118,7 @@ func parseCredentials(data []byte) map[string]sourceCredential {
 					clearPass = value
 					logTrace("parseCredentials: [%s] ClearTextPassword present (%d chars)", currentSource, len(clearPass))
 				case "password":
-					encPass = value // DPAPI-encrypted (Windows)
+					encPass = value
 					logTrace("parseCredentials: [%s] encrypted Password present (%d chars)", currentSource, len(encPass))
 				}
 			}
@@ -151,7 +147,6 @@ func parseCredentials(data []byte) map[string]sourceCredential {
 				} else {
 					logTrace("parseCredentials: [%s] no credentials found in block", currentSource)
 				}
-				// Reset state for next source element
 				currentSource = ""
 				username = ""
 				clearPass = ""
@@ -162,19 +157,37 @@ func parseCredentials(data []byte) map[string]sourceCredential {
 	return creds
 }
 
-// fetchFromCredentialProvider tries all discovered credential providers for the given source URL.
+// fetchFromCredentialProvider tries all discovered credential providers in parallel for the given source URL.
 func fetchFromCredentialProvider(sourceURL, sourceName string) (*sourceCredential, error) {
 	providers := findCredentialProviders()
 	if len(providers) == 0 {
 		return nil, fmt.Errorf("no credential providers found")
 	}
+
+	type providerResult struct {
+		cred *sourceCredential
+		err  error
+		name string
+	}
+
+	results := make(chan providerResult, len(providers))
+	var wg sync.WaitGroup
 	for _, p := range providers {
-		cred, err := invokeProvider(p, sourceURL)
-		if err == nil && (cred.Username != "" || cred.Password != "") {
-			logDebug("[%s] credential provider %s supplied credentials", sourceName, filepath.Base(p.path))
-			return cred, nil
+		wg.Add(1)
+		go func(p credentialProvider) {
+			defer wg.Done()
+			cred, err := invokeProvider(p, sourceURL)
+			results <- providerResult{cred, err, filepath.Base(p.path)}
+		}(p)
+	}
+	go func() { wg.Wait(); close(results) }()
+
+	for r := range results {
+		if r.err == nil && (r.cred.Username != "" || r.cred.Password != "") {
+			logDebug("[%s] credential provider %s supplied credentials", sourceName, r.name)
+			return r.cred, nil
 		}
-		logDebug("[%s] provider %s: %v", sourceName, filepath.Base(p.path), err)
+		logDebug("[%s] provider %s: %v", sourceName, r.name, r.err)
 	}
 	return nil, fmt.Errorf("no credential provider succeeded for %q", sourceName)
 }
@@ -190,7 +203,7 @@ func fetchFromCredentialProvider(sourceURL, sourceName string) (*sourceCredentia
 //  7. PATH scan for nuget-plugin-* — .NET tool-installed providers
 func findCredentialProviders() []credentialProvider {
 	var providers []credentialProvider
-	seen := make(map[string]bool) // deduplicate by absolute path
+	seen := make(map[string]bool)
 
 	add := func(p credentialProvider) {
 		abs, err := filepath.Abs(p.path)
@@ -206,7 +219,6 @@ func findCredentialProviders() []credentialProvider {
 		providers = append(providers, p)
 	}
 
-	// 1. NUGET_NETCORE_PLUGIN_PATHS — full paths to plugin executables/DLLs
 	if envPaths := os.Getenv("NUGET_NETCORE_PLUGIN_PATHS"); envPaths != "" {
 		logTrace("findCredentialProviders: NUGET_NETCORE_PLUGIN_PATHS=%q", envPaths)
 		for _, p := range strings.Split(envPaths, string(os.PathListSeparator)) {
@@ -220,7 +232,6 @@ func findCredentialProviders() []credentialProvider {
 		}
 	}
 
-	// 2. NUGET_PLUGIN_PATHS — full paths to plugin executables/DLLs
 	if envPaths := os.Getenv("NUGET_PLUGIN_PATHS"); envPaths != "" {
 		logTrace("findCredentialProviders: NUGET_PLUGIN_PATHS=%q", envPaths)
 		for _, p := range strings.Split(envPaths, string(os.PathListSeparator)) {
@@ -234,7 +245,6 @@ func findCredentialProviders() []credentialProvider {
 		}
 	}
 
-	// 3. NUGET_CREDENTIALPROVIDER_PLUGIN_PATHS — directories to scan (legacy)
 	if envPaths := os.Getenv("NUGET_CREDENTIALPROVIDER_PLUGIN_PATHS"); envPaths != "" {
 		logTrace("findCredentialProviders: NUGET_CREDENTIALPROVIDER_PLUGIN_PATHS=%q", envPaths)
 		for _, dir := range strings.Split(envPaths, string(os.PathListSeparator)) {
@@ -245,14 +255,12 @@ func findCredentialProviders() []credentialProvider {
 	}
 
 	if home, err := os.UserHomeDir(); err == nil {
-		// 4. ~/.nuget/plugins/netcore/ (cross-platform)
 		netcoreDir := filepath.Join(home, ".nuget", "plugins", "netcore")
 		logTrace("findCredentialProviders: scanning %q", netcoreDir)
 		for _, p := range findProvidersInDir(netcoreDir) {
 			add(p)
 		}
 
-		// 5. ~/.nuget/plugins/netfx/ (Windows only)
 		if runtime.GOOS == "windows" {
 			netfxDir := filepath.Join(home, ".nuget", "plugins", "netfx")
 			logTrace("findCredentialProviders: scanning %q", netfxDir)
@@ -262,7 +270,6 @@ func findCredentialProviders() []credentialProvider {
 		}
 	}
 
-	// 6. %LocalAppData%\NuGet\CredentialProviders (Windows V1 providers)
 	if runtime.GOOS == "windows" {
 		if localAppData := os.Getenv("LOCALAPPDATA"); localAppData != "" {
 			v1Dir := filepath.Join(localAppData, "NuGet", "CredentialProviders")
@@ -273,7 +280,6 @@ func findCredentialProviders() []credentialProvider {
 		}
 	}
 
-	// 7. PATH scan for nuget-plugin-* (.NET tool-installed providers)
 	for _, p := range findPluginsOnPath() {
 		add(p)
 	}
@@ -284,8 +290,6 @@ func findCredentialProviders() []credentialProvider {
 
 // findProvidersInDir scans dir for sub-directories that contain a credential
 // provider executable or DLL whose name matches the directory name.
-// This handles both the standard "CredentialProvider.*" convention and
-// non-standard names like "AWS.CodeArtifact.NuGetCredentialProvider".
 func findProvidersInDir(dir string) []credentialProvider {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -300,7 +304,6 @@ func findProvidersInDir(dir string) []credentialProvider {
 		subDir := filepath.Join(dir, entry.Name())
 		name := entry.Name()
 
-		// Prefer native executable first, then fall back to DLL.
 		if runtime.GOOS == "windows" {
 			exePath := filepath.Join(subDir, name+".exe")
 			if _, err := os.Stat(exePath); err == nil {
@@ -317,7 +320,6 @@ func findProvidersInDir(dir string) []credentialProvider {
 			}
 		}
 
-		// Fall back to DLL (requires dotnet exec).
 		dllPath := filepath.Join(subDir, name+".dll")
 		if _, err := os.Stat(dllPath); err == nil {
 			logTrace("findProvidersInDir: found DLL provider %q", dllPath)
@@ -330,8 +332,7 @@ func findProvidersInDir(dir string) []credentialProvider {
 	return providers
 }
 
-// findV1ProvidersInDir scans a directory for legacy V1 NuGet credential providers
-// (files matching credentialprovider*.exe at the root or in subdirectories).
+// findV1ProvidersInDir scans for credentialprovider*.exe at root level and in subdirectories.
 func findV1ProvidersInDir(dir string) []credentialProvider {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -342,7 +343,6 @@ func findV1ProvidersInDir(dir string) []credentialProvider {
 	for _, entry := range entries {
 		nameLower := strings.ToLower(entry.Name())
 		if !entry.IsDir() {
-			// Root-level credentialprovider*.exe
 			if strings.HasPrefix(nameLower, "credentialprovider") && strings.HasSuffix(nameLower, ".exe") {
 				p := filepath.Join(dir, entry.Name())
 				logTrace("findV1ProvidersInDir: found %q", p)
@@ -350,7 +350,6 @@ func findV1ProvidersInDir(dir string) []credentialProvider {
 			}
 			continue
 		}
-		// Scan subdirectory for credentialprovider*.exe
 		subEntries, err := os.ReadDir(filepath.Join(dir, entry.Name()))
 		if err != nil {
 			continue
@@ -367,8 +366,7 @@ func findV1ProvidersInDir(dir string) []credentialProvider {
 	return providers
 }
 
-// findPluginsOnPath scans all directories in PATH for executables whose name
-// starts with "nuget-plugin-" (.NET tool-installed credential providers).
+// findPluginsOnPath scans PATH for executables matching nuget-plugin-*.
 func findPluginsOnPath() []credentialProvider {
 	pathEnv := os.Getenv("PATH")
 	if pathEnv == "" {
@@ -391,13 +389,11 @@ func findPluginsOnPath() []credentialProvider {
 			}
 			fullPath := filepath.Join(dir, name)
 			if runtime.GOOS == "windows" {
-				// On Windows accept .exe and .bat
 				if strings.HasSuffix(nameLower, ".exe") || strings.HasSuffix(nameLower, ".bat") {
 					logTrace("findPluginsOnPath: found %q", fullPath)
 					providers = append(providers, credentialProvider{path: fullPath, isDLL: false})
 				}
 			} else {
-				// On Unix, check the file is executable
 				if info, err := entry.Info(); err == nil && info.Mode()&0111 != 0 {
 					logTrace("findPluginsOnPath: found %q", fullPath)
 					isDLL := strings.HasSuffix(nameLower, ".dll")
@@ -409,28 +405,25 @@ func findPluginsOnPath() []credentialProvider {
 	return providers
 }
 
-// invokeProvider tries the V1 command-line protocol first, and automatically
-// falls back to the V2 cross-platform stdin/stdout protocol if the provider
-// responds with a V2 Handshake instead of V1 credentials.
+// invokeProvider tries V2 first, falling back to V1 if the provider doesn't speak V2.
 func invokeProvider(provider credentialProvider, sourceURL string) (*sourceCredential, error) {
 	name := filepath.Base(provider.path)
 
-	// Try V1 first (command-line args).
-	cred, err := invokeProviderV1(provider, sourceURL)
+	cred, err := invokeProviderV2(provider, sourceURL)
 	if err == nil && (cred.Username != "" || cred.Password != "") {
 		return cred, nil
 	}
+	if errors.Is(err, errProviderNotApplicable) {
+		return nil, err
+	}
 
-	// V1 returned empty credentials or failed — check if it was a V2 handshake.
-	// V2-only providers (e.g. AWS CodeArtifact) output a Handshake request and exit
-	// when invoked with V1 args, so V1 succeeds but yields no credentials.
-	logDebug("[%s] V1 returned no credentials, trying V2 protocol", name)
-	return invokeProviderV2(provider, sourceURL)
+	logDebug("[%s] V2 returned no credentials, trying V1 protocol", name)
+	return invokeProviderV1(provider, sourceURL)
 }
 
-// invokeProviderV1 calls a credential provider using the legacy V1 command-line protocol.
+// invokeProviderV1 calls a credential provider using the V1 command-line args protocol.
 func invokeProviderV1(provider credentialProvider, sourceURL string) (*sourceCredential, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	var cmd *exec.Cmd
@@ -474,16 +467,9 @@ func invokeProviderV1(provider credentialProvider, sourceURL string) (*sourceCre
 	return nil, fmt.Errorf("no credentials in V1 output")
 }
 
-// invokeProviderV2 communicates with a credential provider using the V2
-// cross-platform plugin protocol (JSON messages over stdin/stdout).
-//
-// Protocol flow:
-//  1. Plugin writes Handshake Request to stdout
-//  2. We write Handshake Response to stdin
-//  3. We write GetAuthenticationCredentials Request to stdin
-//  4. Plugin writes GetAuthenticationCredentials Response to stdout
+// invokeProviderV2 calls a credential provider using the V2 stdin/stdout JSON protocol.
 func invokeProviderV2(provider credentialProvider, sourceURL string) (*sourceCredential, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	var cmd *exec.Cmd
@@ -527,6 +513,9 @@ func invokeProviderV2(provider credentialProvider, sourceURL string) (*sourceCre
 	}
 	logTrace("invokeProviderV2: received Handshake (RequestId=%s)", handshake.RequestId)
 
+	// Handshake succeeded — provider speaks V2, so all errors below
+	// wrap errProviderNotApplicable to skip V1 fallback.
+
 	// 2. Send Handshake Response.
 	writePluginMessage(stdin, pluginMessage{
 		RequestId: handshake.RequestId,
@@ -564,27 +553,31 @@ func invokeProviderV2(provider credentialProvider, sourceURL string) (*sourceCre
 		if msg.RequestId == credReqId && msg.Type == "Response" {
 			var creds v2CredentialPayload
 			if err := json.Unmarshal(msg.Payload, &creds); err != nil {
-				return nil, fmt.Errorf("V2: parsing credential payload: %w", err)
+				return nil, fmt.Errorf("V2: parsing credential payload: %w: %w", err, errProviderNotApplicable)
+			}
+			if creds.ResponseCode == "NotFound" {
+				logTrace("invokeProviderV2: provider does not handle this source")
+				return nil, errProviderNotApplicable
 			}
 			if creds.ResponseCode != "Success" {
-				return nil, fmt.Errorf("V2: provider returned %s: %s", creds.ResponseCode, creds.Message)
+				return nil, fmt.Errorf("V2: provider returned %s: %s: %w", creds.ResponseCode, creds.Message, errProviderNotApplicable)
 			}
 			logTrace("invokeProviderV2: credentials received (username=%q, password=%d chars)", creds.Username, len(creds.Password))
 			return &sourceCredential{Username: creds.Username, Password: creds.Password}, nil
 		}
 	}
 
-	return nil, fmt.Errorf("V2: plugin closed stdout without credential response")
+	return nil, fmt.Errorf("V2: plugin closed stdout without credential response: %w", errProviderNotApplicable)
 }
 
-// writePluginMessage writes a JSON-encoded plugin message followed by a newline to w.
+// writePluginMessage writes a JSON-encoded plugin message to w.
 func writePluginMessage(w interface{ Write([]byte) (int, error) }, msg pluginMessage) {
 	data, _ := json.Marshal(msg)
 	data = append(data, '\n')
 	_, _ = w.Write(data)
 }
 
-// newRequestID generates a random UUID v4 string for V2 plugin protocol request IDs.
+// newRequestID generates a random UUID v4 string.
 func newRequestID() string {
 	var b [16]byte
 	_, _ = rand.Read(b[:])
@@ -593,13 +586,7 @@ func newRequestID() string {
 	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:])
 }
 
-// parseLogLineCredentials handles providers that write credentials as log lines rather
-// than JSON, e.g.:
-//
-//	[Information] [CredentialProvider]Username: VssSessionToken
-//	[Information] [CredentialProvider]Password: abc123
-//
-// Returns nil if no credential lines are found.
+// parseLogLineCredentials handles providers that write credentials as log lines rather than JSON.
 func parseLogLineCredentials(out []byte) *sourceCredential {
 	var username, password string
 	for _, line := range strings.Split(string(out), "\n") {
