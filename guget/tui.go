@@ -716,8 +716,10 @@ func (m *Model) resizeFocused(delta int) {
 		m.leftWidthOffset += delta
 	case focusPackages:
 		m.rightWidthOffset -= delta
+		m.refreshDetail()
 	case focusDetail:
 		m.rightWidthOffset += delta
+		m.refreshDetail()
 	}
 }
 
@@ -2006,7 +2008,7 @@ func (m *Model) panelWidths() (left, mid, right int) {
 	const borders = 6 // 2 per panel (left+right rounded border chars)
 
 	left = 30 + m.leftWidthOffset
-	right = 60 + m.rightWidthOffset
+	right = 50 + m.rightWidthOffset
 	if left < 18 {
 		left = 18
 	}
@@ -2133,6 +2135,46 @@ func (m Model) renderProjectPanel(w int) string {
 		Render(m.projectList.View())
 }
 
+func currentVersionText(row packageRow) string {
+	if row.diverged {
+		return row.oldest.String() + "–" + row.ref.Version.String()
+	}
+	return row.ref.Version.String()
+}
+
+// availableVersionText returns the plain text for the merged available column.
+func availableVersionText(row packageRow) string {
+	if row.latestCompatible == nil {
+		return "-"
+	}
+	compat := row.latestCompatible.SemVer.String()
+	if row.latestStable != nil && row.latestStable.SemVer.String() != compat {
+		return compat + " (" + row.latestStable.SemVer.String() + ")"
+	}
+	return compat
+}
+
+// renderAvailableVersion returns the styled string for the merged available column.
+func renderAvailableVersion(row packageRow) string {
+	if row.latestCompatible == nil {
+		return styleSubtle.Render("-")
+	}
+	compat := row.latestCompatible.SemVer.String()
+	compStyle := styleGreen
+	if row.latestCompatible.SemVer.IsNewerThan(row.ref.Version) {
+		compStyle = styleYellow
+	}
+	if row.latestStable != nil && row.latestStable.SemVer.String() != compat {
+		latest := row.latestStable.SemVer.String()
+		latestStyle := styleGreen
+		if row.latestStable.SemVer.IsNewerThan(row.ref.Version) {
+			latestStyle = stylePurple
+		}
+		return compStyle.Render(compat) + " " + styleMuted.Render("(") + latestStyle.Render(latest) + styleMuted.Render(")")
+	}
+	return compStyle.Render(compat)
+}
+
 func (m Model) renderPackagePanel(w int) string {
 	focused := m.focus == focusPackages
 
@@ -2141,32 +2183,40 @@ func (m Model) renderPackagePanel(w int) string {
 
 	innerW := w - 4 // border + padding
 
-	// Determine which columns to show based on available width.
-	// Always shown: prefix(2) + icon+space(2) + name(variable) + current(19)
-	// Progressively hidden: source(16) → latest(14) → compatible(13)
 	const (
-		colPrefix  = 4  // "▶ " + icon + space
-		colCurrent = 19 // version column
-		colCompat  = 13
-		colLatest  = 14
-		colSource  = 16
-		minNameW   = 14
+		colPrefix = 4 // "▶ " + icon + space
+		minNameW  = 20
+		colPad    = 2 // padding between columns
 	)
 
-	// Reserve space for columns in priority order: Compatible > Latest > Source.
-	// Each column is shown only if there's room after higher-priority columns.
+	// Compute column widths from actual data.
+	colCurrent := len("Current")
+	colAvail := len("Available")
+	colSource := len("Source")
+	for _, row := range m.packageRows {
+		if n := len(currentVersionText(row)); n > colCurrent {
+			colCurrent = n
+		}
+		if n := len(availableVersionText(row)); n > colAvail {
+			colAvail = n
+		}
+		if n := len(row.source); n > colSource {
+			colSource = n
+		}
+	}
+	colCurrent += colPad
+	colAvail += colPad
+	colSource += colPad
+
+	// Reserve columns: source hides first, then available.
 	budget := innerW - colPrefix - colCurrent
-	showCompat := budget >= minNameW+colCompat
-	if showCompat {
-		budget -= colCompat
-	}
-	showLatest := budget >= minNameW+colLatest
-	if showLatest {
-		budget -= colLatest
-	}
-	showSource := budget >= minNameW+colSource
+	showSource := budget >= minNameW+colAvail+colSource
 	if showSource {
 		budget -= colSource
+	}
+	showAvail := budget >= minNameW+colAvail
+	if showAvail {
+		budget -= colAvail
 	}
 	nameW := budget
 	if nameW < minNameW {
@@ -2177,11 +2227,8 @@ func (m Model) renderPackagePanel(w int) string {
 	hStyle := styleSubtleBold
 	header := "  " + padRight(hStyle.Render("Package"), nameW) +
 		padRight(hStyle.Render("Current"), colCurrent)
-	if showCompat {
-		header += padRight(hStyle.Render("Compatible"), colCompat)
-	}
-	if showLatest {
-		header += padRight(hStyle.Render("Latest"), colLatest)
+	if showAvail {
+		header += padRight(hStyle.Render("Available"), colAvail)
 	}
 	if showSource {
 		header += hStyle.Render("Source")
@@ -2218,17 +2265,15 @@ func (m Model) renderPackagePanel(w int) string {
 		}
 		name := padRight(nameStyle.Render(rawName), nameW)
 
-		// current (19 chars wide: 10 version + space + optional range)
-		rawCurrent := truncate(row.ref.Version.String(), 10)
 		var current string
 		if row.diverged {
-			low := styleSubtle.Render(truncate(row.oldest.String(), 6))
+			low := styleSubtle.Render(row.oldest.String())
 			sep := styleMuted.Render("–")
-			high := styleYellow.Render(truncate(rawCurrent, 10))
+			high := styleYellow.Render(row.ref.Version.String())
 			current = padRight(low+sep+high, colCurrent)
 		} else {
 			current = padRight(
-				styleSubtle.Render(rawCurrent), colCurrent)
+				styleSubtle.Render(row.ref.Version.String()), colCurrent)
 		}
 
 		line := ""
@@ -2238,45 +2283,23 @@ func (m Model) renderPackagePanel(w int) string {
 		}
 		line += prefix + icon + " " + name + current
 
-		// compatible
-		if showCompat {
-			rawComp := "-"
-			compStyle := styleSubtle
-			if row.latestCompatible != nil {
-				rawComp = truncate(row.latestCompatible.SemVer.String(), 12)
-				if row.latestCompatible.SemVer.IsNewerThan(row.ref.Version) {
-					compStyle = styleYellow
-				} else {
-					compStyle = styleGreen
-				}
-			}
-			line += padRight(compStyle.Render(rawComp), colCompat)
+		// available version (merged compatible + latest)
+		if showAvail {
+			line += padRight(renderAvailableVersion(row), colAvail)
 		}
 
-		// latest
-		if showLatest {
-			rawLatest := "-"
-			latestStyle := styleSubtle
-			if row.latestStable != nil {
-				rawLatest = truncate(row.latestStable.SemVer.String(), 12)
-				if row.latestStable.SemVer.IsNewerThan(row.ref.Version) {
-					latestStyle = stylePurple
-				} else {
-					latestStyle = styleGreen
-				}
-			}
-			line += padRight(latestStyle.Render(rawLatest), colLatest)
-		}
-
-		// source
 		if showSource {
-			src := truncate(row.source, colSource)
-			line += styleMuted.Render(src)
+			line += styleMuted.Render(row.source)
 		}
 
 		lines = append(lines, line)
 	}
 
+	for i, line := range lines {
+		if lipgloss.Width(line) > innerW {
+			lines[i] = truncateStyled(line, innerW)
+		}
+	}
 	content := strings.Join(lines, "\n")
 
 	s := stylePanel
@@ -3134,6 +3157,36 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n-1] + "…"
+}
+
+func truncateStyled(s string, n int) string {
+	if lipgloss.Width(s) <= n {
+		return s
+	}
+	var visible int
+	var result strings.Builder
+	inEsc := false
+	for _, r := range s {
+		if r == '\x1b' {
+			inEsc = true
+			result.WriteRune(r)
+			continue
+		}
+		if inEsc {
+			result.WriteRune(r)
+			if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') {
+				inEsc = false
+			}
+			continue
+		}
+		if visible >= n {
+			break
+		}
+		result.WriteRune(r)
+		visible++
+	}
+	result.WriteString("\x1b[0m")
+	return result.String()
 }
 
 // hyperlinkEnabled controls whether OSC 8 escape codes are emitted.
