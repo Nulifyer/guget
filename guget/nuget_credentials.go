@@ -22,6 +22,12 @@ type sourceCredential struct {
 	Password string
 }
 
+// credentialProvider represents a discovered NuGet credential provider plugin.
+type credentialProvider struct {
+	path  string // full path to the executable or DLL
+	isDLL bool   // true if the provider is a .dll requiring "dotnet exec"
+}
+
 // credentialProviderResponse is the JSON payload returned by NuGet credential providers.
 type credentialProviderResponse struct {
 	Username  string   `json:"Username"`
@@ -147,83 +153,264 @@ func fetchFromCredentialProvider(sourceURL, sourceName string) (*sourceCredentia
 	for _, p := range providers {
 		cred, err := invokeProvider(p, sourceURL)
 		if err == nil && (cred.Username != "" || cred.Password != "") {
-			logDebug("[%s] credential provider %s supplied credentials", sourceName, filepath.Base(p))
+			logDebug("[%s] credential provider %s supplied credentials", sourceName, filepath.Base(p.path))
 			return cred, nil
 		}
-		logDebug("[%s] provider %s: %v", sourceName, filepath.Base(p), err)
+		logDebug("[%s] provider %s: %v", sourceName, filepath.Base(p.path), err)
 	}
 	return nil, fmt.Errorf("no credential provider succeeded for %q", sourceName)
 }
 
-// findCredentialProviders returns paths to NuGet credential provider executables.
-func findCredentialProviders() []string {
-	var providers []string
+// findCredentialProviders discovers NuGet credential provider plugins using the
+// full NuGet specification search order:
+//  1. NUGET_NETCORE_PLUGIN_PATHS — full paths to .NET Core plugins (highest priority)
+//  2. NUGET_PLUGIN_PATHS          — full paths to plugins
+//  3. NUGET_CREDENTIALPROVIDER_PLUGIN_PATHS — directories to scan (legacy)
+//  4. ~/.nuget/plugins/netcore/   — cross-platform convention directory
+//  5. ~/.nuget/plugins/netfx/     — Windows .NET Framework convention directory
+//  6. %LocalAppData%\NuGet\CredentialProviders — legacy V1 provider directory (Windows)
+//  7. PATH scan for nuget-plugin-* — .NET tool-installed providers
+func findCredentialProviders() []credentialProvider {
+	var providers []credentialProvider
+	seen := make(map[string]bool) // deduplicate by absolute path
 
-	// 1. Explicit env var (semicolon on Windows, colon on Unix)
+	add := func(p credentialProvider) {
+		abs, err := filepath.Abs(p.path)
+		if err != nil {
+			abs = p.path
+		}
+		key := strings.ToLower(abs)
+		if seen[key] {
+			logTrace("findCredentialProviders: skipping duplicate %q", p.path)
+			return
+		}
+		seen[key] = true
+		providers = append(providers, p)
+	}
+
+	// 1. NUGET_NETCORE_PLUGIN_PATHS — full paths to plugin executables/DLLs
+	if envPaths := os.Getenv("NUGET_NETCORE_PLUGIN_PATHS"); envPaths != "" {
+		logTrace("findCredentialProviders: NUGET_NETCORE_PLUGIN_PATHS=%q", envPaths)
+		for _, p := range strings.Split(envPaths, string(os.PathListSeparator)) {
+			p = strings.TrimSpace(p)
+			if p == "" {
+				continue
+			}
+			if _, err := os.Stat(p); err == nil {
+				add(credentialProvider{path: p, isDLL: strings.HasSuffix(strings.ToLower(p), ".dll")})
+			}
+		}
+	}
+
+	// 2. NUGET_PLUGIN_PATHS — full paths to plugin executables/DLLs
+	if envPaths := os.Getenv("NUGET_PLUGIN_PATHS"); envPaths != "" {
+		logTrace("findCredentialProviders: NUGET_PLUGIN_PATHS=%q", envPaths)
+		for _, p := range strings.Split(envPaths, string(os.PathListSeparator)) {
+			p = strings.TrimSpace(p)
+			if p == "" {
+				continue
+			}
+			if _, err := os.Stat(p); err == nil {
+				add(credentialProvider{path: p, isDLL: strings.HasSuffix(strings.ToLower(p), ".dll")})
+			}
+		}
+	}
+
+	// 3. NUGET_CREDENTIALPROVIDER_PLUGIN_PATHS — directories to scan (legacy)
 	if envPaths := os.Getenv("NUGET_CREDENTIALPROVIDER_PLUGIN_PATHS"); envPaths != "" {
 		logTrace("findCredentialProviders: NUGET_CREDENTIALPROVIDER_PLUGIN_PATHS=%q", envPaths)
 		for _, dir := range strings.Split(envPaths, string(os.PathListSeparator)) {
-			providers = append(providers, findProvidersInDir(dir)...)
+			for _, p := range findProvidersInDir(dir) {
+				add(p)
+			}
 		}
-	} else {
-		logTrace("findCredentialProviders: NUGET_CREDENTIALPROVIDER_PLUGIN_PATHS not set")
 	}
 
-	// 2. Standard per-user plugin directory
 	if home, err := os.UserHomeDir(); err == nil {
-		dir := filepath.Join(home, ".nuget", "plugins", "netcore")
-		logTrace("findCredentialProviders: scanning standard dir %q", dir)
-		providers = append(providers, findProvidersInDir(dir)...)
+		// 4. ~/.nuget/plugins/netcore/ (cross-platform)
+		netcoreDir := filepath.Join(home, ".nuget", "plugins", "netcore")
+		logTrace("findCredentialProviders: scanning %q", netcoreDir)
+		for _, p := range findProvidersInDir(netcoreDir) {
+			add(p)
+		}
+
+		// 5. ~/.nuget/plugins/netfx/ (Windows only)
+		if runtime.GOOS == "windows" {
+			netfxDir := filepath.Join(home, ".nuget", "plugins", "netfx")
+			logTrace("findCredentialProviders: scanning %q", netfxDir)
+			for _, p := range findProvidersInDir(netfxDir) {
+				add(p)
+			}
+		}
+	}
+
+	// 6. %LocalAppData%\NuGet\CredentialProviders (Windows V1 providers)
+	if runtime.GOOS == "windows" {
+		if localAppData := os.Getenv("LOCALAPPDATA"); localAppData != "" {
+			v1Dir := filepath.Join(localAppData, "NuGet", "CredentialProviders")
+			logTrace("findCredentialProviders: scanning V1 dir %q", v1Dir)
+			for _, p := range findV1ProvidersInDir(v1Dir) {
+				add(p)
+			}
+		}
+	}
+
+	// 7. PATH scan for nuget-plugin-* (.NET tool-installed providers)
+	for _, p := range findPluginsOnPath() {
+		add(p)
 	}
 
 	logTrace("findCredentialProviders: found %d provider(s)", len(providers))
 	return providers
 }
 
-// findProvidersInDir scans dir for CredentialProvider.* sub-directories and returns
-// the path to the matching executable inside each one.
-func findProvidersInDir(dir string) []string {
+// findProvidersInDir scans dir for sub-directories that contain a credential
+// provider executable or DLL whose name matches the directory name.
+// This handles both the standard "CredentialProvider.*" convention and
+// non-standard names like "AWS.CodeArtifact.NuGetCredentialProvider".
+func findProvidersInDir(dir string) []credentialProvider {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		logTrace("findProvidersInDir: cannot read %q: %v", dir, err)
 		return nil
 	}
-	var providers []string
+	var providers []credentialProvider
 	for _, entry := range entries {
-		if !entry.IsDir() || !strings.HasPrefix(entry.Name(), "CredentialProvider.") {
+		if !entry.IsDir() {
 			continue
 		}
-		exeName := entry.Name()
+		subDir := filepath.Join(dir, entry.Name())
+		name := entry.Name()
+
+		// Prefer native executable first, then fall back to DLL.
 		if runtime.GOOS == "windows" {
-			exeName += ".exe"
-		}
-		exePath := filepath.Join(dir, entry.Name(), exeName)
-		if _, err := os.Stat(exePath); err == nil {
-			logTrace("findProvidersInDir: found provider %q", exePath)
-			providers = append(providers, exePath)
+			exePath := filepath.Join(subDir, name+".exe")
+			if _, err := os.Stat(exePath); err == nil {
+				logTrace("findProvidersInDir: found exe provider %q", exePath)
+				providers = append(providers, credentialProvider{path: exePath, isDLL: false})
+				continue
+			}
 		} else {
-			logTrace("findProvidersInDir: expected exe not found at %q: %v", exePath, err)
+			exePath := filepath.Join(subDir, name)
+			if _, err := os.Stat(exePath); err == nil {
+				logTrace("findProvidersInDir: found provider %q", exePath)
+				providers = append(providers, credentialProvider{path: exePath, isDLL: false})
+				continue
+			}
+		}
+
+		// Fall back to DLL (requires dotnet exec).
+		dllPath := filepath.Join(subDir, name+".dll")
+		if _, err := os.Stat(dllPath); err == nil {
+			logTrace("findProvidersInDir: found DLL provider %q", dllPath)
+			providers = append(providers, credentialProvider{path: dllPath, isDLL: true})
+			continue
+		}
+
+		logTrace("findProvidersInDir: no executable or DLL found in %q", subDir)
+	}
+	return providers
+}
+
+// findV1ProvidersInDir scans a directory for legacy V1 NuGet credential providers
+// (files matching credentialprovider*.exe at the root or in subdirectories).
+func findV1ProvidersInDir(dir string) []credentialProvider {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		logTrace("findV1ProvidersInDir: cannot read %q: %v", dir, err)
+		return nil
+	}
+	var providers []credentialProvider
+	for _, entry := range entries {
+		nameLower := strings.ToLower(entry.Name())
+		if !entry.IsDir() {
+			// Root-level credentialprovider*.exe
+			if strings.HasPrefix(nameLower, "credentialprovider") && strings.HasSuffix(nameLower, ".exe") {
+				p := filepath.Join(dir, entry.Name())
+				logTrace("findV1ProvidersInDir: found %q", p)
+				providers = append(providers, credentialProvider{path: p, isDLL: false})
+			}
+			continue
+		}
+		// Scan subdirectory for credentialprovider*.exe
+		subEntries, err := os.ReadDir(filepath.Join(dir, entry.Name()))
+		if err != nil {
+			continue
+		}
+		for _, sub := range subEntries {
+			subLower := strings.ToLower(sub.Name())
+			if !sub.IsDir() && strings.HasPrefix(subLower, "credentialprovider") && strings.HasSuffix(subLower, ".exe") {
+				p := filepath.Join(dir, entry.Name(), sub.Name())
+				logTrace("findV1ProvidersInDir: found %q", p)
+				providers = append(providers, credentialProvider{path: p, isDLL: false})
+			}
+		}
+	}
+	return providers
+}
+
+// findPluginsOnPath scans all directories in PATH for executables whose name
+// starts with "nuget-plugin-" (.NET tool-installed credential providers).
+func findPluginsOnPath() []credentialProvider {
+	pathEnv := os.Getenv("PATH")
+	if pathEnv == "" {
+		return nil
+	}
+	var providers []credentialProvider
+	for _, dir := range strings.Split(pathEnv, string(os.PathListSeparator)) {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			name := entry.Name()
+			nameLower := strings.ToLower(name)
+			if !strings.HasPrefix(nameLower, "nuget-plugin-") {
+				continue
+			}
+			fullPath := filepath.Join(dir, name)
+			if runtime.GOOS == "windows" {
+				// On Windows accept .exe and .bat
+				if strings.HasSuffix(nameLower, ".exe") || strings.HasSuffix(nameLower, ".bat") {
+					logTrace("findPluginsOnPath: found %q", fullPath)
+					providers = append(providers, credentialProvider{path: fullPath, isDLL: false})
+				}
+			} else {
+				// On Unix, check the file is executable
+				if info, err := entry.Info(); err == nil && info.Mode()&0111 != 0 {
+					logTrace("findPluginsOnPath: found %q", fullPath)
+					isDLL := strings.HasSuffix(nameLower, ".dll")
+					providers = append(providers, credentialProvider{path: fullPath, isDLL: isDLL})
+				}
+			}
 		}
 	}
 	return providers
 }
 
 // invokeProvider calls a credential provider executable using the NuGet plugin protocol
-// and parses the JSON response.
-func invokeProvider(providerPath, sourceURL string) (*sourceCredential, error) {
+// and parses the JSON response. DLL-based providers are invoked via "dotnet exec".
+func invokeProvider(provider credentialProvider, sourceURL string) (*sourceCredential, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, providerPath,
-		"-Uri", sourceURL,
-		"-NonInteractive",
-		"-IsRetry", "false",
-	)
+	var cmd *exec.Cmd
+	args := []string{"-Uri", sourceURL, "-NonInteractive", "-IsRetry", "false"}
+	if provider.isDLL {
+		dotnetArgs := append([]string{"exec", provider.path}, args...)
+		cmd = exec.CommandContext(ctx, "dotnet", dotnetArgs...)
+		logTrace("invokeProvider: running dotnet exec %s", filepath.Base(provider.path))
+	} else {
+		cmd = exec.CommandContext(ctx, provider.path, args...)
+	}
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("provider exited non-zero: %w", err)
 	}
-	logTrace("invokeProvider: %s produced %d bytes of output", filepath.Base(providerPath), len(out))
+	logTrace("invokeProvider: %s produced %d bytes of output", filepath.Base(provider.path), len(out))
 
 	// Credential providers sometimes emit informational lines to stdout before
 	// the JSON payload (e.g. "INFO: ..."). Find the first '{' to locate the JSON.
