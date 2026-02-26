@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	bubbles_list "github.com/charmbracelet/bubbles/list"
 	bubbles_spinner "github.com/charmbracelet/bubbles/spinner"
 	bubbles_textinpute "github.com/charmbracelet/bubbles/textinput"
 	bubbles_viewport "github.com/charmbracelet/bubbles/viewport"
@@ -131,8 +130,6 @@ func (p projectItem) Description() string {
 	}
 	return fmt.Sprintf("%d packages", p.project.Packages.Len())
 }
-
-func (p projectItem) FilterValue() string { return p.name }
 
 type packageRow struct {
 	ref              PackageReference
@@ -258,7 +255,9 @@ type Model struct {
 	loadingTotal   int
 	spinner        bubbles_spinner.Model
 
-	projectList bubbles_list.Model
+	projectItems  []projectItem
+	projectCursor int
+	projectOffset int
 
 	packageRows   []packageRow
 	packageCursor int
@@ -297,33 +296,15 @@ func NewModel(parsedProjects []*ParsedProject, propsProjects []*ParsedProject, n
 	sp.Spinner = bubbles_spinner.Dot
 	sp.Style = styleAccent
 
-	items := []bubbles_list.Item{
-		projectItem{name: "All Projects", project: nil},
+	projItems := []projectItem{
+		{name: "All Projects", project: nil},
 	}
 	for _, p := range parsedProjects {
-		items = append(items, projectItem{name: p.FileName, project: p})
+		projItems = append(projItems, projectItem{name: p.FileName, project: p})
 	}
 	for _, p := range propsProjects {
-		items = append(items, projectItem{name: p.FileName, project: p})
+		projItems = append(projItems, projectItem{name: p.FileName, project: p})
 	}
-
-	delegate := bubbles_list.NewDefaultDelegate()
-	delegate.Styles.SelectedTitle = delegate.Styles.SelectedTitle.
-		Foreground(colorAccent).
-		BorderLeftForeground(colorAccent)
-	delegate.Styles.SelectedDesc = delegate.Styles.SelectedDesc.
-		Foreground(colorSubtle).
-		BorderLeftForeground(colorAccent)
-	delegate.Styles.NormalTitle = delegate.Styles.NormalTitle.Foreground(colorText)
-	delegate.Styles.NormalDesc = delegate.Styles.NormalDesc.Foreground(colorMuted)
-
-	l := bubbles_list.New(items, delegate, 28, 20)
-	l.Title = "Projects"
-	l.Styles.Title = styleAccentBold.Padding(0, 1)
-	l.Styles.TitleBar = lipgloss.NewStyle()
-	l.SetShowStatusBar(false)
-	l.SetShowHelp(false)
-	l.SetFilteringEnabled(false)
 
 	dv := bubbles_viewport.New(40, 20)
 	lv := bubbles_viewport.New(80, logPanelLines)
@@ -342,7 +323,7 @@ func NewModel(parsedProjects []*ParsedProject, propsProjects []*ParsedProject, n
 		loading:        loadingTotal > 0,
 		loadingTotal:   loadingTotal,
 		spinner:        sp,
-		projectList:    l,
+		projectItems:   projItems,
 		detailView:     dv,
 		search:         packageSearch{input: ti},
 		logLines:       initialLogLines,
@@ -523,25 +504,26 @@ func (m Model) Update(msg bubble_tea.Msg) (bubble_tea.Model, bubble_tea.Cmd) {
 	if !m.picker.active && !m.search.active && !m.confirm.active {
 		switch m.focus {
 		case focusProjects:
-			// Don't forward package-panel keys to the bubbles list component
-			// (e.g. 'd' triggers half-page-down in the list's vim bindings).
-			skip := false
 			if keyMsg, ok := msg.(bubble_tea.KeyMsg); ok {
 				switch keyMsg.String() {
-				case "d", "u", "U", "r", "a", "A", "v", "t", "T", "R", "/":
-					skip = true
-				}
-			}
-			if !skip {
-				var cmd bubble_tea.Cmd
-				prev := m.projectList.Index()
-				m.projectList, cmd = m.projectList.Update(msg)
-				cmds = append(cmds, cmd)
-				if m.projectList.Index() != prev {
-					m.packageCursor = 0
-					m.packageOffset = 0
-					m.rebuildPackageRows()
-					m.refreshDetail()
+				case "up", "k":
+					if m.projectCursor > 0 {
+						m.projectCursor--
+						m.clampProjectOffset()
+						m.packageCursor = 0
+						m.packageOffset = 0
+						m.rebuildPackageRows()
+						m.refreshDetail()
+					}
+				case "down", "j":
+					if m.projectCursor < len(m.projectItems)-1 {
+						m.projectCursor++
+						m.clampProjectOffset()
+						m.packageCursor = 0
+						m.packageOffset = 0
+						m.rebuildPackageRows()
+						m.refreshDetail()
+					}
 				}
 			}
 		case focusDetail:
@@ -1706,8 +1688,8 @@ func (m Model) renderConfirmOverlay() string {
 }
 
 func (m *Model) selectedProject() *ParsedProject {
-	if item, ok := m.projectList.SelectedItem().(projectItem); ok {
-		return item.project
+	if m.projectCursor >= 0 && m.projectCursor < len(m.projectItems) {
+		return m.projectItems[m.projectCursor].project
 	}
 	return nil
 }
@@ -1857,6 +1839,7 @@ func (m *Model) refreshDetail() {
 		return
 	}
 	m.detailView.SetContent(m.renderDetail(m.packageRows[m.packageCursor]))
+	m.detailView.GotoTop()
 }
 
 func (m *Model) clampOffset() {
@@ -1864,8 +1847,12 @@ func (m *Model) clampOffset() {
 	if m.packageCursor < m.packageOffset {
 		m.packageOffset = m.packageCursor
 	}
-	if m.packageCursor >= m.packageOffset+visible {
-		m.packageOffset = m.packageCursor - visible + 1
+	pad := 0
+	if m.packageCursor == len(m.packageRows)-1 {
+		pad = 1
+	}
+	if m.packageCursor+pad >= m.packageOffset+visible {
+		m.packageOffset = m.packageCursor + pad - visible + 1
 	}
 }
 
@@ -1987,14 +1974,33 @@ func (m *Model) bodyOuterHeight() int {
 }
 
 func (m *Model) packageListHeight() int {
-	// 4 = rounded border (2) + column header row (1) + divider row (1)
-	return imax(1, m.bodyOuterHeight()-4)
+	// 2 = column header (1) + divider (1)
+	return imax(1, m.bodyOuterHeight()-2)
+}
+
+func (m *Model) projectListHeight() int {
+	// 2 = title row (1) + divider row (1)
+	// each item = 3 lines (title + desc + spacing), last item needs only 2
+	avail := m.bodyOuterHeight() - 2
+	if avail < 2 {
+		return 1
+	}
+	return 1 + (avail-2)/3
+}
+
+func (m *Model) clampProjectOffset() {
+	visible := m.projectListHeight()
+	if m.projectCursor < m.projectOffset {
+		m.projectOffset = m.projectCursor
+	}
+	if m.projectCursor >= m.projectOffset+visible {
+		m.projectOffset = m.projectCursor - visible + 1
+	}
 }
 
 func (m *Model) relayout() {
-	leftW, _, rightW := m.panelWidths()
+	_, _, rightW := m.panelWidths()
 	innerH := m.bodyOuterHeight() - 2
-	m.projectList.SetSize(leftW-2, innerH)
 	m.detailView.Width = rightW - 4
 	m.detailView.Height = innerH
 	if m.showLogs {
@@ -2127,12 +2133,52 @@ func (m Model) renderHeader() string {
 }
 
 func (m Model) renderProjectPanel(w int) string {
+	focused := m.focus == focusProjects
+	innerW := w - 2 // border only, no padding
+	visibleH := m.projectListHeight()
+
+	var lines []string
+
+	// Title
+	lines = append(lines, " "+styleAccentBold.Render("Projects"))
+	lines = append(lines,
+		styleBorder.Render(strings.Repeat("─", innerW)),
+	)
+
+	end := m.projectOffset + visibleH
+	if end > len(m.projectItems) {
+		end = len(m.projectItems)
+	}
+
+	for i := m.projectOffset; i < end; i++ {
+		item := m.projectItems[i]
+		selected := i == m.projectCursor
+
+		title := item.Title()
+		desc := item.Description()
+
+		title = truncate(title, innerW-3)
+		desc = truncate(desc, innerW-5)
+
+		if selected && focused {
+			lines = append(lines, " "+styleAccentBold.Render(title))
+			lines = append(lines, "   "+styleSubtle.Render(desc))
+		} else {
+			lines = append(lines, " "+styleText.Render(title))
+			lines = append(lines, "   "+styleMuted.Render(desc))
+		}
+		if i < end-1 {
+			lines = append(lines, "")
+		}
+	}
+
+	content := strings.Join(lines, "\n")
+
 	s := stylePanelNoPad
-	if m.focus == focusProjects {
+	if focused {
 		s = s.BorderForeground(colorAccent)
 	}
-	return s.Width(w).Height(m.bodyOuterHeight()).
-		Render(m.projectList.View())
+	return s.Width(w).Height(m.bodyOuterHeight()).Render(content)
 }
 
 func currentVersionText(row packageRow) string {
