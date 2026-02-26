@@ -703,13 +703,19 @@ func (m *Model) handleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 		if m.focus == focusPackages {
 			m.packageSortMode = m.packageSortMode.next()
 			m.packageSortDir = m.packageSortMode.defaultDir()
+			m.packageCursor = 0
+			m.packageOffset = 0
 			m.rebuildPackageRows()
+			m.refreshDetail()
 		}
 
 	case "O":
 		if m.focus == focusPackages {
 			m.packageSortDir = !m.packageSortDir
+			m.packageCursor = 0
+			m.packageOffset = 0
 			m.rebuildPackageRows()
+			m.refreshDetail()
 		}
 
 	case "d":
@@ -2587,6 +2593,16 @@ func (m Model) renderDetail(row packageRow) string {
 	// downloads
 	s.WriteString(label("Downloads") + "\n")
 	s.WriteString(value(formatDownloads(row.info.TotalDownloads)) + "\n\n")
+
+	// last updated
+	pub := row.latestCompatible
+	if pub == nil {
+		pub = row.latestStable
+	}
+	if pub != nil && !pub.Published.IsZero() {
+		s.WriteString(label("Last updated") + "\n")
+		s.WriteString(value(timeAgo(pub.Published)) + "\n\n")
+	}
 
 	// source — link to the package page on the source
 	sourceURL := ""
