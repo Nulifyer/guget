@@ -570,8 +570,15 @@ func (s *NugetService) SearchExact(packageID string) (*PackageInfo, error) {
 
 	logDebug("[%s] found %q: %d versions, latest stable=%s", s.sourceName, packageID, len(versions), meta.Version)
 
+	// Prefer the caller-supplied casing (from the csproj) — some feeds
+	// (e.g. GitHub Packages) return a lowercased id in their registration JSON.
+	id := meta.ID
+	if strings.EqualFold(id, packageID) && id != packageID {
+		id = packageID
+	}
+
 	pkg := &PackageInfo{
-		ID:            meta.ID,
+		ID:            id,
 		LatestVersion: meta.Version,
 		Description:   meta.Description,
 		Authors:       authors,
