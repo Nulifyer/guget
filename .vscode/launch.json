@@ -18,7 +18,6 @@
                 "-v", "dbg",
                 "-p", "./test-dotnet",
                 "-lf", "./guget.log.txt",
-                "-t", "gruvbox",
                 "--", "--extra-arg1", "value1", "--extra-arg2", "value2", "-p", "./fake-project"
             ]
         },
