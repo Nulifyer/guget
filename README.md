@@ -161,6 +161,8 @@ guget -t dracula
 | `a` | Update to latest **stable** version (this project) |
 | `A` | Update to latest **stable** version (all projects) |
 | `v` | Open version picker overlay |
+| `o` | Cycle sort mode |
+| `O` | Toggle sort direction |
 | `d` | Remove selected package (prompts for confirmation) |
 | `t` | Show declared dependency tree for the selected package |
 
