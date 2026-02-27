@@ -570,9 +570,13 @@ func (m Model) Update(msg bubble_tea.Msg) (bubble_tea.Model, bubble_tea.Cmd) {
 				}
 			}
 		case focusDetail:
-			var cmd bubble_tea.Cmd
-			m.detailView, cmd = m.detailView.Update(msg)
-			cmds = append(cmds, cmd)
+			if keyMsg, ok := msg.(bubble_tea.KeyMsg); ok && keyMsg.String() == "v" {
+				m.openVersionPicker()
+			} else {
+				var cmd bubble_tea.Cmd
+				m.detailView, cmd = m.detailView.Update(msg)
+				cmds = append(cmds, cmd)
+			}
 		case focusLog:
 			if m.showLogs {
 				var cmd bubble_tea.Cmd
@@ -2014,8 +2018,8 @@ func (m Model) footerKeys() []struct{ k, v string } {
 		if isAllProjects {
 			return []kv{
 				{"tab/↑↓", "nav"},
-				{"u/U", "update compat"},
-				{"a/A", "update stable"},
+				{"u/U", "up compat"},
+				{"a/A", "up stable"},
 				{"v", "version"},
 				{"d", "del"},
 				{"o/O", "sort/dir"},
@@ -2044,6 +2048,7 @@ func (m Model) footerKeys() []struct{ k, v string } {
 		return []kv{
 			{"tab", "focus"},
 			{"↑↓", "scroll"},
+			{"v", "version"},
 			{"r/R", "restore/all"},
 			{"?", "help"},
 			{"esc/q", "quit"},
@@ -2594,16 +2599,6 @@ func (m Model) renderDetail(row packageRow) string {
 	s.WriteString(label("Downloads") + "\n")
 	s.WriteString(value(formatDownloads(row.info.TotalDownloads)) + "\n\n")
 
-	// last updated
-	pub := row.latestCompatible
-	if pub == nil {
-		pub = row.latestStable
-	}
-	if pub != nil && !pub.Published.IsZero() {
-		s.WriteString(label("Last updated") + "\n")
-		s.WriteString(value(timeAgo(pub.Published)) + "\n\n")
-	}
-
 	// source — link to the package page on the source
 	sourceURL := ""
 	for _, svc := range m.nugetServices {
@@ -2698,11 +2693,12 @@ func (m Model) renderDetail(row packageRow) string {
 
 	renderVRow := func(v PackageVersion) {
 		marker := "  "
-		vStyle := styleSubtle
+		vStyle := styleMuted
 
 		isCurrent := v.SemVer.String() == installedStr
 		isCompat := row.latestCompatible != nil && v.SemVer.String() == row.latestCompatible.SemVer.String()
 		isLatest := row.latestStable != nil && v.SemVer.String() == row.latestStable.SemVer.String()
+		isHighlighted := isCurrent || isCompat || isLatest
 
 		switch {
 		case isCurrent:
@@ -2717,19 +2713,29 @@ func (m Model) renderDetail(row packageRow) string {
 		}
 
 		extras := ""
+		if len(v.Vulnerabilities) > 0 {
+			extras += styleRed.Render(" ▲")
+		}
 		if v.SemVer.IsPreRelease() {
 			extras += styleMuted.Render(" pre")
-		}
-		if v.Downloads > 0 {
-			extras += styleMuted.
-				Render(fmt.Sprintf(" (%s)", formatDownloads(v.Downloads)))
 		}
 		verText := vStyle.Render(v.SemVer.String())
 		if strings.EqualFold(row.source, "nuget.org") || row.info.NugetOrgURL != "" {
 			verURL := "https://www.nuget.org/packages/" + row.info.ID + "/" + v.SemVer.String()
 			verText = hyperlink(verURL, verText)
 		}
-		s.WriteString(vStyle.Render(marker) + verText + extras + "\n")
+		line := vStyle.Render(marker) + verText + extras
+		if isHighlighted {
+			if ago := timeAgo(v.Published); ago != "" {
+				agoRendered := vStyle.Render(ago)
+				leftW := lipgloss.Width(line)
+				agoW := lipgloss.Width(agoRendered)
+				if gap := w - leftW - agoW; gap > 0 {
+					line += strings.Repeat(" ", gap) + agoRendered
+				}
+			}
+		}
+		s.WriteString(line + "\n")
 	}
 
 	for i, v := range displayVersions {
@@ -3084,7 +3090,7 @@ func (m Model) renderSearchOverlay() string {
 }
 
 func (m Model) renderPickerOverlay() string {
-	w := clampW(76+m.overlayWidthOffset, 40, m.width-4)
+	w := clampW(50+m.overlayWidthOffset, 40, m.width-4)
 	maxVisible := 16
 	versions := m.picker.versions
 
@@ -3259,8 +3265,8 @@ func (m Model) renderFooter() string {
 	var lines []string
 	var cur []string
 	curW := 0
-	sep := "  ·  "
-	sepW := 5
+	sep := styleMuted.Render(" · ")
+	sepW := 3
 
 	for _, pair := range keys {
 		k := styleAccentBold.Render(pair.k)
