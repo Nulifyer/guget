@@ -158,7 +158,8 @@ func parseCredentials(data []byte) map[string]sourceCredential {
 }
 
 // fetchFromCredentialProvider tries all discovered credential providers in parallel for the given source URL.
-func fetchFromCredentialProvider(sourceURL, sourceName string) (*sourceCredential, error) {
+// When isRetry is true, providers are told this is a retry so they bypass cached tokens.
+func fetchFromCredentialProvider(sourceURL, sourceName string, isRetry bool) (*sourceCredential, error) {
 	providers := findCredentialProviders()
 	if len(providers) == 0 {
 		return nil, fmt.Errorf("no credential providers found")
@@ -176,7 +177,7 @@ func fetchFromCredentialProvider(sourceURL, sourceName string) (*sourceCredentia
 		wg.Add(1)
 		go func(p credentialProvider) {
 			defer wg.Done()
-			cred, err := invokeProvider(p, sourceURL)
+			cred, err := invokeProvider(p, sourceURL, isRetry)
 			results <- providerResult{cred, err, filepath.Base(p.path)}
 		}(p)
 	}
@@ -190,6 +191,35 @@ func fetchFromCredentialProvider(sourceURL, sourceName string) (*sourceCredentia
 		logDebug("[%s] provider %s: %v", sourceName, r.name, r.err)
 	}
 	return nil, fmt.Errorf("no credential provider succeeded for %q", sourceName)
+}
+
+// clearCredentialProviderCache removes cached session tokens from the Microsoft
+// Credential Provider cache directory. This forces the provider to acquire a
+// fresh token on the next invocation.
+func clearCredentialProviderCache() {
+	var dirs []string
+
+	// Microsoft Credential Provider stores session tokens under:
+	//   Windows: %LocalAppData%\MicrosoftCredentialProvider
+	//   Linux/macOS: ~/.local/share/MicrosoftCredentialProvider
+	if runtime.GOOS == "windows" {
+		if localAppData := os.Getenv("LOCALAPPDATA"); localAppData != "" {
+			dirs = append(dirs, filepath.Join(localAppData, "MicrosoftCredentialProvider"))
+		}
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		dirs = append(dirs, filepath.Join(home, ".local", "share", "MicrosoftCredentialProvider"))
+	}
+
+	for _, dir := range dirs {
+		if _, err := os.Stat(dir); err != nil {
+			continue
+		}
+		logDebug("clearing credential provider cache: %s", dir)
+		if err := os.RemoveAll(dir); err != nil {
+			logDebug("failed to clear credential cache %s: %v", dir, err)
+		}
+	}
 }
 
 // findCredentialProviders discovers NuGet credential provider plugins using the
@@ -406,10 +436,12 @@ func findPluginsOnPath() []credentialProvider {
 }
 
 // invokeProvider tries V2 first, falling back to V1 if the provider doesn't speak V2.
-func invokeProvider(provider credentialProvider, sourceURL string) (*sourceCredential, error) {
+// When isRetry is true, the credential provider is told this is a retry (e.g. after a 401),
+// which causes it to bypass cached tokens and acquire fresh credentials.
+func invokeProvider(provider credentialProvider, sourceURL string, isRetry bool) (*sourceCredential, error) {
 	name := filepath.Base(provider.path)
 
-	cred, err := invokeProviderV2(provider, sourceURL)
+	cred, err := invokeProviderV2(provider, sourceURL, isRetry)
 	if err == nil && (cred.Username != "" || cred.Password != "") {
 		return cred, nil
 	}
@@ -418,16 +450,20 @@ func invokeProvider(provider credentialProvider, sourceURL string) (*sourceCrede
 	}
 
 	logDebug("[%s] V2 returned no credentials, trying V1 protocol", name)
-	return invokeProviderV1(provider, sourceURL)
+	return invokeProviderV1(provider, sourceURL, isRetry)
 }
 
 // invokeProviderV1 calls a credential provider using the V1 command-line args protocol.
-func invokeProviderV1(provider credentialProvider, sourceURL string) (*sourceCredential, error) {
+func invokeProviderV1(provider credentialProvider, sourceURL string, isRetry bool) (*sourceCredential, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	var cmd *exec.Cmd
-	args := []string{"-Uri", sourceURL, "-NonInteractive", "-IsRetry", "false"}
+	retryStr := "false"
+	if isRetry {
+		retryStr = "true"
+	}
+	args := []string{"-Uri", sourceURL, "-NonInteractive", "-IsRetry", retryStr}
 	if provider.isDLL {
 		dotnetArgs := append([]string{"exec", provider.path}, args...)
 		cmd = exec.CommandContext(ctx, "dotnet", dotnetArgs...)
@@ -468,7 +504,7 @@ func invokeProviderV1(provider credentialProvider, sourceURL string) (*sourceCre
 }
 
 // invokeProviderV2 calls a credential provider using the V2 stdin/stdout JSON protocol.
-func invokeProviderV2(provider credentialProvider, sourceURL string) (*sourceCredential, error) {
+func invokeProviderV2(provider credentialProvider, sourceURL string, isRetry bool) (*sourceCredential, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -535,7 +571,7 @@ func invokeProviderV2(provider credentialProvider, sourceURL string) (*sourceCre
 	credReqId := newRequestID()
 	payloadJSON, _ := json.Marshal(map[string]any{
 		"Uri":              sourceURL,
-		"IsRetry":          false,
+		"IsRetry":          isRetry,
 		"IsNonInteractive": true,
 		"CanShowDialog":    false,
 	})

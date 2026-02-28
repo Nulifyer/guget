@@ -176,6 +176,7 @@ type authTransport struct {
 	username   string
 	password   string
 	provOnce   sync.Once // ensures the credential provider is invoked at most once
+	retried    bool      // true after a cache-clear retry has been attempted
 }
 
 func newAuthTransport(source NugetSource) *authTransport {
@@ -213,7 +214,7 @@ func (t *authTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 
 	var providerCred *sourceCredential
 	t.provOnce.Do(func() {
-		cred, provErr := fetchFromCredentialProvider(t.sourceURL, t.sourceName)
+		cred, provErr := fetchFromCredentialProvider(t.sourceURL, t.sourceName, false)
 		if provErr != nil {
 			logDebug("[%s] credential provider: %v", t.sourceName, provErr)
 			return
@@ -236,15 +237,56 @@ func (t *authTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 
 	// Retry with the provider-supplied credentials.
-	req2, err2 := http.NewRequestWithContext(req.Context(), req.Method, req.URL.String(), nil)
-	if err2 != nil {
-		return nil, err2
+	resp2, err2 := t.doAuthenticatedRequest(req, providerCred)
+	if err2 != nil || resp2.StatusCode != http.StatusUnauthorized {
+		return resp2, err2
 	}
-	for k, v := range req.Header {
-		req2.Header[k] = v
+
+	// Still 401 — the cached token may be stale. Clear the credential provider
+	// cache, re-invoke with IsRetry=true to force a fresh token, and try once more.
+	t.mu.Lock()
+	alreadyRetried := t.retried
+	t.retried = true
+	t.mu.Unlock()
+
+	if alreadyRetried {
+		return resp2, nil
 	}
-	req2.SetBasicAuth(providerCred.Username, providerCred.Password)
-	return t.base.RoundTrip(req2)
+
+	logDebug("[%s] provider credentials returned 401, clearing cache and retrying", t.sourceName)
+	resp2.Body.Close()
+	clearCredentialProviderCache()
+
+	cred, provErr := fetchFromCredentialProvider(t.sourceURL, t.sourceName, true)
+	if provErr != nil {
+		logDebug("[%s] credential provider retry: %v", t.sourceName, provErr)
+		return &http.Response{
+			StatusCode: http.StatusUnauthorized,
+			Status:     "401 Unauthorized",
+			Body:       http.NoBody,
+			Header:     make(http.Header),
+		}, nil
+	}
+
+	t.mu.Lock()
+	t.username = cred.Username
+	t.password = cred.Password
+	t.mu.Unlock()
+
+	return t.doAuthenticatedRequest(req, cred)
+}
+
+// doAuthenticatedRequest creates a new request with Basic Auth and sends it.
+func (t *authTransport) doAuthenticatedRequest(origReq *http.Request, cred *sourceCredential) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(origReq.Context(), origReq.Method, origReq.URL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+	for k, v := range origReq.Header {
+		req.Header[k] = v
+	}
+	req.SetBasicAuth(cred.Username, cred.Password)
+	return t.base.RoundTrip(req)
 }
 
 // NugetService talks to a single NuGet v3 feed.
