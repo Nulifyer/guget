@@ -332,28 +332,69 @@ func (s *NugetService) PackageURL(id, version, projectURL string) string {
 
 // adoFeedInfo holds the parsed components of an Azure DevOps Artifacts feed URL.
 type adoFeedInfo struct {
-	Prefix string // scheme + host + org [+ project], e.g. "https://pkgs.dev.azure.com/org/project"
-	Feed   string // feed name
+	Org     string // Azure DevOps organisation
+	Project string // project (may be empty for org-scoped feeds)
+	Feed    string // feed name
 }
 
-// parseADOFeedURL extracts the org/project prefix and feed name from an Azure
-// DevOps Artifacts feed URL. It recognises both the modern
-// pkgs.dev.azure.com/{org}/_packaging/{feed}/… and the legacy
-// {org}.pkgs.visualstudio.com/_packaging/{feed}/… URL forms.
-// Returns nil if the URL does not contain /_packaging/.
+// feedsBaseURL returns the feeds.dev.azure.com REST API prefix for this feed,
+// e.g. "https://feeds.dev.azure.com/myorg" or "https://feeds.dev.azure.com/myorg/myproject".
+func (a *adoFeedInfo) feedsBaseURL() string {
+	base := "https://feeds.dev.azure.com/" + a.Org
+	if a.Project != "" {
+		base += "/" + a.Project
+	}
+	return base
+}
+
+// parseADOFeedURL extracts org, project, and feed name from an Azure DevOps
+// Artifacts feed URL. It recognises two host forms:
+//
+//	https://pkgs.dev.azure.com/{org}[/{project}]/_packaging/{feed}/…
+//	https://{org}.pkgs.visualstudio.com[/{project}]/_packaging/{feed}/…
+//
+// Returns nil if the URL is not an ADO Artifacts feed.
 func parseADOFeedURL(sourceURL string) *adoFeedInfo {
-	lower := strings.ToLower(sourceURL)
-	idx := strings.Index(lower, "/_packaging/")
-	if idx < 0 {
+	u, err := url.Parse(sourceURL)
+	if err != nil {
 		return nil
 	}
-	prefix := sourceURL[:idx]
-	rest := sourceURL[idx+len("/_packaging/"):]
-	feed := rest
-	if sl := strings.Index(feed, "/"); sl >= 0 {
-		feed = feed[:sl]
+	host := strings.ToLower(u.Hostname())
+
+	var org string
+	var pathSegments []string
+
+	switch {
+	case host == "pkgs.dev.azure.com":
+		// Path: /{org}[/{project}]/_packaging/{feed}/…
+		pathSegments = strings.Split(strings.Trim(u.Path, "/"), "/")
+		if len(pathSegments) < 1 {
+			return nil
+		}
+		org = pathSegments[0]
+		pathSegments = pathSegments[1:] // remaining: [{project}/]_packaging/{feed}/…
+
+	case strings.HasSuffix(host, ".pkgs.visualstudio.com"):
+		// Host: {org}.pkgs.visualstudio.com
+		org = host[:len(host)-len(".pkgs.visualstudio.com")]
+		pathSegments = strings.Split(strings.Trim(u.Path, "/"), "/")
+
+	default:
+		return nil
 	}
-	return &adoFeedInfo{Prefix: prefix, Feed: feed}
+
+	// Find _packaging/{feed} in the remaining path segments.
+	for i, seg := range pathSegments {
+		if strings.EqualFold(seg, "_packaging") && i+1 < len(pathSegments) {
+			info := &adoFeedInfo{Org: org, Feed: pathSegments[i+1]}
+			// Everything before _packaging is the project (if any).
+			if i > 0 {
+				info.Project = strings.Join(pathSegments[:i], "/")
+			}
+			return info
+		}
+	}
+	return nil
 }
 
 // inferPackageURL constructs a browsable package URL for known hosting services
@@ -366,9 +407,11 @@ func inferPackageURL(sourceURL, id, version, projectURL string) string {
 	// https://{org}.pkgs.visualstudio.com/_packaging/{feed}/nuget/v3/index.json
 	// → https://dev.azure.com/{org}[/{project}]/_artifacts/feed/{feed}/NuGet/{id}/overview/{version}
 	if ado := parseADOFeedURL(sourceURL); ado != nil {
-		webPrefix := strings.Replace(ado.Prefix, "pkgs.dev.azure.com", "dev.azure.com", 1)
-		webPrefix = strings.Replace(webPrefix, ".pkgs.visualstudio.com", ".visualstudio.com", 1)
-		return webPrefix + "/_artifacts/feed/" + ado.Feed + "/NuGet/" + id + "/overview/" + version
+		webBase := "https://dev.azure.com/" + ado.Org
+		if ado.Project != "" {
+			webBase += "/" + ado.Project
+		}
+		return webBase + "/_artifacts/feed/" + ado.Feed + "/NuGet/" + id + "/overview/" + version
 	}
 
 	// MyGet:
@@ -546,15 +589,7 @@ func (s *NugetService) resolveEndpoints() error {
 	// to upstream source fan-out; the ADO REST API responds in < 1 s.
 	// REST API: https://feeds.dev.azure.com/{org}[/{project}]/_apis/packaging/Feeds/{feed}/packages
 	if ado := parseADOFeedURL(s.sourceURL); ado != nil {
-		// Normalise both pkgs.dev.azure.com and {org}.pkgs.visualstudio.com
-		// to the feeds.dev.azure.com host used by the REST API.
-		adoPrefix := strings.Replace(ado.Prefix, "pkgs.dev.azure.com", "feeds.dev.azure.com", 1)
-		if i := strings.Index(strings.ToLower(adoPrefix), ".pkgs.visualstudio.com"); i >= 0 {
-			// {org}.pkgs.visualstudio.com → feeds.dev.azure.com/{org}
-			org := adoPrefix[len("https://"):i]
-			adoPrefix = "https://feeds.dev.azure.com/" + org
-		}
-		s.adoSearchBase = adoPrefix + "/_apis/packaging/Feeds/" + ado.Feed + "/packages"
+		s.adoSearchBase = ado.feedsBaseURL() + "/_apis/packaging/Feeds/" + ado.Feed + "/packages"
 		logDebug("[%s] ADO REST API search: %s", s.sourceName, s.adoSearchBase)
 	}
 
@@ -587,18 +622,18 @@ func (s *NugetService) Search(query string, take int) ([]SearchResult, error) {
 // dramatically faster than the NuGet SearchQueryService on ADO feeds.
 func (s *NugetService) searchADO(query string, take int) ([]SearchResult, error) {
 	logDebug("[%s] ADO REST API search query=%q take=%d", s.sourceName, query, take)
-	params := url.Values{}
-	params.Set("packageNameQuery", query)
-	params.Set("$top", strconv.Itoa(take))
-	params.Set("includeDescription", "true")
-	params.Set("api-version", "7.1-preview.1")
+
+	// Build URL manually — url.Values.Encode() would percent-encode the "$"
+	// in OData parameters like $top, which the ADO API does not accept.
+	searchURL := s.adoSearchBase +
+		"?packageNameQuery=" + url.QueryEscape(query) +
+		"&$top=" + strconv.Itoa(take) +
+		"&includeDescription=true" +
+		"&api-version=7.1-preview.1"
 
 	var resp adoPackageResponse
-	if err := s.getJSON(s.adoSearchBase+"?"+params.Encode(), &resp); err != nil {
-		// Fall back to the standard search endpoint if the ADO API fails.
-		logWarn("[%s] ADO REST API search failed, falling back to SearchQueryService: %v", s.sourceName, err)
-		s.adoSearchBase = "" // disable for future calls
-		return s.Search(query, take)
+	if err := s.getJSON(searchURL, &resp); err != nil {
+		return nil, fmt.Errorf("ADO REST API search: %w", err)
 	}
 
 	results := make([]SearchResult, 0, len(resp.Value))
