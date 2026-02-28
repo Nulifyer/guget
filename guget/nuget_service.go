@@ -66,6 +66,23 @@ type searchVersion struct {
 	Downloads int    `json:"downloads"`
 }
 
+// adoPackageResponse is the response from the Azure DevOps REST API packages endpoint.
+type adoPackageResponse struct {
+	Count int          `json:"count"`
+	Value []adoPackage `json:"value"`
+}
+
+type adoPackage struct {
+	ID          string       `json:"id"`   // GUID
+	Name        string       `json:"name"` // package ID
+	Description string       `json:"description"`
+	Versions    []adoVersion `json:"versions"`
+}
+
+type adoVersion struct {
+	Version string `json:"version"`
+}
+
 // PackageVersion is an enriched version with semver + framework info.
 type PackageVersion struct {
 	SemVer           SemVer
@@ -294,6 +311,7 @@ type NugetService struct {
 	searchBase     string // resolved from service index
 	regBase        string // RegistrationsBaseUrl
 	detailTemplate string // PackageDetailsUriTemplate (e.g. "https://…/packages/{id}/{version}")
+	adoSearchBase  string // Azure DevOps REST API base (faster alternative to SearchQueryService)
 }
 
 func (s *NugetService) SourceName() string { return s.sourceName }
@@ -312,6 +330,32 @@ func (s *NugetService) PackageURL(id, version, projectURL string) string {
 	return inferPackageURL(s.sourceURL, id, version, projectURL)
 }
 
+// adoFeedInfo holds the parsed components of an Azure DevOps Artifacts feed URL.
+type adoFeedInfo struct {
+	Prefix string // scheme + host + org [+ project], e.g. "https://pkgs.dev.azure.com/org/project"
+	Feed   string // feed name
+}
+
+// parseADOFeedURL extracts the org/project prefix and feed name from an Azure
+// DevOps Artifacts feed URL. It recognises both the modern
+// pkgs.dev.azure.com/{org}/_packaging/{feed}/… and the legacy
+// {org}.pkgs.visualstudio.com/_packaging/{feed}/… URL forms.
+// Returns nil if the URL does not contain /_packaging/.
+func parseADOFeedURL(sourceURL string) *adoFeedInfo {
+	lower := strings.ToLower(sourceURL)
+	idx := strings.Index(lower, "/_packaging/")
+	if idx < 0 {
+		return nil
+	}
+	prefix := sourceURL[:idx]
+	rest := sourceURL[idx+len("/_packaging/"):]
+	feed := rest
+	if sl := strings.Index(feed, "/"); sl >= 0 {
+		feed = feed[:sl]
+	}
+	return &adoFeedInfo{Prefix: prefix, Feed: feed}
+}
+
 // inferPackageURL constructs a browsable package URL for known hosting services
 // based on the source's API URL pattern.
 func inferPackageURL(sourceURL, id, version, projectURL string) string {
@@ -319,18 +363,12 @@ func inferPackageURL(sourceURL, id, version, projectURL string) string {
 
 	// Azure DevOps Artifacts:
 	// https://pkgs.dev.azure.com/{org}[/{project}]/_packaging/{feed}/nuget/v3/index.json
+	// https://{org}.pkgs.visualstudio.com/_packaging/{feed}/nuget/v3/index.json
 	// → https://dev.azure.com/{org}[/{project}]/_artifacts/feed/{feed}/NuGet/{id}/overview/{version}
-	if strings.Contains(lower, "pkgs.dev.azure.com") {
-		if idx := strings.Index(lower, "/_packaging/"); idx >= 0 {
-			prefix := sourceURL[:idx] // e.g. "https://pkgs.dev.azure.com/org/project"
-			rest := sourceURL[idx+len("/_packaging/"):]
-			feed := rest
-			if sl := strings.Index(feed, "/"); sl >= 0 {
-				feed = feed[:sl]
-			}
-			prefix = strings.Replace(prefix, "pkgs.dev.azure.com", "dev.azure.com", 1)
-			return prefix + "/_artifacts/feed/" + feed + "/NuGet/" + id + "/overview/" + version
-		}
+	if ado := parseADOFeedURL(sourceURL); ado != nil {
+		webPrefix := strings.Replace(ado.Prefix, "pkgs.dev.azure.com", "dev.azure.com", 1)
+		webPrefix = strings.Replace(webPrefix, ".pkgs.visualstudio.com", ".visualstudio.com", 1)
+		return webPrefix + "/_artifacts/feed/" + ado.Feed + "/NuGet/" + id + "/overview/" + version
 	}
 
 	// MyGet:
@@ -503,12 +541,34 @@ func (s *NugetService) resolveEndpoints() error {
 	if !strings.HasSuffix(s.regBase, "/") {
 		s.regBase += "/"
 	}
+	// Azure DevOps Artifacts: build the faster REST API search URL.
+	// The NuGet SearchQueryService (query2) on ADO feeds can take 25-30 s due
+	// to upstream source fan-out; the ADO REST API responds in < 1 s.
+	// REST API: https://feeds.dev.azure.com/{org}[/{project}]/_apis/packaging/Feeds/{feed}/packages
+	if ado := parseADOFeedURL(s.sourceURL); ado != nil {
+		// Normalise both pkgs.dev.azure.com and {org}.pkgs.visualstudio.com
+		// to the feeds.dev.azure.com host used by the REST API.
+		adoPrefix := strings.Replace(ado.Prefix, "pkgs.dev.azure.com", "feeds.dev.azure.com", 1)
+		if i := strings.Index(strings.ToLower(adoPrefix), ".pkgs.visualstudio.com"); i >= 0 {
+			// {org}.pkgs.visualstudio.com → feeds.dev.azure.com/{org}
+			org := adoPrefix[len("https://"):i]
+			adoPrefix = "https://feeds.dev.azure.com/" + org
+		}
+		s.adoSearchBase = adoPrefix + "/_apis/packaging/Feeds/" + ado.Feed + "/packages"
+		logDebug("[%s] ADO REST API search: %s", s.sourceName, s.adoSearchBase)
+	}
+
 	logDebug("[%s] endpoints resolved: search=%s reg=%s", s.sourceName, s.searchBase, s.regBase)
 	return nil
 }
 
 // Search returns up to take results matching the given query string.
+// For Azure DevOps feeds, it uses the ADO REST API which is significantly
+// faster than the NuGet SearchQueryService (query2) endpoint.
 func (s *NugetService) Search(query string, take int) ([]SearchResult, error) {
+	if s.adoSearchBase != "" {
+		return s.searchADO(query, take)
+	}
 	logDebug("[%s] search query=%q take=%d", s.sourceName, query, take)
 	params := url.Values{}
 	params.Set("q", query)
@@ -521,6 +581,45 @@ func (s *NugetService) Search(query string, take int) ([]SearchResult, error) {
 	}
 	logDebug("[%s] search returned %d results", s.sourceName, len(resp.Data))
 	return resp.Data, nil
+}
+
+// searchADO uses the Azure DevOps REST API for package search, which is
+// dramatically faster than the NuGet SearchQueryService on ADO feeds.
+func (s *NugetService) searchADO(query string, take int) ([]SearchResult, error) {
+	logDebug("[%s] ADO REST API search query=%q take=%d", s.sourceName, query, take)
+	params := url.Values{}
+	params.Set("packageNameQuery", query)
+	params.Set("$top", strconv.Itoa(take))
+	params.Set("includeDescription", "true")
+	params.Set("api-version", "7.1-preview.1")
+
+	var resp adoPackageResponse
+	if err := s.getJSON(s.adoSearchBase+"?"+params.Encode(), &resp); err != nil {
+		// Fall back to the standard search endpoint if the ADO API fails.
+		logWarn("[%s] ADO REST API search failed, falling back to SearchQueryService: %v", s.sourceName, err)
+		s.adoSearchBase = "" // disable for future calls
+		return s.Search(query, take)
+	}
+
+	results := make([]SearchResult, 0, len(resp.Value))
+	for _, pkg := range resp.Value {
+		latest := ""
+		versions := make([]searchVersion, 0, len(pkg.Versions))
+		for _, v := range pkg.Versions {
+			versions = append(versions, searchVersion{Version: v.Version})
+			if latest == "" {
+				latest = v.Version
+			}
+		}
+		results = append(results, SearchResult{
+			ID:          pkg.Name,
+			Version:     latest,
+			Description: pkg.Description,
+			Versions:    versions,
+		})
+	}
+	logDebug("[%s] ADO REST API search returned %d results", s.sourceName, len(results))
+	return results, nil
 }
 
 // SearchExact looks up a package by its exact ID using the registration index
