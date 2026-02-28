@@ -303,6 +303,19 @@ func (t *authTransport) doAuthenticatedRequest(origReq *http.Request, cred *sour
 	return t.base.RoundTrip(req)
 }
 
+// adoFeedResponse is the response from the Get Feed API.
+type adoFeedResponse struct {
+	UpstreamSources []adoUpstreamSource `json:"upstreamSources"`
+}
+
+type adoUpstreamSource struct {
+	Name     string `json:"name"`
+	Protocol string `json:"protocol"`
+	Location string `json:"location"`
+	Type     string `json:"upstreamSourceType"`
+	Status   string `json:"status"`
+}
+
 // NugetService talks to a single NuGet v3 feed.
 type NugetService struct {
 	sourceURL      string
@@ -312,9 +325,39 @@ type NugetService struct {
 	regBase        string // RegistrationsBaseUrl
 	detailTemplate string // PackageDetailsUriTemplate (e.g. "https://…/packages/{id}/{version}")
 	adoSearchBase  string // Azure DevOps REST API base (faster alternative to SearchQueryService)
+	adoUpstreams   []string // public NuGet upstream source URLs discovered from ADO feed config
 }
 
 func (s *NugetService) SourceName() string { return s.sourceName }
+func (s *NugetService) SourceURL() string  { return s.sourceURL }
+
+// DeduplicateADOUpstreams removes upstream source URLs from ADO services
+// that are already covered by another configured NugetService. This prevents
+// searching the same source twice (e.g. nuget.org configured as a standalone
+// source AND discovered as an ADO feed upstream).
+func DeduplicateADOUpstreams(services []*NugetService) {
+	// Collect all non-ADO source URLs so we can match against them.
+	configuredURLs := make(map[string]bool, len(services))
+	for _, svc := range services {
+		configuredURLs[strings.ToLower(strings.TrimRight(svc.sourceURL, "/"))] = true
+	}
+
+	for _, svc := range services {
+		if len(svc.adoUpstreams) == 0 {
+			continue
+		}
+		filtered := svc.adoUpstreams[:0]
+		for _, u := range svc.adoUpstreams {
+			key := strings.ToLower(strings.TrimRight(u, "/"))
+			if configuredURLs[key] {
+				logDebug("[%s] skipping upstream %s (already a configured source)", svc.sourceName, u)
+				continue
+			}
+			filtered = append(filtered, u)
+		}
+		svc.adoUpstreams = filtered
+	}
+}
 
 // PackageURL returns a browsable web URL for the given package, or "" if unknown.
 // projectURL is the package's ProjectURL metadata (may be empty).
@@ -589,8 +632,25 @@ func (s *NugetService) resolveEndpoints() error {
 	// to upstream source fan-out; the ADO REST API responds in < 1 s.
 	// REST API: https://feeds.dev.azure.com/{org}[/{project}]/_apis/packaging/Feeds/{feed}/packages
 	if ado := parseADOFeedURL(s.sourceURL); ado != nil {
-		s.adoSearchBase = ado.feedsBaseURL() + "/_apis/packaging/Feeds/" + ado.Feed + "/packages"
+		feedsBase := ado.feedsBaseURL()
+		s.adoSearchBase = feedsBase + "/_apis/packaging/Feeds/" + ado.Feed + "/packages"
 		logDebug("[%s] ADO REST API search: %s", s.sourceName, s.adoSearchBase)
+
+		// Query the Get Feed API to discover NuGet upstream sources.
+		// If the feed mirrors nuget.org (or other public feeds), we search
+		// those directly in parallel instead of using the slow query2 endpoint.
+		feedURL := feedsBase + "/_apis/packaging/Feeds/" + ado.Feed + "?api-version=7.1"
+		var feedResp adoFeedResponse
+		if err := s.getJSON(feedURL, &feedResp); err != nil {
+			logDebug("[%s] could not fetch feed config (upstream detection skipped): %v", s.sourceName, err)
+		} else {
+			for _, us := range feedResp.UpstreamSources {
+				if strings.EqualFold(us.Protocol, "nuget") && strings.EqualFold(us.Type, "public") && us.Location != "" {
+					logDebug("[%s] discovered NuGet upstream: %s (%s)", s.sourceName, us.Name, us.Location)
+					s.adoUpstreams = append(s.adoUpstreams, us.Location)
+				}
+			}
+		}
 	}
 
 	logDebug("[%s] endpoints resolved: search=%s reg=%s", s.sourceName, s.searchBase, s.regBase)
@@ -620,9 +680,65 @@ func (s *NugetService) Search(query string, take int) ([]SearchResult, error) {
 
 // searchADO uses the Azure DevOps REST API for package search, which is
 // dramatically faster than the NuGet SearchQueryService on ADO feeds.
+// When the feed has public NuGet upstream sources (e.g. nuget.org), those
+// are searched directly in parallel so the user sees the full package
+// catalogue without the 25-30 s penalty of the query2 fan-out.
 func (s *NugetService) searchADO(query string, take int) ([]SearchResult, error) {
-	logDebug("[%s] ADO REST API search query=%q take=%d", s.sourceName, query, take)
+	logDebug("[%s] ADO REST API search query=%q take=%d upstreams=%d", s.sourceName, query, take, len(s.adoUpstreams))
 
+	type searchResult struct {
+		results []SearchResult
+		err     error
+		source  string
+	}
+
+	workers := 1 + len(s.adoUpstreams)
+	ch := make(chan searchResult, workers)
+
+	// 1. Search the ADO feed itself (cached/local packages).
+	go func() {
+		results, err := s.searchADOLocal(query, take)
+		ch <- searchResult{results, err, "ado"}
+	}()
+
+	// 2. Search each public upstream source directly.
+	for _, upstream := range s.adoUpstreams {
+		go func(loc string) {
+			results, err := searchUpstream(s.client, loc, query, take)
+			ch <- searchResult{results, err, loc}
+		}(upstream)
+	}
+
+	// Merge results, dedup by lowercase package ID.
+	seen := make(map[string]bool)
+	var merged []SearchResult
+	var lastErr error
+	for range workers {
+		sr := <-ch
+		if sr.err != nil {
+			logWarn("[%s] search source %s failed: %v", s.sourceName, sr.source, sr.err)
+			lastErr = sr.err
+			continue
+		}
+		for _, r := range sr.results {
+			key := strings.ToLower(r.ID)
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			merged = append(merged, r)
+		}
+	}
+
+	if len(merged) == 0 && lastErr != nil {
+		return nil, lastErr
+	}
+	logDebug("[%s] ADO search returned %d merged results", s.sourceName, len(merged))
+	return merged, nil
+}
+
+// searchADOLocal searches the ADO REST API for packages cached in the feed.
+func (s *NugetService) searchADOLocal(query string, take int) ([]SearchResult, error) {
 	// Build URL manually — url.Values.Encode() would percent-encode the "$"
 	// in OData parameters like $top, which the ADO API does not accept.
 	searchURL := s.adoSearchBase +
@@ -653,8 +769,73 @@ func (s *NugetService) searchADO(query string, take int) ([]SearchResult, error)
 			Versions:    versions,
 		})
 	}
-	logDebug("[%s] ADO REST API search returned %d results", s.sourceName, len(results))
+	logDebug("[%s] ADO local search returned %d results", s.sourceName, len(results))
 	return results, nil
+}
+
+// searchUpstream resolves a NuGet v3 service index and searches its
+// SearchQueryService endpoint directly. This is used to search public
+// upstream sources (e.g. nuget.org) in parallel with the ADO REST API.
+func searchUpstream(client *http.Client, serviceIndexURL, query string, take int) ([]SearchResult, error) {
+	logDebug("[upstream] searching %s for %q", serviceIndexURL, query)
+
+	// Resolve the service index to find SearchQueryService.
+	req, err := http.NewRequest("GET", serviceIndexURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, &httpStatusError{Code: resp.StatusCode, URL: serviceIndexURL}
+	}
+	var idx serviceIndex
+	if err := json.NewDecoder(resp.Body).Decode(&idx); err != nil {
+		return nil, fmt.Errorf("decoding service index: %w", err)
+	}
+
+	var searchBase string
+	var searchVer SemVer
+	for _, r := range idx.Resources {
+		if strings.HasPrefix(r.Type, "SearchQueryService") {
+			if v := resourceTypeVersion(r.Type); searchBase == "" || v.IsNewerThan(searchVer) {
+				searchBase = r.ID
+				searchVer = v
+			}
+		}
+	}
+	if searchBase == "" {
+		return nil, fmt.Errorf("SearchQueryService not found in %s", serviceIndexURL)
+	}
+
+	// Search the upstream.
+	params := url.Values{}
+	params.Set("q", query)
+	params.Set("take", strconv.Itoa(take))
+	params.Set("prerelease", "false")
+	params.Set("semVerLevel", "2.0.0")
+
+	req2, err := http.NewRequest("GET", searchBase+"?"+params.Encode(), nil)
+	if err != nil {
+		return nil, err
+	}
+	resp2, err := client.Do(req2)
+	if err != nil {
+		return nil, err
+	}
+	defer resp2.Body.Close()
+	if resp2.StatusCode != http.StatusOK {
+		return nil, &httpStatusError{Code: resp2.StatusCode, URL: searchBase}
+	}
+	var searchResp searchResponse
+	if err := json.NewDecoder(resp2.Body).Decode(&searchResp); err != nil {
+		return nil, fmt.Errorf("decoding search response: %w", err)
+	}
+	logDebug("[upstream] %s returned %d results", serviceIndexURL, len(searchResp.Data))
+	return searchResp.Data, nil
 }
 
 // SearchExact looks up a package by its exact ID using the registration index

@@ -243,6 +243,7 @@ func main() {
 	if len(nugetServices) == 0 {
 		logFatal("No reachable NuGet sources found")
 	}
+	DeduplicateADOUpstreams(nugetServices)
 
 	// Count distinct packages so the TUI can track loading progress.
 	distinctPackages := NewSet[string]()
