@@ -26,22 +26,24 @@ A terminal UI for managing NuGet packages across .NET projects.
 
 ## Features
 
-- **Browse projects** — scans recursively for `.csproj` / `.fsproj` files
-- **Live version status** — fetches latest versions from NuGet v3 API
-- **Vulnerability & deprecation tracking** — surfaces CVE advisories and deprecated status per package version, with severity-coloured indicators in the list, detail panel, and version picker. Packages from private/Azure feeds are automatically enriched with vulnerability data from nuget.org.
-- **Update packages** — bump to the latest compatible or latest stable version
-- **Version picker** — choose any specific version with target-framework and vulnerability indicators
-- **Dependency tree** — `t` shows a package's declared dependencies; `T` runs `dotnet list --include-transitive` and displays the full transitive tree with status icons
-- **Add packages** — search NuGet and add new package references
-- **Bulk operations** — update a package across all projects at once
-- **Restore** — run `dotnet restore` without leaving the TUI
-- **Log panel** — real-time internal logs, toggleable with `l`
-- **Sources panel** — view configured NuGet sources, toggleable with `s`
-- **Help overlay** — full keybinding reference, press `?`
-- **Multi-source** — respects `NuGet.config` and global NuGet source configuration. Packages found on private feeds are supplemented with metadata from nuget.org (vulnerabilities).
-- **Clickable hyperlinks** — package names, advisory IDs, versions, and source URLs are clickable in terminals that support OSC 8 hyperlinks (Windows Terminal, iTerm2, Kitty, Ghostty, WezTerm, and others)
-- **Themes** — built-in colour themes: `auto`, `dracula`, `nord`, `everforest`, `gruvbox`. Select with `--theme` / `-t`.
-- **Responsive layout** — columns hide progressively on narrow terminals to keep the UI usable at any width
+| | Feature | Description |
+|:-:|---------|-------------|
+| 📁 | **Browse projects** | Scans recursively for `.csproj` / `.fsproj` files, with support for Central Package Management (`Directory.Build.props`) and imported `.props` files |
+| 🚀 | **Live version status** | Fetches latest versions from NuGet v3 API |
+| 🛡️ | **Vulnerability & deprecation tracking** | Surfaces CVE advisories and deprecated status per package version, with severity-coloured indicators in the list, detail panel, and version picker. Packages from private/Azure feeds are automatically enriched with vulnerability data from nuget.org |
+| ⬆️ | **Update packages** | Bump to the latest compatible or latest stable version |
+| 📋 | **Version picker** | Choose any specific version with target-framework and vulnerability indicators |
+| 🌳 | **Dependency tree** | `t` shows declared dependencies; `T` runs `dotnet list --include-transitive` for the full transitive tree with status icons |
+| ➕ | **Add packages** | Search NuGet and add new package references |
+| 🔄 | **Bulk operations** | Update a package across all projects at once |
+| 🔧 | **Restore** | Run `dotnet restore` without leaving the TUI |
+| 🌐 | **Multi-source** | Respects `NuGet.config` and global NuGet source configuration. Private feed packages are supplemented with metadata from nuget.org |
+| 🔗 | **Clickable hyperlinks** | Package names, advisory IDs, versions, and source URLs are clickable in terminals that support OSC 8 hyperlinks |
+| 🎨 | **Themes** | Built-in colour themes: `auto`, `dracula`, `nord`, `everforest`, `gruvbox`. Select with `--theme` / `-t` |
+| ↔️ | **Responsive layout** | Columns hide progressively on narrow terminals to keep the UI usable at any width |
+| 📜 | **Log panel** | Real-time internal logs, toggleable with `l` |
+| 🔌 | **Sources panel** | View configured NuGet sources, toggleable with `s` |
+| ❓ | **Help overlay** | Full keybinding reference, press `?` |
 
 ---
 

@@ -16,19 +16,21 @@ Manage NuGet packages across .NET projects with an interactive TUI, right inside
 
 ## Features
 
-- **Browse projects** — scans recursively for `.csproj` / `.fsproj` files
-- **Live version status** — fetches latest versions from NuGet v3 API
-- **Vulnerability & deprecation tracking** — surfaces CVE advisories and deprecated status per package version, with severity-coloured indicators. Packages from private/Azure feeds are automatically enriched with vulnerability data from nuget.org.
-- **Update packages** — bump to latest compatible or latest stable version
-- **Version picker** — choose any specific version with target-framework and vulnerability indicators
-- **Dependency tree** — view declared and full transitive dependency trees
-- **Add packages** — search NuGet and add new package references
-- **Bulk operations** — update a package across all projects at once
-- **Restore** — run `dotnet restore` without leaving the TUI
-- **Multi-source** — respects `NuGet.config` and global NuGet source configuration. Packages found on private feeds are supplemented with metadata from nuget.org.
-- **Clickable hyperlinks** — package names, advisory IDs, versions, and source URLs are clickable in terminals that support OSC 8 hyperlinks
-- **Themes** — built-in colour themes: `auto`, `dracula`, `nord`, `everforest`, `gruvbox`
-- **Responsive layout** — columns hide progressively on narrow terminals to keep the UI usable at any width
+| | Feature | Description |
+|:-:|---------|-------------|
+| 📁 | **Browse projects** | Scans recursively for `.csproj` / `.fsproj` files, with support for Central Package Management (`Directory.Build.props`) and imported `.props` files |
+| 🚀 | **Live version status** | Fetches latest versions from NuGet v3 API |
+| 🛡️ | **Vulnerability & deprecation tracking** | Surfaces CVE advisories and deprecated status per package version, with severity-coloured indicators. Packages from private/Azure feeds are automatically enriched with vulnerability data from nuget.org |
+| ⬆️ | **Update packages** | Bump to the latest compatible or latest stable version |
+| 📋 | **Version picker** | Choose any specific version with target-framework and vulnerability indicators |
+| 🌳 | **Dependency tree** | View declared and full transitive dependency trees |
+| ➕ | **Add packages** | Search NuGet and add new package references |
+| 🔄 | **Bulk operations** | Update a package across all projects at once |
+| 🔧 | **Restore** | Run `dotnet restore` without leaving the TUI |
+| 🌐 | **Multi-source** | Respects `NuGet.config` and global NuGet source configuration. Private feed packages are supplemented with metadata from nuget.org |
+| 🔗 | **Clickable hyperlinks** | Package names, advisory IDs, versions, and source URLs are clickable in terminals that support OSC 8 hyperlinks |
+| 🎨 | **Themes** | Built-in colour themes: `auto`, `dracula`, `nord`, `everforest`, `gruvbox` |
+| ↔️ | **Responsive layout** | Columns hide progressively on narrow terminals to keep the UI usable at any width |
 
 ## Requirements
 
