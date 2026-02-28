@@ -56,6 +56,7 @@ const (
 	Flag_Version    = "version"
 	Flag_LogFile    = "log-file"
 	Flag_Theme      = "theme"
+	Flag_SortBy     = "sort-by"
 )
 
 type BuiltFlags struct {
@@ -65,6 +66,7 @@ type BuiltFlags struct {
 	Version    bool
 	LogFile    string
 	Theme      string
+	SortBy     string
 }
 
 func BuildFlags(flags map[string]IParsedFlag) BuiltFlags {
@@ -75,6 +77,7 @@ func BuildFlags(flags map[string]IParsedFlag) BuiltFlags {
 		Version:    GetFlag[bool](flags, Flag_Version),
 		LogFile:    GetFlag[string](flags, Flag_LogFile),
 		Theme:      GetFlag[string](flags, Flag_Theme),
+		SortBy:     GetFlag[string](flags, Flag_SortBy),
 	}
 }
 
@@ -131,6 +134,26 @@ func initCLI() BuiltFlags {
 		Default:        Optional("auto"),
 		Description:    "Color theme",
 		ExpectedValues: validThemeNames,
+	})
+	RegisterFlag(Flag[string]{
+		Name:        Flag_SortBy,
+		Aliases:     []string{"-o", "--sort-by"},
+		Default:     Optional("status:asc"),
+		Description: "Initial sort order (status, name, source, current, available) with optional :asc or :desc",
+		Parser: func(s string) (string, error) {
+			name, dir, _ := strings.Cut(s, ":")
+			switch strings.ToLower(name) {
+			case "", "status", "name", "source", "current", "available":
+				switch dir {
+				case "", "asc", "desc":
+					return s, nil
+				default:
+					return "", fmt.Errorf("invalid sort dir: %s", dir)
+				}
+			default:
+				return "", fmt.Errorf("invalid sort mode: %s", name)
+			}
+		},
 	})
 
 	parsedFlags, _ := ParseFlags()
@@ -253,7 +276,7 @@ func main() {
 		}
 	}
 
-	m := NewModel(parsedProjects, propsProjects, nugetServices, sources, sourceMapping, buf.Lines(), distinctPackages.Len())
+	m := NewModel(parsedProjects, propsProjects, nugetServices, sources, sourceMapping, buf.Lines(), distinctPackages.Len(), builtFlags)
 
 	p := tea.NewProgram(
 		m,
@@ -308,7 +331,7 @@ func main() {
 				var sourceName string
 				var lastErr error
 				eligibleServices := FilterServices(nugetServices, sourceMapping, name)
-			for _, svc := range eligibleServices {
+				for _, svc := range eligibleServices {
 					info, lastErr = svc.SearchExact(name)
 					if lastErr == nil {
 						sourceName = svc.SourceName()
@@ -365,4 +388,3 @@ func enrichFromNugetOrg(info, nugetInfo *PackageInfo) {
 		info.ProjectURL = nugetInfo.ProjectURL
 	}
 }
-

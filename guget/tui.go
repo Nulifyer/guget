@@ -88,6 +88,34 @@ func (s packageSortMode) next() packageSortMode {
 	return (s + 1) % 5
 }
 
+func parseSortFlag(s string) (packageSortMode, bool) {
+	name, dir, _ := strings.Cut(s, ":")
+	mode := parseSortMode(name)
+	switch strings.ToLower(dir) {
+	case "asc":
+		return mode, true
+	case "desc":
+		return mode, false
+	default:
+		return mode, mode.defaultDir()
+	}
+}
+
+func parseSortMode(name string) packageSortMode {
+	switch strings.ToLower(name) {
+	case "name":
+		return sortByName
+	case "current":
+		return sortByCurrent
+	case "available":
+		return sortByAvailable
+	case "source":
+		return sortBySource
+	default:
+		return sortByStatus
+	}
+}
+
 // packageReadyMsg is sent by the background loader for each package as its
 // NuGet metadata resolves, enabling progressive UI updates.
 type packageReadyMsg struct {
@@ -335,7 +363,7 @@ type Model struct {
 	overlayWidthOffset int // active overlay width offset, reset on close
 }
 
-func NewModel(parsedProjects []*ParsedProject, propsProjects []*ParsedProject, nugetServices []*NugetService, sources []NugetSource, sourceMapping *PackageSourceMapping, initialLogLines []string, loadingTotal int) Model {
+func NewModel(parsedProjects []*ParsedProject, propsProjects []*ParsedProject, nugetServices []*NugetService, sources []NugetSource, sourceMapping *PackageSourceMapping, initialLogLines []string, loadingTotal int, flags BuiltFlags) Model {
 	sp := bubbles_spinner.New()
 	sp.Spinner = bubbles_spinner.Dot
 	sp.Style = styleAccent
@@ -358,6 +386,8 @@ func NewModel(parsedProjects []*ParsedProject, propsProjects []*ParsedProject, n
 	ti.CharLimit = 100
 	ti.Width = 44
 
+	sortMode, sortDir := parseSortFlag(flags.SortBy)
+
 	m := Model{
 		parsedProjects:  parsedProjects,
 		propsProjects:   propsProjects,
@@ -373,8 +403,8 @@ func NewModel(parsedProjects []*ParsedProject, propsProjects []*ParsedProject, n
 		logLines:        initialLogLines,
 		logView:         lv,
 		results:         make(map[string]nugetResult, loadingTotal),
-		packageSortMode: sortByStatus,
-		packageSortDir:  sortByStatus.defaultDir(),
+		packageSortMode: sortMode,
+		packageSortDir:  sortDir,
 	}
 	return m
 }
