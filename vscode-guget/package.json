@@ -139,6 +139,27 @@
           ],
           "description": "Color theme passed to guget via --theme flag."
         },
+        "guget.sortField": {
+          "type": "string",
+          "default": "status",
+          "enum": [
+            "status",
+            "name",
+            "source",
+            "current",
+            "available"
+          ],
+          "description": "Initial sort field."
+        },
+        "guget.sortDirection": {
+          "type": "string",
+          "default": "asc",
+          "enum": [
+            "asc",
+            "desc"
+          ],
+          "description": "Initial sort direction."
+        },
         "guget.additionalArgs": {
           "type": "array",
           "items": {

@@ -99,6 +99,8 @@ async function launchGuget(context: vscode.ExtensionContext, targetFolder: strin
   const config = vscode.workspace.getConfiguration("guget");
   const verbosity = config.get<string>("verbosity", "warn");
   const theme = config.get<string>("theme", "auto");
+  const sortField = config.get<string>("sortField", "status");
+  const sortDirection = config.get<string>("sortDirection", "asc");
   const additionalArgs = config.get<string[]>("additionalArgs", []);
 
   const args: string[] = [
@@ -108,6 +110,8 @@ async function launchGuget(context: vscode.ExtensionContext, targetFolder: strin
     verbosity,
     "-t",
     theme,
+    "-o",
+    `${sortField}:${sortDirection}`,
     ...additionalArgs,
   ];
 

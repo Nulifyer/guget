@@ -83,6 +83,8 @@ guget opens as a full editor tab with complete keyboard support.
 | `guget.binaryPath` | `""` | Absolute path to the `guget` binary. Leave empty to auto-detect from PATH. |
 | `guget.verbosity` | `"warn"` | Log verbosity level: `none`, `error`, `warn`, `info`, `debug`, `trace` |
 | `guget.theme` | `"auto"` | Color theme passed to guget (`auto`, `dracula`, `nord`, `everforest`, `gruvbox`, etc.) |
+| `guget.sortField` | `"status"` | Initial sort field: `status`, `name`, `source`, `current`, `available` |
+| `guget.sortDirection` | `"asc"` | Initial sort direction: `asc`, `desc` |
 | `guget.additionalArgs` | `[]` | Additional CLI arguments to pass to guget |
 
 ## Keybindings
