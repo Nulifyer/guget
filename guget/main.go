@@ -340,22 +340,14 @@ func main() {
 	}
 }
 
-// enrichFromNugetOrg merges vulnerability, download, and verification data
-// from nuget.org into a PackageInfo fetched from a private feed.
+// enrichFromNugetOrg merges vulnerability and metadata from nuget.org into
+// a PackageInfo fetched from a private feed.
 func enrichFromNugetOrg(info, nugetInfo *PackageInfo) {
 	// Build a version→vulnerabilities map from nuget.org data.
 	nugetVulns := make(map[string][]PackageVulnerability, len(nugetInfo.Versions))
 	for _, v := range nugetInfo.Versions {
 		if len(v.Vulnerabilities) > 0 {
 			nugetVulns[v.SemVer.String()] = v.Vulnerabilities
-		}
-	}
-
-	// Build a version→downloads map from nuget.org data.
-	nugetDL := make(map[string]int, len(nugetInfo.Versions))
-	for _, v := range nugetInfo.Versions {
-		if v.Downloads > 0 {
-			nugetDL[v.SemVer.String()] = v.Downloads
 		}
 	}
 
@@ -366,19 +358,8 @@ func enrichFromNugetOrg(info, nugetInfo *PackageInfo) {
 				info.Versions[i].Vulnerabilities = vulns
 			}
 		}
-		if info.Versions[i].Downloads == 0 {
-			if dl, ok := nugetDL[key]; ok {
-				info.Versions[i].Downloads = dl
-			}
-		}
 	}
 
-	if info.TotalDownloads == 0 {
-		info.TotalDownloads = nugetInfo.TotalDownloads
-	}
-	if !info.Verified {
-		info.Verified = nugetInfo.Verified
-	}
 	if info.ProjectURL == "" {
 		info.ProjectURL = nugetInfo.ProjectURL
 	}

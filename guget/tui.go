@@ -2531,11 +2531,7 @@ func (m Model) renderDetail(row packageRow) string {
 		}
 	}
 	name := hyperlink(pkgLink, styleAccentBold.Render(row.info.ID))
-	verified := ""
-	if row.info.Verified {
-		verified = " " + styleGreen.Render("✓ verified")
-	}
-	s.WriteString(name + verified + "\n\n")
+	s.WriteString(name + "\n\n")
 
 	// description
 	if row.info.Description != "" {
@@ -2594,10 +2590,6 @@ func (m Model) renderDetail(row packageRow) string {
 		}
 		s.WriteString("\n")
 	}
-
-	// downloads
-	s.WriteString(label("Downloads") + "\n")
-	s.WriteString(value(formatDownloads(row.info.TotalDownloads)) + "\n\n")
 
 	// source — link to the package page on the source
 	sourceURL := ""
@@ -3440,19 +3432,6 @@ func wordWrap(s string, width int) string {
 		lines = append(lines, cur.String())
 	}
 	return strings.Join(lines, "\n")
-}
-
-func formatDownloads(n int) string {
-	switch {
-	case n >= 1_000_000_000:
-		return fmt.Sprintf("%.1fB", float64(n)/1_000_000_000)
-	case n >= 1_000_000:
-		return fmt.Sprintf("%.1fM", float64(n)/1_000_000)
-	case n >= 1_000:
-		return fmt.Sprintf("%.1fK", float64(n)/1_000)
-	default:
-		return fmt.Sprintf("%d", n)
-	}
 }
 
 func imax(a, b int) int {

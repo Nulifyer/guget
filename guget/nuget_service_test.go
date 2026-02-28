@@ -69,9 +69,6 @@ func TestSearch_Newtonsoft(t *testing.T) {
 			if r.Version == "" {
 				t.Error("Newtonsoft.Json has empty Version")
 			}
-			if r.TotalDownloads == 0 {
-				t.Error("Newtonsoft.Json has zero TotalDownloads")
-			}
 			break
 		}
 	}
@@ -103,9 +100,6 @@ func TestSearchExact_NewtonsoftJson(t *testing.T) {
 	}
 	if len(pkg.Versions) == 0 {
 		t.Fatal("Versions slice is empty")
-	}
-	if pkg.TotalDownloads == 0 {
-		t.Error("TotalDownloads is zero")
 	}
 	if pkg.ProjectURL == "" {
 		t.Error("ProjectURL is empty")

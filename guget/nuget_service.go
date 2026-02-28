@@ -69,7 +69,6 @@ type searchVersion struct {
 // PackageVersion is an enriched version with semver + framework info.
 type PackageVersion struct {
 	SemVer           SemVer
-	Downloads        int
 	Published        time.Time              // when this version was published
 	Frameworks       []TargetFramework      // target frameworks this version supports
 	Vulnerabilities  []PackageVulnerability // CVE advisories for this specific version
@@ -84,8 +83,6 @@ type PackageInfo struct {
 	Authors            Set[string]
 	Tags               Set[string]
 	ProjectURL         string // from catalog entry (e.g. GitHub repo)
-	TotalDownloads     int
-	Verified           bool
 	Versions           []PackageVersion // sorted newest → oldest
 	Deprecated         bool
 	DeprecationMessage string
@@ -656,53 +653,10 @@ func (s *NugetService) SearchExact(packageID string) (*PackageInfo, error) {
 		pkg.AlternatePackageID = meta.Deprecation.AlternatePackage.ID
 	}
 
-	// Augment with download counts from the search endpoint (best-effort;
-	// the registration API does not include download statistics).
-	logTrace("[%s] fetching download counts for %q via search endpoint", s.sourceName, packageID)
-	if sr := s.fetchSearchResult(packageID); sr != nil {
-		pkg.TotalDownloads = sr.TotalDownloads
-		pkg.Verified = sr.Verified
-		dlMap := make(map[string]int, len(sr.Versions))
-		for _, v := range sr.Versions {
-			dlMap[v.Version] = v.Downloads
-		}
-		for i := range pkg.Versions {
-			if d, ok := dlMap[pkg.Versions[i].SemVer.Raw]; ok {
-				pkg.Versions[i].Downloads = d
-			}
-		}
-		logTrace("[%s] download counts merged for %q", s.sourceName, packageID)
-	} else {
-		logTrace("[%s] no download counts available for %q", s.sourceName, packageID)
-	}
-
 	logDebug("[%s] SearchExact %q completed in %s (%d versions)", s.sourceName, packageID, time.Since(searchStart), len(versions))
 	return pkg, nil
 }
 
-// fetchSearchResult queries the search endpoint for an exact package ID match
-// and returns the first result whose ID matches (case-insensitive). Returns nil
-// if the search endpoint is unavailable or the package is not found.
-func (s *NugetService) fetchSearchResult(packageID string) *SearchResult {
-	if s.searchBase == "" {
-		return nil
-	}
-	params := url.Values{}
-	params.Set("q", packageID)
-	params.Set("take", "1")
-	params.Set("prerelease", "true")
-	var resp searchResponse
-	if err := s.getJSON(s.searchBase+"?"+params.Encode(), &resp); err != nil {
-		logDebug("[%s] download fetch failed for %q: %v", s.sourceName, packageID, err)
-		return nil
-	}
-	for i := range resp.Data {
-		if strings.EqualFold(resp.Data[i].ID, packageID) {
-			return &resp.Data[i]
-		}
-	}
-	return nil
-}
 
 // LatestStable returns the newest non-pre-release version.
 func (p *PackageInfo) LatestStable() *PackageVersion {
