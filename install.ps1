@@ -26,8 +26,24 @@ $Tmp = Join-Path $env:TEMP ([System.Guid]::NewGuid().ToString())
 New-Item -ItemType Directory -Path $Tmp | Out-Null
 
 try {
-    $ZipPath = Join-Path $Tmp $Filename
+    $ZipPath      = Join-Path $Tmp $Filename
+    $ChecksumUrl  = "https://github.com/$Repo/releases/download/$Tag/checksums.txt"
+    $ChecksumPath = Join-Path $Tmp "checksums.txt"
+
     Invoke-WebRequest -Uri $Url -OutFile $ZipPath -UseBasicParsing
+    Invoke-WebRequest -Uri $ChecksumUrl -OutFile $ChecksumPath -UseBasicParsing
+
+    # ── Verify checksum ──────────────────────────────────────────────────────
+    $Expected = (Get-Content $ChecksumPath | Where-Object { $_ -match $Filename }) -replace '\s+.*$', ''
+    if (-not $Expected) {
+        throw "Checksum not found for $Filename"
+    }
+    $Actual = (Get-FileHash -Path $ZipPath -Algorithm SHA256).Hash.ToLower()
+    if ($Actual -ne $Expected) {
+        throw "Checksum mismatch`n  expected: $Expected`n  actual:   $Actual"
+    }
+    Write-Host "Checksum verified."
+
     Expand-Archive -Path $ZipPath -DestinationPath $Tmp
 
     # ── Install binary ────────────────────────────────────────────────────────
@@ -46,7 +62,7 @@ try {
                 [System.Environment]::GetEnvironmentVariable("PATH", "User")
 
     Write-Host "Installed to $InstallDir\guget.exe"
-    Write-Host "Done! Run 'guget --version' to verify."
+    Write-Host "Done! $(guget --version)"
 }
 finally {
     Remove-Item -Recurse -Force $Tmp -ErrorAction SilentlyContinue

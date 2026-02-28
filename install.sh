@@ -47,11 +47,38 @@ URL="https://github.com/$REPO/releases/download/$TAG/$FILENAME"
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
+CHECKSUM_URL="https://github.com/$REPO/releases/download/$TAG/checksums.txt"
+
 if command -v curl &>/dev/null; then
   curl -fsSL "$URL" -o "$TMP/$FILENAME"
+  curl -fsSL "$CHECKSUM_URL" -o "$TMP/checksums.txt"
 else
   wget -qO "$TMP/$FILENAME" "$URL"
+  wget -qO "$TMP/checksums.txt" "$CHECKSUM_URL"
 fi
+
+# ── Verify checksum ──────────────────────────────────────────────────────────
+EXPECTED=$(grep "$FILENAME" "$TMP/checksums.txt" | awk '{print $1}')
+if [ -z "$EXPECTED" ]; then
+  echo "Error: checksum not found for $FILENAME"; exit 1
+fi
+
+if command -v sha256sum &>/dev/null; then
+  ACTUAL=$(sha256sum "$TMP/$FILENAME" | awk '{print $1}')
+elif command -v shasum &>/dev/null; then
+  ACTUAL=$(shasum -a 256 "$TMP/$FILENAME" | awk '{print $1}')
+else
+  echo "Warning: sha256sum/shasum not found, skipping checksum verification"
+  ACTUAL="$EXPECTED"
+fi
+
+if [ "$ACTUAL" != "$EXPECTED" ]; then
+  echo "Error: checksum mismatch"
+  echo "  expected: $EXPECTED"
+  echo "  actual:   $ACTUAL"
+  exit 1
+fi
+echo "Checksum verified."
 
 tar -xzf "$TMP/$FILENAME" -C "$TMP"
 
@@ -98,4 +125,4 @@ esac
 # but the profile update above ensures guget is available in new terminals.
 export PATH="$INSTALL_DIR:$PATH"
 
-echo "Done! Run 'guget --version' to verify."
+echo "Done! $(guget --version)"
