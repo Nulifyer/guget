@@ -53,18 +53,21 @@ const (
 type packageSortMode int
 
 const (
-	sortByStatus      packageSortMode = iota // status then name (default)
-	sortByName                               // name only
-	sortByLastUpdated                        // last updated (newest first)
-	sortBySource                             // source then name
+	sortByStatus    packageSortMode = iota // status then name (default)
+	sortByName                             // name only
+	sortByCurrent                          // published date of installed version (newest first)
+	sortByAvailable                        // published date of best available upgrade (newest first)
+	sortBySource                           // source then name
 )
 
 func (s packageSortMode) label() string {
 	switch s {
 	case sortByName:
 		return "name"
-	case sortByLastUpdated:
-		return "lastUpdated"
+	case sortByCurrent:
+		return "current"
+	case sortByAvailable:
+		return "available"
 	case sortBySource:
 		return "source"
 	default:
@@ -74,7 +77,7 @@ func (s packageSortMode) label() string {
 
 func (s packageSortMode) defaultDir() bool {
 	switch s {
-	case sortByLastUpdated:
+	case sortByCurrent, sortByAvailable:
 		return false
 	default:
 		return true
@@ -82,7 +85,7 @@ func (s packageSortMode) defaultDir() bool {
 }
 
 func (s packageSortMode) next() packageSortMode {
-	return (s + 1) % 4
+	return (s + 1) % 5
 }
 
 // packageReadyMsg is sent by the background loader for each package as its
@@ -1868,9 +1871,12 @@ func (m *Model) rebuildPackageRows() {
 	case sortBySource:
 		sortPackageRowsByName(rows)
 		sortPackageRowsBySource(rows)
-	case sortByLastUpdated:
+	case sortByCurrent:
 		sortPackageRowsByName(rows)
-		sortPackageRowsByLastUpdated(rows)
+		sortPackageRowsByCurrent(rows)
+	case sortByAvailable:
+		sortPackageRowsByName(rows)
+		sortPackageRowsByAvailable(rows)
 	default: // sortByStatus
 		sortPackageRowsByName(rows)
 		sortPackageRowsByStatus(rows)
@@ -1933,16 +1939,40 @@ func sortPackageRowsBySource(rows []packageRow) {
 	}
 }
 
-// sortPackageRowsByLastUpdated sorts by the published date of the installed
-// version's latest compatible (or latest stable) match, newest first.
-func sortPackageRowsByLastUpdated(rows []packageRow) {
+// sortPackageRowsByCurrent sorts by the published date of the currently
+// installed version (newest first).
+func sortPackageRowsByCurrent(rows []packageRow) {
 	published := func(r packageRow) time.Time {
-		v := r.latestCompatible
-		if v == nil {
-			v = r.latestStable
+		if r.info == nil {
+			return time.Time{}
 		}
-		if v != nil {
+		ver := r.effectiveVersion()
+		for i := range r.info.Versions {
+			if r.info.Versions[i].SemVer.Raw == ver.Raw {
+				return r.info.Versions[i].Published
+			}
+		}
+		return time.Time{}
+	}
+	for i := 1; i < len(rows); i++ {
+		for j := i; j > 0 && published(rows[j]).Before(published(rows[j-1])); j-- {
+			rows[j], rows[j-1] = rows[j-1], rows[j]
+		}
+	}
+}
+
+// sortPackageRowsByAvailable sorts by the published date of the best available
+// upgrade version: latestCompatible → latestStable → latest overall (newest first).
+func sortPackageRowsByAvailable(rows []packageRow) {
+	published := func(r packageRow) time.Time {
+		if v := r.latestCompatible; v != nil {
 			return v.Published
+		}
+		if v := r.latestStable; v != nil {
+			return v.Published
+		}
+		if r.info != nil && len(r.info.Versions) > 0 {
+			return r.info.Versions[0].Published
 		}
 		return time.Time{}
 	}
@@ -2660,6 +2690,10 @@ func (m Model) renderDetail(row packageRow) string {
 	// 1. The currently installed version.
 	// 2. The latest non-pre-release patch in the same major.minor series.
 	installedStr := row.ref.Version.String()
+	oldestStr := ""
+	if row.diverged {
+		oldestStr = row.oldest.String()
+	}
 	curMajor, curMinor := row.ref.Version.Major, row.ref.Version.Minor
 	latestPatchStr := ""
 	for _, v := range displayVersions {
@@ -2676,7 +2710,7 @@ func (m Model) renderDetail(row packageRow) string {
 			continue
 		}
 		vs := v.SemVer.String()
-		isPinned := vs == installedStr || (latestPatchStr != "" && vs == latestPatchStr)
+		isPinned := vs == installedStr || (oldestStr != "" && vs == oldestStr) || (latestPatchStr != "" && vs == latestPatchStr)
 		if isPinned && !pinnedSeen.Contains(vs) {
 			pinnedSeen.Add(vs)
 			pinnedAfter = append(pinnedAfter, v)
@@ -2687,7 +2721,7 @@ func (m Model) renderDetail(row packageRow) string {
 		marker := "  "
 		vStyle := styleMuted
 
-		isCurrent := v.SemVer.String() == installedStr
+		isCurrent := v.SemVer.String() == installedStr || (oldestStr != "" && v.SemVer.String() == oldestStr)
 		isCompat := row.latestCompatible != nil && v.SemVer.String() == row.latestCompatible.SemVer.String()
 		isLatest := row.latestStable != nil && v.SemVer.String() == row.latestStable.SemVer.String()
 		isHighlighted := isCurrent || isCompat || isLatest
