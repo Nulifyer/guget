@@ -53,20 +53,20 @@ const (
 type packageSortMode int
 
 const (
-	sortByStatus    packageSortMode = iota // status then name (default)
-	sortByName                             // name only
-	sortBySource                           // source then name
-	sortByPublished                        // last published (newest first)
+	sortByStatus      packageSortMode = iota // status then name (default)
+	sortByName                               // name only
+	sortByLastUpdated                        // last updated (newest first)
+	sortBySource                             // source then name
 )
 
 func (s packageSortMode) label() string {
 	switch s {
 	case sortByName:
 		return "name"
+	case sortByLastUpdated:
+		return "lastUpdated"
 	case sortBySource:
 		return "source"
-	case sortByPublished:
-		return "published"
 	default:
 		return "status"
 	}
@@ -74,7 +74,7 @@ func (s packageSortMode) label() string {
 
 func (s packageSortMode) defaultDir() bool {
 	switch s {
-	case sortByPublished:
+	case sortByLastUpdated:
 		return false
 	default:
 		return true
@@ -1868,9 +1868,9 @@ func (m *Model) rebuildPackageRows() {
 	case sortBySource:
 		sortPackageRowsByName(rows)
 		sortPackageRowsBySource(rows)
-	case sortByPublished:
+	case sortByLastUpdated:
 		sortPackageRowsByName(rows)
-		sortPackageRowsByPublished(rows)
+		sortPackageRowsByLastUpdated(rows)
 	default: // sortByStatus
 		sortPackageRowsByName(rows)
 		sortPackageRowsByStatus(rows)
@@ -1933,9 +1933,9 @@ func sortPackageRowsBySource(rows []packageRow) {
 	}
 }
 
-// sortPackageRowsByPublished sorts by the published date of the installed
+// sortPackageRowsByLastUpdated sorts by the published date of the installed
 // version's latest compatible (or latest stable) match, newest first.
-func sortPackageRowsByPublished(rows []packageRow) {
+func sortPackageRowsByLastUpdated(rows []packageRow) {
 	published := func(r packageRow) time.Time {
 		v := r.latestCompatible
 		if v == nil {
@@ -2263,7 +2263,7 @@ func (m Model) renderProjectPanel(w int) string {
 	var lines []string
 
 	// Title
-	lines = append(lines, " "+styleAccentBold.Render("Projects"))
+	lines = append(lines, " "+styleSubtleBold.Render("Projects"))
 	lines = append(lines,
 		styleBorder.Render(strings.Repeat("─", innerW)),
 	)
@@ -2283,7 +2283,7 @@ func (m Model) renderProjectPanel(w int) string {
 		title = truncate(title, innerW-3)
 		desc = truncate(desc, innerW-5)
 
-		if selected && focused {
+		if selected {
 			lines = append(lines, " "+styleAccentBold.Render(title))
 			lines = append(lines, "   "+styleSubtle.Render(desc))
 		} else {
@@ -2490,7 +2490,7 @@ func (m Model) renderDetailPanel(w int) string {
 		s = s.BorderForeground(colorAccent)
 	}
 
-	title := styleAccentBold.Render("Package Detail")
+	title := styleSubtleBold.Render("Package Detail")
 	divider := styleBorder.Render(strings.Repeat("─", w-6))
 
 	content := lipgloss.JoinVertical(lipgloss.Left, title, divider, m.detailView.View())
@@ -2818,7 +2818,7 @@ func (m *Model) refreshHelpView() {
 				{"v", "pick a specific version from the list"},
 				{"d", "delete selected package from project"},
 				{"t", "show declared dependency tree for package"},
-				{"o", "cycle sort order (status, name, source, published)"},
+				{"o", "cycle sort order"},
 				{"O", "change sort direction"},
 			},
 		},
