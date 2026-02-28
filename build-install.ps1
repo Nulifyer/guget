@@ -48,8 +48,13 @@ $env:CGO_ENABLED = "0"
 $ldflags = "-s -w -X main.version=$Version"
 $OutPath = Join-Path $RepoRoot $BinaryName
 
-go build -ldflags $ldflags -o $OutPath $SourceDir
-if ($LASTEXITCODE -ne 0) { Fail "Build failed" }
+Push-Location $SourceDir
+try {
+    go build -ldflags $ldflags -o $OutPath .
+    if ($LASTEXITCODE -ne 0) { Fail "Build failed" }
+} finally {
+    Pop-Location
+}
 Ok "Built $OutPath"
 
 # ── Install ──────────────────────────────────────────────────────────────────

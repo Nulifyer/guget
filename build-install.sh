@@ -40,7 +40,7 @@ export CGO_ENABLED=0
 LDFLAGS="-s -w -X main.version=$VERSION"
 OUT_PATH="$REPO_ROOT/guget-build"
 
-go build -ldflags "$LDFLAGS" -o "$OUT_PATH" "$SOURCE_DIR"
+( cd "$SOURCE_DIR" && go build -ldflags "$LDFLAGS" -o "$OUT_PATH" . )
 ok "Built $OUT_PATH"
 
 # ── Install ──────────────────────────────────────────────────────────────────
