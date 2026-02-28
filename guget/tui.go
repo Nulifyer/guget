@@ -2232,7 +2232,7 @@ func (m Model) View() string {
 
 	body := lipgloss.JoinHorizontal(lipgloss.Top, left, mid, right)
 
-	parts := []string{m.renderHeader(), body}
+	parts := []string{body}
 	if m.showLogs {
 		parts = append(parts, m.renderLogPanel())
 	}
@@ -2246,14 +2246,14 @@ func (m Model) View() string {
 	return content
 }
 
-func (m Model) renderHeader() string {
-	title := styleHeaderTitle.Render("◈ GoNuget")
-	subtitle := styleSubtle.Render("NuGet package manager")
+// func (m Model) renderHeader() string {
+// 	title := styleHeaderTitle.Render("◈ GoNuget")
+// 	subtitle := styleSubtle.Render("NuGet package manager")
 
-	return styleHeaderBar.
-		Width(m.layoutWidth()).
-		Render(lipgloss.JoinHorizontal(lipgloss.Center, title, "  ", subtitle))
-}
+// 	return styleHeaderBar.
+// 		Width(m.layoutWidth()).
+// 		Render(lipgloss.JoinHorizontal(lipgloss.Center, title, "  ", subtitle))
+// }
 
 func (m Model) renderProjectPanel(w int) string {
 	focused := m.focus == focusProjects
