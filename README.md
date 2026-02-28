@@ -38,7 +38,7 @@ A terminal UI for managing NuGet packages across .NET projects.
 - **Log panel** — real-time internal logs, toggleable with `l`
 - **Sources panel** — view configured NuGet sources, toggleable with `s`
 - **Help overlay** — full keybinding reference, press `?`
-- **Multi-source** — respects `NuGet.config` and global NuGet source configuration. Packages found on private feeds are supplemented with metadata from nuget.org (vulnerabilities, downloads, verification).
+- **Multi-source** — respects `NuGet.config` and global NuGet source configuration. Packages found on private feeds are supplemented with metadata from nuget.org (vulnerabilities).
 - **Clickable hyperlinks** — package names, advisory IDs, versions, and source URLs are clickable in terminals that support OSC 8 hyperlinks (Windows Terminal, iTerm2, Kitty, Ghostty, WezTerm, and others)
 - **Themes** — built-in colour themes: `auto`, `dracula`, `nord`, `everforest`, `gruvbox`. Select with `--theme` / `-t`.
 - **Responsive layout** — columns hide progressively on narrow terminals to keep the UI usable at any width
