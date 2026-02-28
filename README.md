@@ -22,7 +22,7 @@ A terminal UI for managing NuGet packages across .NET projects.
 
 </div>
 
----
+
 
 ## Features
 
@@ -45,7 +45,7 @@ A terminal UI for managing NuGet packages across .NET projects.
 | 🔌 | **Sources panel** | View configured NuGet sources, toggleable with `s` |
 | ❓ | **Help overlay** | Full keybinding reference, press `?` |
 
----
+
 
 ## Requirements
 
@@ -57,7 +57,7 @@ To build:
 - [Go](https://go.dev/) 1.25+
 - [.NET SDK](https://dotnet.microsoft.com/download) dotnet CLI
 
----
+
 
 ## Installation
 
@@ -95,7 +95,7 @@ go build -o guget        # Linux / macOS
 go build -o guget.exe    # Windows
 ```
 
----
+
 
 ## Usage
 
@@ -147,7 +147,7 @@ guget -t dracula
 guget -o available:desc
 ```
 
----
+
 
 ## Keybindings
 
@@ -213,7 +213,7 @@ guget -o available:desc
 | `Enter` | Apply version |
 | `Esc` / `q` | Close |
 
----
+
 
 ## Package Status Icons
 
@@ -226,7 +226,7 @@ guget -o available:desc
 | `~` | Package is **deprecated** in the registry |
 | `✓` | Up to date |
 
----
+
 
 ## How It Works
 
@@ -235,7 +235,7 @@ guget -o available:desc
 3. The UI updates as results arrive — no waiting for a full scan before you can start navigating.
 4. When you update a package, `guget` rewrites the relevant project file(s) in place.
 
----
+
 
 ## Built With
 
