@@ -5,9 +5,12 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	lipgloss "github.com/charmbracelet/lipgloss"
 )
+
+var logStartTime = time.Now()
 
 type LogLevel int
 
@@ -96,68 +99,81 @@ func logUseColor() bool {
 	return logColorEnabled && logOutWriter == nil
 }
 
+// logTimestamp returns a relative timestamp like "+0.123s" showing seconds
+// since process start. This keeps log lines compact while making it easy to
+// see how long each step takes.
+func logTimestamp() string {
+	return fmt.Sprintf("+%.3fs", time.Since(logStartTime).Seconds())
+}
+
 func logTrace(format string, v ...interface{}) {
 	if logLevel >= LogLevelTrace {
+		ts := logTimestamp()
 		msg := fmt.Sprintf(format, v...)
 		if logUseColor() {
-			fmt.Fprintf(logStdOut(), "%s %s\n", logStyleTrace.Render("[TRACE]"), msg)
+			fmt.Fprintf(logStdOut(), "%s %s %s\n", logStyleTrace.Render("[TRACE]"), logStyleTrace.Render(ts), msg)
 		} else {
-			fmt.Fprintf(logStdOut(), "[TRACE] %s\n", msg)
+			fmt.Fprintf(logStdOut(), "[TRACE] %s %s\n", ts, msg)
 		}
 	}
 }
 
 func logDebug(format string, v ...interface{}) {
 	if logLevel >= LogLevelDebug {
+		ts := logTimestamp()
 		msg := fmt.Sprintf(format, v...)
 		if logUseColor() {
-			fmt.Fprintf(logStdOut(), "%s %s\n", logStyleDebug.Render("[DEBUG]"), msg)
+			fmt.Fprintf(logStdOut(), "%s %s %s\n", logStyleDebug.Render("[DEBUG]"), logStyleDebug.Render(ts), msg)
 		} else {
-			fmt.Fprintf(logStdOut(), "[DEBUG] %s\n", msg)
+			fmt.Fprintf(logStdOut(), "[DEBUG] %s %s\n", ts, msg)
 		}
 	}
 }
 
 func logInfo(format string, v ...interface{}) {
 	if logLevel >= LogLevelInfo {
+		ts := logTimestamp()
 		msg := fmt.Sprintf(format, v...)
 		if logUseColor() {
-			fmt.Fprintf(logStdOut(), "%s %s\n", logStyleInfo.Render("[INFO]"), msg)
+			fmt.Fprintf(logStdOut(), "%s %s %s\n", logStyleInfo.Render("[INFO]"), logStyleInfo.Render(ts), msg)
 		} else {
-			fmt.Fprintf(logStdOut(), "[INFO] %s\n", msg)
+			fmt.Fprintf(logStdOut(), "[INFO] %s %s\n", ts, msg)
 		}
 	}
 }
 
 func logWarn(format string, v ...interface{}) {
 	if logLevel >= LogLevelWarn {
+		ts := logTimestamp()
 		msg := fmt.Sprintf(format, v...)
 		if logUseColor() {
-			fmt.Fprintf(logStdErr(), "%s %s\n", logStyleWarn.Render("[WARN]"), msg)
+			fmt.Fprintf(logStdErr(), "%s %s %s\n", logStyleWarn.Render("[WARN]"), logStyleWarn.Render(ts), msg)
 		} else {
-			fmt.Fprintf(logStdErr(), "[WARN] %s\n", msg)
+			fmt.Fprintf(logStdErr(), "[WARN] %s %s\n", ts, msg)
 		}
 	}
 }
 
 func logError(format string, v ...interface{}) {
 	if logLevel >= LogLevelError {
+		ts := logTimestamp()
 		msg := fmt.Sprintf(format, v...)
 		if logUseColor() {
-			fmt.Fprintf(logStdErr(), "%s %s\n", logStyleError.Render("[ERROR]"), msg)
+			fmt.Fprintf(logStdErr(), "%s %s %s\n", logStyleError.Render("[ERROR]"), logStyleError.Render(ts), msg)
 		} else {
-			fmt.Fprintf(logStdErr(), "[ERROR] %s\n", msg)
+			fmt.Fprintf(logStdErr(), "[ERROR] %s %s\n", ts, msg)
 		}
 	}
 }
 
 // logFatal always prints to stderr and exits, regardless of the current log level.
 func logFatal(format string, v ...interface{}) {
+	ts := logTimestamp()
 	msg := fmt.Sprintf(format, v...)
 	if logUseColor() {
-		fmt.Fprintf(logStdErr(), "%s %s\n", logStyleFatal.Render("[FATAL]"), msg)
+		fmt.Fprintf(logStdErr(), "%s %s %s\n", logStyleFatal.Render("[FATAL]"), logStyleFatal.Render(ts), msg)
 	} else {
-		fmt.Fprintf(logStdErr(), "[FATAL] %s\n", msg)
+		fmt.Fprintf(logStdErr(), "[FATAL] %s %s\n", ts, msg)
 	}
 	os.Exit(1)
 }

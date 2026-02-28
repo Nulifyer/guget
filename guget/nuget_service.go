@@ -531,6 +531,7 @@ func (s *NugetService) Search(query string, take int) ([]SearchResult, error) {
 // feed types (e.g. Azure DevOps returns HTTP 500 from its search endpoint for
 // packages not in the feed, whereas the registration endpoint returns 404).
 func (s *NugetService) SearchExact(packageID string) (*PackageInfo, error) {
+	searchStart := time.Now()
 	logDebug("[%s] looking up %q via registration index", s.sourceName, packageID)
 	regURL := fmt.Sprintf("%s%s/index.json", s.regBase, strings.ToLower(packageID))
 
@@ -544,14 +545,17 @@ func (s *NugetService) SearchExact(packageID string) (*PackageInfo, error) {
 		return nil, err
 	}
 
+	logTrace("[%s] registration index for %q has %d page(s)", s.sourceName, packageID, len(regIdx.Items))
+
 	var versions []PackageVersion
 	var latestLeaf *registrationLeaf       // newest version overall (for fallback metadata)
 	var latestStableLeaf *registrationLeaf // newest stable version (preferred for metadata)
 
-	for _, page := range regIdx.Items {
+	for pi, page := range regIdx.Items {
 		items := page.Items
 		if len(items) == 0 {
 			// Page not inlined — fetch it separately.
+			logTrace("[%s] fetching registration page %d/%d: %s", s.sourceName, pi+1, len(regIdx.Items), page.ID)
 			var fullPage registrationPage
 			if err := s.getJSON(page.ID, &fullPage); err != nil {
 				return nil, fmt.Errorf("fetching page %s: %w", page.ID, err)
@@ -654,6 +658,7 @@ func (s *NugetService) SearchExact(packageID string) (*PackageInfo, error) {
 
 	// Augment with download counts from the search endpoint (best-effort;
 	// the registration API does not include download statistics).
+	logTrace("[%s] fetching download counts for %q via search endpoint", s.sourceName, packageID)
 	if sr := s.fetchSearchResult(packageID); sr != nil {
 		pkg.TotalDownloads = sr.TotalDownloads
 		pkg.Verified = sr.Verified
@@ -666,8 +671,12 @@ func (s *NugetService) SearchExact(packageID string) (*PackageInfo, error) {
 				pkg.Versions[i].Downloads = d
 			}
 		}
+		logTrace("[%s] download counts merged for %q", s.sourceName, packageID)
+	} else {
+		logTrace("[%s] no download counts available for %q", s.sourceName, packageID)
 	}
 
+	logDebug("[%s] SearchExact %q completed in %s (%d versions)", s.sourceName, packageID, time.Since(searchStart), len(versions))
 	return pkg, nil
 }
 
@@ -783,15 +792,23 @@ func (e *httpStatusError) Error() string {
 }
 
 func (s *NugetService) getJSON(u string, dst any) error {
+	logTrace("[%s] GET %s", s.sourceName, u)
+	start := time.Now()
 	resp, err := s.client.Get(u)
+	elapsed := time.Since(start)
 	if err != nil {
+		logTrace("[%s] GET %s failed after %s: %v", s.sourceName, u, elapsed, err)
 		return err
 	}
 	defer resp.Body.Close()
+	logTrace("[%s] GET %s → %d (%s)", s.sourceName, u, resp.StatusCode, elapsed)
 	if resp.StatusCode != http.StatusOK {
 		return &httpStatusError{Code: resp.StatusCode, URL: u}
 	}
-	return json.NewDecoder(resp.Body).Decode(dst)
+	decStart := time.Now()
+	err = json.NewDecoder(resp.Body).Decode(dst)
+	logTrace("[%s] JSON decode %s (%s)", s.sourceName, u, time.Since(decStart))
+	return err
 }
 
 // normFramework normalises a raw targetFramework string from the NuGet
