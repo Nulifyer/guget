@@ -117,6 +117,10 @@ Usage:
                 Color theme
                 [auto, dracula, nord, everforest, gruvbox, etc]
 
+    sort-by      -o, --sort-by
+                Initial sort order: status, name, source, current, available
+                Append :asc or :desc for direction (default: status:asc)
+
     log-file     -lf, --log-file
                 Write all log output to this file (in addition to the TUI log panel)
 
@@ -138,6 +142,9 @@ guget -v debug
 
 # Use the dracula theme
 guget -t dracula
+
+# Sort by available updates, newest first
+guget -o available:desc
 ```
 
 ---
@@ -163,8 +170,8 @@ guget -t dracula
 | `a` | Update to latest **stable** version (this project) |
 | `A` | Update to latest **stable** version (all projects) |
 | `v` | Open version picker overlay |
-| `o` | Cycle sort mode |
-| `O` | Toggle sort direction |
+| `o` | Cycle sort mode (status, name, source, current, available) |
+| `O` | Toggle sort direction (asc / desc) |
 | `d` | Remove selected package (prompts for confirmation) |
 | `t` | Show declared dependency tree for the selected package |
 
