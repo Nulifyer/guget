@@ -877,10 +877,10 @@ func (s *NugetService) SearchExact(packageID string) (*PackageInfo, error) {
 
 		for i := range items {
 			ce := &items[i].CatalogEntry
-			// Skip explicitly unlisted packages.
-			if ce.Listed != nil && !*ce.Listed {
-				continue
-			}
+			// "listed: false" means hidden from search results, but the package
+			// still exists on NuGet. Developers who already have it in their
+			// project need to see its metadata and deprecation notice, so we
+			// include unlisted versions rather than pretending they don't exist.
 			sv := ParseSemVer(ce.Version)
 			if latestLeaf == nil || sv.IsNewerThan(ParseSemVer(latestLeaf.Version)) {
 				latestLeaf = ce
@@ -911,7 +911,7 @@ func (s *NugetService) SearchExact(packageID string) (*PackageInfo, error) {
 	}
 
 	if len(versions) == 0 || latestLeaf == nil {
-		logDebug("[%s] %q has no listed versions", s.sourceName, packageID)
+		logDebug("[%s] %q has no versions in registration index", s.sourceName, packageID)
 		return nil, fmt.Errorf("package %q not found", packageID)
 	}
 
