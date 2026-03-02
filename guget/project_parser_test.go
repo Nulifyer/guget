@@ -487,6 +487,38 @@ func TestParseCsproj_CPMVersionOverride(t *testing.T) {
 	}
 }
 
+// TestLatestStableForFramework_UnknownTargetDoesNotBlock verifies that an
+// unresolved MSBuild property reference (e.g. $(TargetFrameworksForLibraries))
+// parsed as FamilyUnknown does not cause LatestStableForFramework to return nil
+// for packages that are otherwise compatible with the known targets.
+func TestLatestStableForFramework_UnknownTargetDoesNotBlock(t *testing.T) {
+	pkg := &PackageInfo{
+		ID: "Some.Package",
+		Versions: []PackageVersion{
+			{
+				SemVer: ParseSemVer("2.0.0"),
+				Frameworks: []TargetFramework{
+					ParseTargetFramework("netstandard2.0"),
+					ParseTargetFramework("net8.0"),
+				},
+			},
+		},
+	}
+
+	// Mix of a resolved (net8.0) and an unresolved ($(Property)) target.
+	targets := NewSet[TargetFramework]()
+	targets.Add(ParseTargetFramework("net8.0"))
+	targets.Add(ParseTargetFramework("$(TargetFrameworksForLibraries)")) // FamilyUnknown
+
+	v := pkg.LatestStableForFramework(targets)
+	if v == nil {
+		t.Fatal("LatestStableForFramework returned nil with a FamilyUnknown target; want a compatible version")
+	}
+	if v.SemVer.String() != "2.0.0" {
+		t.Errorf("expected version 2.0.0, got %s", v.SemVer.String())
+	}
+}
+
 func pkgNameSet(proj *ParsedProject) map[string]bool {
 	names := make(map[string]bool)
 	for ref := range proj.Packages {

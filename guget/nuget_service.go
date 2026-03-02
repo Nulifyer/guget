@@ -999,9 +999,16 @@ func (p *PackageInfo) LatestStableForFramework(targets Set[TargetFramework]) *Pa
 			return v
 		}
 
-		// Check if this version is compatible with all project frameworks
+		// Check if this version is compatible with all project frameworks.
+		// Skip FamilyUnknown targets — these arise from unresolved MSBuild
+		// property references (e.g. $(TargetFrameworksForLibraries)) that we
+		// cannot evaluate without running MSBuild. Since we have no information
+		// about what they resolve to, we cannot conclude incompatibility.
 		allCompatible := true
 		for target := range targets {
+			if target.Family == FamilyUnknown {
+				continue // can't determine compatibility; don't block
+			}
 			compatibleWithProj := false
 			for _, versionFw := range v.Frameworks {
 				if target.IsCompatibleWith(versionFw) {
