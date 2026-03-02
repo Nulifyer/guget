@@ -18,6 +18,21 @@ type SemVer struct {
 
 func ParseSemVer(s string) SemVer {
 	raw := s
+
+	// Handle NuGet version range notation: [min,max), (min,max], [min,), etc.
+	// Extract the lower bound as the effective version for display and comparison.
+	// e.g. "[10.0.0,)" → "10.0.0",  "[1.15.0,2.0)" → "1.15.0"
+	if len(s) > 0 && (s[0] == '[' || s[0] == '(') {
+		inner := s[1:]
+		if comma := strings.IndexByte(inner, ','); comma >= 0 {
+			s = strings.TrimSpace(inner[:comma])
+		} else if close := strings.IndexAny(inner, "])"); close >= 0 {
+			s = strings.TrimSpace(inner[:close])
+		}
+		// Update Raw to the clean lower-bound string for TUI display.
+		raw = s
+	}
+
 	build := ""
 	pre := ""
 

@@ -163,3 +163,112 @@ func TestIntegration_SERedis_CPMFileContents(t *testing.T) {
 		}
 	}
 }
+
+const otelURL = "https://github.com/open-telemetry/opentelemetry-dotnet.git"
+
+var (
+	otelCloneOnce sync.Once
+	otelCloneDir  string
+	otelCloneErr  error
+)
+
+func otelDir(t *testing.T) string {
+	t.Helper()
+	if dir := os.Getenv("OTEL_DOTNET_DIR"); dir != "" {
+		if _, err := os.Stat(dir); err != nil {
+			t.Fatalf("OTEL_DOTNET_DIR %q does not exist: %v", dir, err)
+		}
+		return dir
+	}
+	otelCloneOnce.Do(func() {
+		dir := filepath.Join(os.TempDir(), "guget-integration-otel-dotnet")
+		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+			otelCloneDir = dir
+			return
+		}
+		t.Logf("Cloning %s ...", otelURL)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			otelCloneErr = err
+			return
+		}
+		cmd := exec.Command("git", "clone", "--depth=1", otelURL, dir)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			otelCloneErr = err
+			return
+		}
+		otelCloneDir = dir
+	})
+	if otelCloneErr != nil {
+		t.Skipf("git clone failed (no network?): %v", otelCloneErr)
+	}
+	return otelCloneDir
+}
+
+// TestIntegration_OTel_PropertyResolution verifies that MSBuild property
+// references like $(OTelLatestStableVer) in version strings are resolved using
+// values declared in the same PropertyGroup, and that NuGet version ranges
+// like [1.15.0,2.0) are stripped to their lower bound (1.15.0).
+func TestIntegration_OTel_PropertyResolution(t *testing.T) {
+	dir := otelDir(t)
+	cpmPath := filepath.Join(dir, "Directory.Packages.props")
+
+	proj, err := ParsePropsAsProject(cpmPath)
+	if err != nil {
+		t.Fatalf("ParsePropsAsProject: %v", err)
+	}
+	t.Logf("Directory.Packages.props contains %d packages", proj.Packages.Len())
+
+	// Every package must have a non-empty, parseable version — no raw $(...)
+	// property references or bracket-notation ranges should remain.
+	for ref := range proj.Packages {
+		if ref.Version.Raw == "" {
+			t.Errorf("package %q has empty version (unresolved property or unparsed range)", ref.Name)
+		}
+		if strings.Contains(ref.Version.Raw, "$(") {
+			t.Errorf("package %q still has unresolved property in version: %q", ref.Name, ref.Version.Raw)
+		}
+		if strings.HasPrefix(ref.Version.Raw, "[") || strings.HasPrefix(ref.Version.Raw, "(") {
+			t.Errorf("package %q still has range notation in version: %q", ref.Name, ref.Version.Raw)
+		}
+	}
+}
+
+// TestIntegration_OTel_NoEmptyVersionsInProjects parses all projects and
+// verifies that no package retains an unresolved $(Property) reference in its
+// version string. Empty versions are logged but not failed — a project may
+// reference a package that its nearest Directory.Packages.props doesn't define.
+func TestIntegration_OTel_NoEmptyVersionsInProjects(t *testing.T) {
+	dir := otelDir(t)
+
+	files, err := FindProjectFiles(dir)
+	if err != nil {
+		t.Fatalf("FindProjectFiles: %v", err)
+	}
+	t.Logf("Found %d project files", len(files))
+
+	emptyCount := 0
+	for _, f := range files {
+		proj, err := ParseCsproj(f)
+		if err != nil {
+			t.Logf("skipping %s: %v", filepath.Base(f), err)
+			continue
+		}
+		for ref := range proj.Packages {
+			// Unresolved $(Property) in a version string is always a bug.
+			if strings.Contains(ref.Version.Raw, "$(") {
+				t.Errorf("%s: package %q has unresolved property: %q", filepath.Base(f), ref.Name, ref.Version.Raw)
+			}
+			// A package with no version at all may simply not be in the nearest
+			// Directory.Packages.props — log it but don't fail.
+			if ref.Version.Raw == "" {
+				emptyCount++
+				t.Logf("note: %s: package %q has no resolvable version", filepath.Base(f), ref.Name)
+			}
+		}
+	}
+	if emptyCount > 0 {
+		t.Logf("%d package/project combinations had no resolvable version (see notes above)", emptyCount)
+	}
+}

@@ -266,7 +266,7 @@ func TestParsePropsFile_Valid(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(refs) != 1 || refs[0].Include != "Serilog" {
+	if len(refs) != 1 || refs[0].effectiveName() != "Serilog" {
 		t.Fatalf("expected 1 ref (Serilog), got %d refs", len(refs))
 	}
 	if len(imports) != 1 {

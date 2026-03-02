@@ -39,21 +39,90 @@ type Project struct {
 	Imports        []ImportElement `xml:"Import"`
 }
 
+// PropertyGroup captures both the well-known TargetFramework fields and any
+// arbitrary MSBuild properties defined inline (e.g. OTelLatestStableVer).
+// The custom unmarshaller is needed because encoding/xml cannot map arbitrary
+// element names to a map with a struct tag alone.
 type PropertyGroup struct {
-	TargetFramework  string `xml:"TargetFramework"`
-	TargetFrameworks string `xml:"TargetFrameworks"`
+	TargetFramework  string
+	TargetFrameworks string
+	Properties       map[string]string // all other child elements
+}
+
+func (pg *PropertyGroup) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error {
+	for {
+		tok, err := d.Token()
+		if err != nil {
+			return err
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			var value string
+			if err := d.DecodeElement(&value, &t); err != nil {
+				return err
+			}
+			switch t.Name.Local {
+			case "TargetFramework":
+				pg.TargetFramework = value
+			case "TargetFrameworks":
+				pg.TargetFrameworks = value
+			default:
+				if pg.Properties == nil {
+					pg.Properties = make(map[string]string)
+				}
+				pg.Properties[t.Name.Local] = value
+			}
+		case xml.EndElement:
+			return nil
+		}
+	}
 }
 
 type ItemGroup struct {
+	Condition         string                `xml:"Condition,attr"`
 	PackageReferences []rawPackageReference `xml:"PackageReference"`
 	PackageVersions   []rawPackageReference `xml:"PackageVersion"`
 }
 
 // rawPackageReference is used only for XML unmarshalling.
+// Both Include (new entry) and Update (modify existing) are captured so that
+// unconditional Update elements are not silently dropped.
 type rawPackageReference struct {
 	Include         string `xml:"Include,attr"`
+	Update          string `xml:"Update,attr"`
 	Version         string `xml:"Version,attr"`
 	VersionOverride string `xml:"VersionOverride,attr"`
+}
+
+// effectiveName returns the package name from Include, falling back to Update.
+func (r rawPackageReference) effectiveName() string {
+	if r.Include != "" {
+		return r.Include
+	}
+	return r.Update
+}
+
+// buildPropsMap merges all user-defined properties from a slice of PropertyGroups
+// into a single flat map for $(PropName) resolution.
+func buildPropsMap(groups []PropertyGroup) map[string]string {
+	props := make(map[string]string)
+	for _, pg := range groups {
+		for k, v := range pg.Properties {
+			props[k] = v
+		}
+	}
+	return props
+}
+
+// resolveProps replaces $(Name) references in s using props.
+func resolveProps(s string, props map[string]string) string {
+	if !strings.Contains(s, "$(") {
+		return s
+	}
+	for k, v := range props {
+		s = strings.ReplaceAll(s, "$("+k+")", v)
+	}
+	return s
 }
 
 // PackageReference is the parsed, usable form with a real SemVer.
@@ -136,16 +205,16 @@ func ParseCsproj(filePath string) (*ParsedProject, error) {
 				version = raw.VersionOverride
 			case cpmFilePath != "":
 				// No version specified — resolve from Directory.Packages.props.
-				if cpmVer, ok := cpmVersions[strings.ToLower(raw.Include)]; ok {
+				if cpmVer, ok := cpmVersions[strings.ToLower(raw.effectiveName())]; ok {
 					version = cpmVer
 					sourceFile = cpmFilePath
 				}
 			}
 			result.Packages.Add(PackageReference{
-				Name:    raw.Include,
+				Name:    raw.effectiveName(),
 				Version: ParseSemVer(version),
 			})
-			result.PackageSources[strings.ToLower(raw.Include)] = sourceFile
+			result.PackageSources[strings.ToLower(raw.effectiveName())] = sourceFile
 		}
 	}
 
@@ -270,11 +339,59 @@ func parsePropsFile(filePath string) ([]rawPackageReference, []ImportElement, []
 	if err := xml.Unmarshal(data, &project); err != nil {
 		return nil, nil, nil, fmt.Errorf("failed to parse props XML: %w", err)
 	}
+	// Build a property map so $(PropName) in version strings can be resolved.
+	// Properties must be gathered before iterating ItemGroups because they may
+	// be declared above or below the PackageVersion elements in the file.
+	props := buildPropsMap(project.PropertyGroups)
+
+	// First pass: unconditional ItemGroups — these are the canonical versions.
+	// Collect conditional groups for a fallback pass below.
 	var refs []rawPackageReference
+	var conditionalGroups []ItemGroup
 	for _, ig := range project.ItemGroups {
-		refs = append(refs, ig.PackageReferences...)
-		refs = append(refs, ig.PackageVersions...)
+		if ig.Condition != "" {
+			conditionalGroups = append(conditionalGroups, ig)
+			continue
+		}
+		for _, r := range ig.PackageReferences {
+			r.Version = resolveProps(r.Version, props)
+			refs = append(refs, r)
+		}
+		for _, r := range ig.PackageVersions {
+			r.Version = resolveProps(r.Version, props)
+			refs = append(refs, r)
+		}
 	}
+
+	// Second pass: conditional ItemGroups as a fallback for packages that have
+	// no unconditional definition (e.g. target-framework-specific packages like
+	// Microsoft.AspNetCore.TestHost). We cannot evaluate MSBuild conditions so
+	// we use the first conditional match as a conservative version estimate.
+	seen := make(map[string]bool, len(refs))
+	for _, r := range refs {
+		seen[strings.ToLower(r.effectiveName())] = true
+	}
+	for _, ig := range conditionalGroups {
+		for _, r := range ig.PackageReferences {
+			name := strings.ToLower(r.effectiveName())
+			if name == "" || seen[name] {
+				continue
+			}
+			r.Version = resolveProps(r.Version, props)
+			refs = append(refs, r)
+			seen[name] = true
+		}
+		for _, r := range ig.PackageVersions {
+			name := strings.ToLower(r.effectiveName())
+			if name == "" || seen[name] {
+				continue
+			}
+			r.Version = resolveProps(r.Version, props)
+			refs = append(refs, r)
+			seen[name] = true
+		}
+	}
+
 	return refs, project.Imports, project.PropertyGroups, nil
 }
 
@@ -300,11 +417,11 @@ func collectPropsPackages(result *ParsedProject, propsPath, projectDir string, v
 
 	for _, raw := range refs {
 		ref := PackageReference{
-			Name:    raw.Include,
+			Name:    raw.effectiveName(),
 			Version: ParseSemVer(raw.Version),
 		}
 		result.Packages.Add(ref)
-		key := strings.ToLower(raw.Include)
+		key := strings.ToLower(raw.effectiveName())
 		// Only set source if not already defined (.csproj takes precedence)
 		if _, exists := result.PackageSources[key]; !exists {
 			result.PackageSources[key] = absPath
@@ -350,10 +467,10 @@ func ParsePropsAsProject(filePath string) (*ParsedProject, error) {
 
 	for _, raw := range refs {
 		result.Packages.Add(PackageReference{
-			Name:    raw.Include,
+			Name:    raw.effectiveName(),
 			Version: ParseSemVer(raw.Version),
 		})
-		result.PackageSources[strings.ToLower(raw.Include)] = absPath
+		result.PackageSources[strings.ToLower(raw.effectiveName())] = absPath
 	}
 
 	return result, nil
