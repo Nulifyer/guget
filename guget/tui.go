@@ -1941,15 +1941,15 @@ func sortPackageRowsByStatus(rows []packageRow) {
 		if r.vulnerable {
 			return 1
 		}
+		if r.deprecated {
+			return 2
+		}
 		ver := r.effectiveVersion()
 		check := r.latestCompatible
 		if check == nil {
 			check = r.latestStable
 		}
 		if check != nil && check.SemVer.IsNewerThan(ver) {
-			return 2
-		}
-		if r.deprecated {
 			return 3
 		}
 		return 4
@@ -3370,7 +3370,9 @@ func (m Model) renderFooter() string {
 // padRight pads a styled string to the given visible width.
 // Uses lipgloss.Width to measure, ignoring ANSI escape codes.
 func timeAgo(t time.Time) string {
-	if t.IsZero() {
+	// NuGet uses 1900-01-01 as a sentinel "no publish date" value.
+	// Treat anything before 2005 as unknown rather than showing nonsense like "126 years ago".
+	if t.IsZero() || t.Year() < 2005 {
 		return ""
 	}
 	d := time.Since(t)
