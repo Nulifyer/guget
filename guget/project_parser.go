@@ -46,12 +46,14 @@ type PropertyGroup struct {
 
 type ItemGroup struct {
 	PackageReferences []rawPackageReference `xml:"PackageReference"`
+	PackageVersions   []rawPackageReference `xml:"PackageVersion"`
 }
 
 // rawPackageReference is used only for XML unmarshalling.
 type rawPackageReference struct {
-	Include string `xml:"Include,attr"`
-	Version string `xml:"Version,attr"`
+	Include         string `xml:"Include,attr"`
+	Version         string `xml:"Version,attr"`
+	VersionOverride string `xml:"VersionOverride,attr"`
 }
 
 // PackageReference is the parsed, usable form with a real SemVer.
@@ -100,18 +102,52 @@ func ParseCsproj(filePath string) (*ParsedProject, error) {
 
 	mergePropertyGroups(result, project.PropertyGroups)
 
-	for _, ig := range project.ItemGroups {
-		for _, raw := range ig.PackageReferences {
-			result.Packages.Add(PackageReference{
-				Name:    raw.Include,
-				Version: ParseSemVer(raw.Version),
-			})
-			result.PackageSources[strings.ToLower(raw.Include)] = filePath
+	projectDir := filepath.Dir(filePath)
+	visited := map[string]bool{absFilePath: true}
+
+	// Build CPM version map from Directory.Packages.props if present.
+	// CPM projects declare <PackageReference Include="Pkg" /> without a Version;
+	// the version is defined centrally as <PackageVersion Include="Pkg" Version="x" />.
+	cpmVersions := make(map[string]string) // lowercase name → version string
+	var cpmFilePath string
+	if dpp := findDirectoryPackagesProps(projectDir); dpp != "" {
+		if absDpp, err := filepath.Abs(dpp); err == nil {
+			cpmFilePath = absDpp
+			if refs, _, _, err := parsePropsFile(absDpp); err == nil {
+				for _, r := range refs {
+					if r.Version != "" {
+						cpmVersions[strings.ToLower(r.Include)] = r.Version
+					}
+				}
+			}
 		}
 	}
 
-	projectDir := filepath.Dir(filePath)
-	visited := map[string]bool{absFilePath: true}
+	for _, ig := range project.ItemGroups {
+		for _, raw := range ig.PackageReferences {
+			version := raw.Version
+			sourceFile := filePath
+			switch {
+			case version != "":
+				// Explicit Version in the project file — use as-is.
+			case raw.VersionOverride != "":
+				// VersionOverride pins a project-specific version in a CPM repo;
+				// the override lives in the project file, not the central props.
+				version = raw.VersionOverride
+			case cpmFilePath != "":
+				// No version specified — resolve from Directory.Packages.props.
+				if cpmVer, ok := cpmVersions[strings.ToLower(raw.Include)]; ok {
+					version = cpmVer
+					sourceFile = cpmFilePath
+				}
+			}
+			result.Packages.Add(PackageReference{
+				Name:    raw.Include,
+				Version: ParseSemVer(version),
+			})
+			result.PackageSources[strings.ToLower(raw.Include)] = sourceFile
+		}
+	}
 
 	// Implicit import: Directory.Build.props (walk up from project dir)
 	if dbp := findDirectoryBuildProps(projectDir); dbp != "" {
@@ -126,6 +162,27 @@ func ParseCsproj(filePath string) (*ParsedProject, error) {
 			continue
 		}
 		collectPropsPackages(result, resolved, projectDir, visited)
+	}
+
+	// Post-process: imported props files (e.g. Directory.Build.props) may also
+	// reference packages without versions in CPM repos. Fill in any that are
+	// still empty using the central version map, and redirect their source to
+	// the CPM file so the TUI points edits to the right place.
+	if cpmFilePath != "" && len(cpmVersions) > 0 {
+		var emptyRefs []PackageReference
+		for ref := range result.Packages {
+			if ref.Version.Raw == "" {
+				emptyRefs = append(emptyRefs, ref)
+			}
+		}
+		for _, ref := range emptyRefs {
+			name := strings.ToLower(ref.Name)
+			if cpmVer, ok := cpmVersions[name]; ok {
+				result.Packages.Remove(ref)
+				result.Packages.Add(PackageReference{Name: ref.Name, Version: ParseSemVer(cpmVer)})
+				result.PackageSources[name] = cpmFilePath
+			}
+		}
 	}
 
 	return result, nil
@@ -161,6 +218,25 @@ func findDirectoryBuildProps(startDir string) string {
 	return ""
 }
 
+// findDirectoryPackagesProps walks up from startDir looking for Directory.Packages.props,
+// the central file used by NuGet Central Package Management (CPM).
+// Returns the full path if found, or "" if not found.
+func findDirectoryPackagesProps(startDir string) string {
+	dir := startDir
+	for {
+		candidate := filepath.Join(dir, "Directory.Packages.props")
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+	return ""
+}
+
 // resolveImportPath resolves MSBuild-style import paths with basic variable substitution.
 // referringFileDir is the directory containing the file with the <Import> element.
 // projectDir is the directory of the .csproj/.fsproj being parsed.
@@ -173,6 +249,9 @@ func resolveImportPath(rawPath, referringFileDir, projectDir string) (string, er
 		return "", fmt.Errorf("unresolved MSBuild variable in import path: %s", rawPath)
 	}
 
+	// MSBuild paths often use Windows-style backslashes; normalize them so
+	// import resolution works on Linux/macOS as well.
+	resolved = strings.ReplaceAll(resolved, `\`, "/")
 	resolved = filepath.FromSlash(resolved)
 	if !filepath.IsAbs(resolved) {
 		resolved = filepath.Join(referringFileDir, resolved)
@@ -194,6 +273,7 @@ func parsePropsFile(filePath string) ([]rawPackageReference, []ImportElement, []
 	var refs []rawPackageReference
 	for _, ig := range project.ItemGroups {
 		refs = append(refs, ig.PackageReferences...)
+		refs = append(refs, ig.PackageVersions...)
 	}
 	return refs, project.Imports, project.PropertyGroups, nil
 }

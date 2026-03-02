@@ -7,7 +7,7 @@
 *.dll
 *.so
 *.dylib
-guget
+guget/guget
 
 # Test binary, built with `go test -c`
 *.test

@@ -355,6 +355,138 @@ func TestParsePropsAsProject_NotFound(t *testing.T) {
 	}
 }
 
+func TestFindDirectoryPackagesProps_Found(t *testing.T) {
+	td := testDataDir(t)
+	got := findDirectoryPackagesProps(filepath.Join(td, "CPMProject"))
+	if got == "" {
+		t.Fatal("expected to find Directory.Packages.props, got empty string")
+	}
+	if filepath.Base(got) != "Directory.Packages.props" {
+		t.Fatalf("expected Directory.Packages.props, got %s", filepath.Base(got))
+	}
+}
+
+func TestFindDirectoryPackagesProps_NotFound(t *testing.T) {
+	got := findDirectoryPackagesProps(os.TempDir())
+	if got != "" {
+		t.Fatalf("expected empty string, got %s", got)
+	}
+}
+
+func TestParseCsproj_CPMVersionResolution(t *testing.T) {
+	td := testDataDir(t)
+	proj, err := ParseCsproj(filepath.Join(td, "CPMProject", "CPMProject.csproj"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pkgNames := pkgNameSet(proj)
+	assertContains(t, pkgNames, "Newtonsoft.Json")
+	assertContains(t, pkgNames, "Polly")
+
+	// Verify versions were resolved from Directory.Packages.props, not left empty.
+	for ref := range proj.Packages {
+		if ref.Version.Raw == "" {
+			t.Fatalf("package %q has an empty version; CPM resolution failed", ref.Name)
+		}
+	}
+}
+
+func TestParseCsproj_CPMSource(t *testing.T) {
+	td := testDataDir(t)
+	proj, err := ParseCsproj(filepath.Join(td, "CPMProject", "CPMProject.csproj"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Packages resolved via CPM should be sourced from Directory.Packages.props,
+	// not the project file — so the TUI directs edits to the right file.
+	njSource := proj.SourceFileForPackage("Newtonsoft.Json")
+	if filepath.Base(njSource) != "Directory.Packages.props" {
+		t.Fatalf("Newtonsoft.Json source should be Directory.Packages.props, got %s", njSource)
+	}
+}
+
+func TestParsePropsAsProject_CPMDirectoryPackagesProps(t *testing.T) {
+	td := testDataDir(t)
+	proj, err := ParsePropsAsProject(filepath.Join(td, "CPMProject", "Directory.Packages.props"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pkgs := pkgNameSet(proj)
+	assertContains(t, pkgs, "Newtonsoft.Json")
+	assertContains(t, pkgs, "Polly")
+	assertContains(t, pkgs, "Microsoft.Extensions.DependencyInjection")
+	assertContains(t, pkgs, "Microsoft.Extensions.Hosting")
+
+	if proj.Packages.Len() != 4 {
+		t.Fatalf("expected 4 packages, got %d", proj.Packages.Len())
+	}
+}
+
+// Multi-project CPM: sub-project in the same tree shares Directory.Packages.props.
+func TestParseCsproj_CPMLib(t *testing.T) {
+	td := testDataDir(t)
+	proj, err := ParseCsproj(filepath.Join(td, "CPMProject", "CPMProject.Lib", "CPMProject.Lib.csproj"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pkgNames := pkgNameSet(proj)
+	assertContains(t, pkgNames, "Microsoft.Extensions.DependencyInjection")
+	assertContains(t, pkgNames, "Newtonsoft.Json")
+
+	// Versions must be resolved from the parent Directory.Packages.props.
+	for ref := range proj.Packages {
+		if ref.Version.Raw == "" {
+			t.Fatalf("package %q has empty version in CPMProject.Lib", ref.Name)
+		}
+	}
+
+	// Both packages should be sourced from Directory.Packages.props.
+	diSource := proj.SourceFileForPackage("Microsoft.Extensions.DependencyInjection")
+	if filepath.Base(diSource) != "Directory.Packages.props" {
+		t.Fatalf("expected Directory.Packages.props, got %s", diSource)
+	}
+}
+
+// VersionOverride: a project pins a different version than the central props.
+func TestParseCsproj_CPMVersionOverride(t *testing.T) {
+	td := testDataDir(t)
+	proj, err := ParseCsproj(filepath.Join(td, "CPMProject", "CPMProject.Worker", "CPMProject.Worker.csproj"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pkgNames := pkgNameSet(proj)
+	assertContains(t, pkgNames, "Newtonsoft.Json")
+	assertContains(t, pkgNames, "Microsoft.Extensions.Hosting")
+
+	// Newtonsoft.Json uses VersionOverride="12.0.3" in the worker csproj.
+	var njVersion string
+	for ref := range proj.Packages {
+		if ref.Name == "Newtonsoft.Json" {
+			njVersion = ref.Version.Raw
+		}
+	}
+	if njVersion != "12.0.3" {
+		t.Fatalf("expected VersionOverride 12.0.3, got %q", njVersion)
+	}
+
+	// The overridden package's source should be the project file, not Directory.Packages.props.
+	njSource := proj.SourceFileForPackage("Newtonsoft.Json")
+	if filepath.Base(njSource) != "CPMProject.Worker.csproj" {
+		t.Fatalf("VersionOverride source should be CPMProject.Worker.csproj, got %s", njSource)
+	}
+
+	// Microsoft.Extensions.Hosting has no override — resolves from CPM.
+	hostingSource := proj.SourceFileForPackage("Microsoft.Extensions.Hosting")
+	if filepath.Base(hostingSource) != "Directory.Packages.props" {
+		t.Fatalf("Microsoft.Extensions.Hosting source should be Directory.Packages.props, got %s", hostingSource)
+	}
+}
+
 func pkgNameSet(proj *ParsedProject) map[string]bool {
 	names := make(map[string]bool)
 	for ref := range proj.Packages {
