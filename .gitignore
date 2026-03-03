@@ -8,6 +8,7 @@
 *.so
 *.dylib
 guget/guget
+guget/__debug_bin*
 
 # Test binary, built with `go test -c`
 *.test
