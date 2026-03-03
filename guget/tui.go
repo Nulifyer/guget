@@ -129,7 +129,9 @@ type resultsReadyMsg struct {
 }
 
 type writeResultMsg struct {
-	err error
+	err     error
+	written int // number of files written (0 = unknown / not an applyVersion call)
+	skipped int // number of locked refs skipped during scope=all update
 }
 
 type restoreResultMsg struct {
@@ -344,8 +346,8 @@ type Model struct {
 
 	detailView bubbles_viewport.Model
 
-	picker  versionPicker
-	search  packageSearch
+	picker        versionPicker
+	search        packageSearch
 	confirm       confirmRemove
 	confirmUpdate confirmUpdate
 	depTree       depTreeOverlay
@@ -468,7 +470,13 @@ func (m Model) Update(msg bubble_tea.Msg) (bubble_tea.Model, bubble_tea.Cmd) {
 		if msg.err != nil {
 			cmds = append(cmds, m.setStatus("▲ Save failed: "+msg.err.Error(), true))
 		} else {
-			cmds = append(cmds, m.setStatus("✓ Saved", false))
+			status := "✓ Saved"
+			if msg.written > 0 && msg.skipped > 0 {
+				status = fmt.Sprintf("✓ Saved %d, %d locked", msg.written, msg.skipped)
+			} else if msg.skipped > 0 {
+				status = fmt.Sprintf("🔒 %d skipped (version locked)", msg.skipped)
+			}
+			cmds = append(cmds, m.setStatus(status, false))
 		}
 
 	case restoreResultMsg:
@@ -1003,13 +1011,19 @@ func (m *Model) applyVersion(pkgName, version string, targetProject *ParsedProje
 	var toWrite []writeTarget
 	// Determine the on-disk source file so we know which .props (if any) to propagate.
 	var propsSource string
+	skippedLocked := 0
 	for _, p := range projects {
 		updated := NewSet[PackageReference]()
 		changed := false
 		for ref := range p.Packages {
 			if ref.Name == pkgName {
-				ref.Version = ParseSemVer(version)
-				changed = true
+				if targetProject == nil && ref.Locked {
+					// scope=all: skip locked versions, track count for status warning
+					skippedLocked++
+				} else {
+					ref.Version = ParseSemVer(version)
+					changed = true
+				}
 			}
 			updated.Add(ref)
 		}
@@ -1044,10 +1058,18 @@ func (m *Model) applyVersion(pkgName, version string, targetProject *ParsedProje
 	m.rebuildPackageRows()
 	m.refreshDetail()
 
-	logInfo("applyVersion: %s → %s (%d file(s) to write)", pkgName, version, len(toWrite))
+	if skippedLocked > 0 {
+		logWarn("applyVersion: %s → %s (%d locked project(s) skipped)", pkgName, version, skippedLocked)
+	}
+
+	logInfo("applyVersion: %s → %s (%d file(s) to write, %d locked skipped)", pkgName, version, len(toWrite), skippedLocked)
 	if len(toWrite) == 0 {
+		if skippedLocked > 0 {
+			m.setStatus(fmt.Sprintf("🔒 %d skipped (version locked)", skippedLocked), false)
+		}
 		return nil
 	}
+	written := len(toWrite)
 	return func() bubble_tea.Msg {
 		seen := make(map[string]bool)
 		for _, wt := range toWrite {
@@ -1061,7 +1083,7 @@ func (m *Model) applyVersion(pkgName, version string, targetProject *ParsedProje
 				return writeResultMsg{err: err}
 			}
 		}
-		return writeResultMsg{err: nil}
+		return writeResultMsg{err: nil, written: written, skipped: skippedLocked}
 	}
 }
 
@@ -1702,15 +1724,17 @@ func (m *Model) handleConfirmUpdateKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 // applyOrConfirmUpdate calls applyVersion directly, or opens the lock-confirm
 // overlay if the currently-installed version is pinned with [x.y.z].
 func (m *Model) applyOrConfirmUpdate(pkgName, newVersion string, project *ParsedProject) bubble_tea.Cmd {
-	for _, row := range m.packageRows {
-		if strings.EqualFold(row.ref.Name, pkgName) && row.ref.Locked {
-			m.confirmUpdate = confirmUpdate{
-				active:     true,
-				pkgName:    pkgName,
-				newVersion: newVersion,
-				project:    project,
+	if project != nil {
+		for _, row := range m.packageRows {
+			if strings.EqualFold(row.ref.Name, pkgName) && row.ref.Locked {
+				m.confirmUpdate = confirmUpdate{
+					active:     true,
+					pkgName:    pkgName,
+					newVersion: newVersion,
+					project:    project,
+				}
+				return nil
 			}
-			return nil
 		}
 	}
 	return m.applyVersion(pkgName, newVersion, project)
@@ -2446,7 +2470,7 @@ func currentVersionText(row packageRow) string {
 		return row.oldest.String() + "–" + row.ref.Version.String()
 	}
 	if row.ref.Locked {
-		return row.ref.Version.String() + " ⊠"
+		return "[" + row.ref.Version.String() + "]"
 	}
 	return row.ref.Version.String()
 }
@@ -2596,7 +2620,7 @@ func (m Model) renderPackagePanel(w int) string {
 			high := styleYellow.Render(row.ref.Version.String())
 			current = padRight(low+sep+high, colCurrent)
 		} else if row.ref.Locked {
-			verText := styleSubtle.Render(row.ref.Version.String()) + " " + styleYellow.Render("⊠")
+			verText := styleYellow.Render("[") + styleSubtle.Render(row.ref.Version.String()) + styleYellow.Render("]")
 			current = padRight(verText, colCurrent)
 		} else {
 			current = padRight(
@@ -2777,8 +2801,10 @@ func (m Model) renderDetail(row packageRow) string {
 				if ref.Name == row.ref.Name {
 					proj := styleSubtle.
 						Render(fmt.Sprintf("  %-20s", truncate(p.FileName, 20)))
-					ver := styleText.
-						Render(ref.Version.String())
+					ver := styleText.Render(ref.Version.String())
+					if ref.Locked {
+						ver = styleYellow.Render("[") + ver + styleYellow.Render("]")
+					}
 					line := proj + " " + ver
 					sourceFile := p.SourceFileForPackage(ref.Name)
 					if sourceFile != p.FilePath {
