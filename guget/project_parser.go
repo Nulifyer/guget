@@ -129,6 +129,12 @@ func resolveProps(s string, props map[string]string) string {
 type PackageReference struct {
 	Name    string
 	Version SemVer
+	Locked  bool // true when the version was specified as [x.y.z] exact pin in the project file
+}
+
+// isExactLock reports whether a raw version string is a NuGet exact-version pin ([x.y.z]).
+func isExactLock(s string) bool {
+	return len(s) > 2 && s[0] == '[' && s[len(s)-1] == ']' && !strings.ContainsRune(s, ',')
 }
 
 type ParsedProject struct {
@@ -213,6 +219,7 @@ func ParseCsproj(filePath string) (*ParsedProject, error) {
 			result.Packages.Add(PackageReference{
 				Name:    raw.effectiveName(),
 				Version: ParseSemVer(version),
+				Locked:  isExactLock(version),
 			})
 			result.PackageSources[strings.ToLower(raw.effectiveName())] = sourceFile
 		}
@@ -419,6 +426,7 @@ func collectPropsPackages(result *ParsedProject, propsPath, projectDir string, v
 		ref := PackageReference{
 			Name:    raw.effectiveName(),
 			Version: ParseSemVer(raw.Version),
+			Locked:  isExactLock(raw.Version),
 		}
 		result.Packages.Add(ref)
 		key := strings.ToLower(raw.effectiveName())
@@ -469,6 +477,7 @@ func ParsePropsAsProject(filePath string) (*ParsedProject, error) {
 		result.Packages.Add(PackageReference{
 			Name:    raw.effectiveName(),
 			Version: ParseSemVer(raw.Version),
+			Locked:  isExactLock(raw.Version),
 		})
 		result.PackageSources[strings.ToLower(raw.effectiveName())] = absPath
 	}

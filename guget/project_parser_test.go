@@ -519,6 +519,42 @@ func TestLatestStableForFramework_UnknownTargetDoesNotBlock(t *testing.T) {
 	}
 }
 
+func TestParseCsproj_ExactVersionLock(t *testing.T) {
+	td := testDataDir(t)
+	proj, err := ParseCsproj(filepath.Join(td, "PinnedPackages", "PinnedPackages.csproj"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	locked := make(map[string]bool)
+	versions := make(map[string]string)
+	for ref := range proj.Packages {
+		locked[ref.Name] = ref.Locked
+		versions[ref.Name] = ref.Version.Raw
+	}
+
+	// [13.0.1] — exact lock, no comma
+	if !locked["Newtonsoft.Json"] {
+		t.Error("Newtonsoft.Json should be Locked=true (specified as [13.0.1])")
+	}
+	if versions["Newtonsoft.Json"] != "13.0.1" {
+		t.Errorf("Newtonsoft.Json version: got %q, want 13.0.1", versions["Newtonsoft.Json"])
+	}
+
+	// 3.1.1 — plain version, not locked
+	if locked["Serilog"] {
+		t.Error("Serilog should be Locked=false (plain version)")
+	}
+
+	// [7.0.0,) — range with comma, not an exact lock
+	if locked["Microsoft.Extensions.Http"] {
+		t.Error("Microsoft.Extensions.Http should be Locked=false (version range, not exact lock)")
+	}
+	if versions["Microsoft.Extensions.Http"] != "7.0.0" {
+		t.Errorf("Microsoft.Extensions.Http version: got %q, want 7.0.0 (lower bound of range)", versions["Microsoft.Extensions.Http"])
+	}
+}
+
 func pkgNameSet(proj *ParsedProject) map[string]bool {
 	names := make(map[string]bool)
 	for ref := range proj.Packages {

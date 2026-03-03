@@ -91,15 +91,15 @@ func TestFindProjectFiles_ExpectedCount(t *testing.T) {
 	}
 
 	// test-dotnet contains: CapchaValidator, CPMProject, CPMProject.Lib,
-	// CPMProject.Worker, FSharpLib, HttpHelper, PerfTest, Scryfall,
-	// Serialization, ServiceA, ServiceB, SqlLinqer, Zettabytes
-	// = 12 .csproj + 1 .fsproj = 13 project files
-	if len(files) != 13 {
+	// CPMProject.Worker, FSharpLib, HttpHelper, PerfTest, PinnedPackages,
+	// Scryfall, Serialization, ServiceA, ServiceB, SqlLinqer, Zettabytes
+	// = 13 .csproj + 1 .fsproj = 14 project files
+	if len(files) != 14 {
 		names := make([]string, len(files))
 		for i, f := range files {
 			names[i] = filepath.Base(f)
 		}
-		t.Fatalf("expected 13 project files, got %d: %v", len(files), names)
+		t.Fatalf("expected 14 project files, got %d: %v", len(files), names)
 	}
 }
 

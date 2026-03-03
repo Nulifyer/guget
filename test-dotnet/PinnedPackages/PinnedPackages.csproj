@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Exact version lock: [x.y.z] syntax pins to a single version -->
+    <PackageReference Include="Newtonsoft.Json" Version="[13.0.1]" />
+    <!-- Normal (unlocked) reference for comparison -->
+    <PackageReference Include="Serilog" Version="3.1.1" />
+    <!-- Version range (not a lock — has a comma) -->
+    <PackageReference Include="Microsoft.Extensions.Http" Version="[7.0.0,)" />
+  </ItemGroup>
+
+</Project>
