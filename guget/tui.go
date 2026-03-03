@@ -2389,15 +2389,25 @@ func renderAvailableVersion(row packageRow) string {
 		return styleSubtle.Render("-")
 	}
 	compat := row.latestCompatible.SemVer.String()
-	compStyle := styleGreen
-	if row.latestCompatible.SemVer.IsNewerThan(row.ref.Version) {
+	var compStyle lipgloss.Style
+	switch {
+	case row.latestCompatible.SemVer.IsNewerThan(row.ref.Version):
 		compStyle = styleYellow
+	case row.ref.Version.IsNewerThan(row.latestCompatible.SemVer):
+		compStyle = styleMuted
+	default:
+		compStyle = styleGreen
 	}
 	if row.latestStable != nil && row.latestStable.SemVer.String() != compat {
 		latest := row.latestStable.SemVer.String()
-		latestStyle := styleGreen
-		if row.latestStable.SemVer.IsNewerThan(row.ref.Version) {
+		var latestStyle lipgloss.Style
+		switch {
+		case row.latestStable.SemVer.IsNewerThan(row.ref.Version):
 			latestStyle = stylePurple
+		case row.ref.Version.IsNewerThan(row.latestStable.SemVer):
+			latestStyle = styleMuted
+		default:
+			latestStyle = styleGreen
 		}
 		return compStyle.Render(compat) + " " + styleMuted.Render("(") + latestStyle.Render(latest) + styleMuted.Render(")")
 	}
