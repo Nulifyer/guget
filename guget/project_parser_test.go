@@ -598,21 +598,29 @@ func TestParseCsproj_AddTargets_Simple(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(proj.AddTargets) < 2 {
-		t.Fatalf("expected at least 2 AddTargets (project + Directory.Build.props), got %d", len(proj.AddTargets))
+	if len(proj.AddTargets) < 3 {
+		t.Fatalf("expected at least 3 AddTargets (project + Directory.Build.props + shared_versions.props), got %d", len(proj.AddTargets))
 	}
 	if proj.AddTargets[0].Kind != AddTargetProject {
 		t.Fatalf("expected first target to be AddTargetProject, got %v", proj.AddTargets[0].Kind)
 	}
-	found := false
+	foundBuildProps := false
+	foundImportedProps := false
 	for _, at := range proj.AddTargets {
-		if at.Kind == AddTargetBuildProps {
-			found = true
-			break
+		switch at.Kind {
+		case AddTargetBuildProps:
+			foundBuildProps = true
+		case AddTargetImportedProps:
+			if strings.HasSuffix(at.FilePath, "shared_versions.props") {
+				foundImportedProps = true
+			}
 		}
 	}
-	if !found {
+	if !foundBuildProps {
 		t.Fatal("expected AddTargetBuildProps target")
+	}
+	if !foundImportedProps {
+		t.Fatal("expected AddTargetImportedProps for shared_versions.props (transitively imported via Directory.Build.props)")
 	}
 }
 

@@ -2032,7 +2032,7 @@ func (m Model) renderConfirmUpdateOverlay() string {
 }
 
 func (m Model) renderLocationPickOverlay() string {
-	w := clampW(60+m.overlayWidthOffset, 44, m.width-4)
+	w := clampW(80+m.overlayWidthOffset, 60, m.width-4)
 
 	lines := []string{
 		styleAccentBold.Render("Add to which file?"),
@@ -2040,29 +2040,46 @@ func (m Model) renderLocationPickOverlay() string {
 		"",
 	}
 
+	type row struct {
+		fileName  string
+		kindLabel string
+		desc      string
+	}
+	rows := make([]row, len(m.locationPick.targets))
+	maxName := 0
+	maxKind := 0
 	for i, target := range m.locationPick.targets {
-		fileName := filepath.Base(target.FilePath)
-		var kindLabel string
+		var kind string
 		switch target.Kind {
 		case AddTargetProject:
-			kindLabel = "project"
+			kind = "project"
 		case AddTargetBuildProps:
-			kindLabel = "build props"
+			kind = "build props"
 		case AddTargetCPM:
-			kindLabel = "CPM"
+			kind = "CPM"
 		case AddTargetImportedProps:
-			kindLabel = "imported props"
+			kind = "imported props"
 		}
+		rows[i] = row{filepath.Base(target.FilePath), kind, target.Description}
+		if len(rows[i].fileName) > maxName {
+			maxName = len(rows[i].fileName)
+		}
+		if len(kind) > maxKind {
+			maxKind = len(kind)
+		}
+	}
 
+	for i, r := range rows {
 		prefix := "  "
 		nameStyle := styleMuted
 		if i == m.locationPick.cursor {
 			prefix = "▶ "
 			nameStyle = styleAccentBold
 		}
-		line := prefix + nameStyle.Render(fileName) + "  " +
-			styleMuted.Render("["+kindLabel+"]") + "  " +
-			styleSubtle.Render(target.Description)
+		line := prefix +
+			padRight(nameStyle.Render(r.fileName), maxName+1) +
+			padRight(styleMuted.Render("["+r.kindLabel+"]"), maxKind+3) +
+			styleSubtle.Render(r.desc)
 		lines = append(lines, line)
 	}
 

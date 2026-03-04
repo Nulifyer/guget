@@ -281,30 +281,52 @@ func ParseCsproj(filePath string) (*ParsedProject, error) {
 	}
 
 	// Build AddTargets: possible locations for adding new packages.
+	// Use the visited map to include ALL transitively discovered props files.
+	absDBP := ""
+	if dbp != "" {
+		absDBP, _ = filepath.Abs(dbp)
+	}
+	absCPM := ""
+	if cpmFilePath != "" {
+		absCPM, _ = filepath.Abs(cpmFilePath)
+	}
+	directImports := make(map[string]bool)
+	for _, resolved := range resolvedImports {
+		abs, _ := filepath.Abs(resolved)
+		directImports[abs] = true
+	}
+
 	result.AddTargets = []AddTarget{
 		{FilePath: absFilePath, Kind: AddTargetProject, Description: "this project only"},
 	}
-	if dbp != "" {
-		absDBP, _ := filepath.Abs(dbp)
+	if absDBP != "" {
 		result.AddTargets = append(result.AddTargets, AddTarget{
 			FilePath:    absDBP,
 			Kind:        AddTargetBuildProps,
 			Description: "all projects under " + filepath.Base(filepath.Dir(absDBP)),
 		})
 	}
-	if cpmFilePath != "" {
+	if absCPM != "" {
 		result.AddTargets = append(result.AddTargets, AddTarget{
-			FilePath:    cpmFilePath,
+			FilePath:    absCPM,
 			Kind:        AddTargetCPM,
 			Description: "central package management",
 		})
 	}
-	for _, resolved := range resolvedImports {
-		absResolved, _ := filepath.Abs(resolved)
+	// Add all visited props files (includes both direct and transitive imports).
+	// Skip files already handled above (Directory.Build.props, CPM file).
+	for visitedPath := range visited {
+		if visitedPath == absFilePath || visitedPath == absDBP || visitedPath == absCPM {
+			continue
+		}
+		desc := "imported props"
+		if directImports[visitedPath] {
+			desc = "imported by " + result.FileName
+		}
 		result.AddTargets = append(result.AddTargets, AddTarget{
-			FilePath:    absResolved,
+			FilePath:    visitedPath,
 			Kind:        AddTargetImportedProps,
-			Description: "imported by " + result.FileName,
+			Description: desc,
 		})
 	}
 
