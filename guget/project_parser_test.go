@@ -20,8 +20,7 @@ func testDataDir(t *testing.T) string {
 
 func TestFindDirectoryBuildProps_Found(t *testing.T) {
 	td := testDataDir(t)
-	// Starting from a subdirectory, should find Directory.Build.props at test-dotnet root
-	subDir := filepath.Join(td, "Scryfall")
+	subDir := filepath.Join(td, "ProjectA")
 	got := findDirectoryBuildProps(subDir)
 	if got == "" {
 		t.Fatal("expected to find Directory.Build.props, got empty string")
@@ -32,7 +31,6 @@ func TestFindDirectoryBuildProps_Found(t *testing.T) {
 }
 
 func TestFindDirectoryBuildProps_NotFound(t *testing.T) {
-	// Use the OS temp dir root — no Directory.Build.props there
 	got := findDirectoryBuildProps(os.TempDir())
 	if got != "" {
 		t.Fatalf("expected empty string, got %s", got)
@@ -40,23 +38,23 @@ func TestFindDirectoryBuildProps_NotFound(t *testing.T) {
 }
 
 func TestResolveImportPath_Relative(t *testing.T) {
-	got, err := resolveImportPath("build_info.props", "/proj/src", "/proj/src")
+	got, err := resolveImportPath("imported.props", "/proj/src", "/proj/src")
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := filepath.Clean("/proj/src/build_info.props")
+	want := filepath.Clean("/proj/src/imported.props")
 	if got != want {
 		t.Fatalf("got %q, want %q", got, want)
 	}
 }
 
 func TestResolveImportPath_ProjectDir(t *testing.T) {
-	got, err := resolveImportPath("$(ProjectDir)\\build_info.props", "/proj/src", "/proj/src")
+	got, err := resolveImportPath("$(ProjectDir)\\imported.props", "/proj/src", "/proj/src")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasSuffix(got, "build_info.props") {
-		t.Fatalf("expected path ending in build_info.props, got %s", got)
+	if !strings.HasSuffix(got, "imported.props") {
+		t.Fatalf("expected path ending in imported.props, got %s", got)
 	}
 }
 
@@ -79,15 +77,14 @@ func TestResolveImportPath_UnresolvedVariable(t *testing.T) {
 
 func TestParseCsproj_ImplicitBuildProps(t *testing.T) {
 	td := testDataDir(t)
-	// HttpHelper has only Newtonsoft.Json in its csproj.
+	// ProjectA has only Newtonsoft.Json in its csproj.
 	// Directory.Build.props at test-dotnet root adds Serilog.
 	// shared_versions.props (imported by Directory.Build.props) adds Microsoft.Extensions.Logging.Abstractions.
-	proj, err := ParseCsproj(filepath.Join(td, "HttpHelper", "HttpHelper.csproj"))
+	proj, err := ParseCsproj(filepath.Join(td, "ProjectA", "ProjectA.csproj"))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// Should have its own package + the two from props
 	pkgNames := pkgNameSet(proj)
 	assertContains(t, pkgNames, "Newtonsoft.Json")
 	assertContains(t, pkgNames, "Serilog")
@@ -101,14 +98,15 @@ func TestParseCsproj_ImplicitBuildProps(t *testing.T) {
 
 	// Newtonsoft.Json should be sourced from the csproj itself
 	njSource := proj.SourceFileForPackage("Newtonsoft.Json")
-	if filepath.Base(njSource) != "HttpHelper.csproj" {
-		t.Fatalf("Newtonsoft.Json source should be HttpHelper.csproj, got %s", njSource)
+	if filepath.Base(njSource) != "ProjectA.csproj" {
+		t.Fatalf("Newtonsoft.Json source should be ProjectA.csproj, got %s", njSource)
 	}
 }
 
 func TestParseCsproj_NestedPropsImport(t *testing.T) {
 	td := testDataDir(t)
-	proj, err := ParseCsproj(filepath.Join(td, "Serialization", "Serialization.csproj"))
+	// Any project under test-dotnet inherits Directory.Build.props which imports shared_versions.props.
+	proj, err := ParseCsproj(filepath.Join(td, "ProjectA", "ProjectA.csproj"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +123,7 @@ func TestParseCsproj_NestedPropsImport(t *testing.T) {
 
 func TestParseCsproj_ExplicitImport(t *testing.T) {
 	td := testDataDir(t)
-	proj, err := ParseCsproj(filepath.Join(td, "Scryfall", "Scryfall.csproj"))
+	proj, err := ParseCsproj(filepath.Join(td, "ProjectB", "ProjectB.csproj"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,21 +132,21 @@ func TestParseCsproj_ExplicitImport(t *testing.T) {
 	// Own packages
 	assertContains(t, pkgNames, "Newtonsoft.Json")
 	assertContains(t, pkgNames, "StackExchange.Redis")
-	// From explicit Import of build_info.props
+	// From explicit Import of imported.props
 	assertContains(t, pkgNames, "Polly")
 	// From implicit Directory.Build.props
 	assertContains(t, pkgNames, "Serilog")
 
-	// Polly should be sourced from build_info.props
+	// Polly should be sourced from imported.props
 	pollySource := proj.SourceFileForPackage("Polly")
-	if filepath.Base(pollySource) != "build_info.props" {
-		t.Fatalf("Polly source should be build_info.props, got %s", pollySource)
+	if filepath.Base(pollySource) != "imported.props" {
+		t.Fatalf("Polly source should be imported.props, got %s", pollySource)
 	}
 }
 
 func TestParseCsproj_FSharpProject(t *testing.T) {
 	td := testDataDir(t)
-	proj, err := ParseCsproj(filepath.Join(td, "FSharpLib", "FSharpLib.fsproj"))
+	proj, err := ParseCsproj(filepath.Join(td, "ProjectC", "ProjectC.fsproj"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,90 +160,83 @@ func TestParseCsproj_FSharpProject(t *testing.T) {
 	// From nested shared_versions.props
 	assertContains(t, pkgNames, "Microsoft.Extensions.Logging.Abstractions")
 
-	if proj.FileName != "FSharpLib.fsproj" {
-		t.Fatalf("expected FileName FSharpLib.fsproj, got %s", proj.FileName)
+	if proj.FileName != "ProjectC.fsproj" {
+		t.Fatalf("expected FileName ProjectC.fsproj, got %s", proj.FileName)
 	}
 }
 
 func TestParseCsproj_CsprojTakesPrecedence(t *testing.T) {
 	td := testDataDir(t)
-	// CapchaValidator.csproj has its own packages.
+	// ProjectD has its own packages.
 	// Directory.Build.props also defines packages.
 	// The csproj's own packages should have the csproj as their source.
-	proj, err := ParseCsproj(filepath.Join(td, "CapchaValidator", "CapchaValidator.csproj"))
+	proj, err := ParseCsproj(filepath.Join(td, "ProjectD", "ProjectD.csproj"))
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	loggingSource := proj.SourceFileForPackage("Microsoft.Extensions.Logging")
-	if filepath.Base(loggingSource) != "CapchaValidator.csproj" {
-		t.Fatalf("Microsoft.Extensions.Logging source should be CapchaValidator.csproj, got %s", loggingSource)
+	if filepath.Base(loggingSource) != "ProjectD.csproj" {
+		t.Fatalf("Microsoft.Extensions.Logging source should be ProjectD.csproj, got %s", loggingSource)
 	}
 }
 
-func TestParseCsproj_CircularRefServiceA(t *testing.T) {
+func TestParseCsproj_CircularRefProjectE(t *testing.T) {
 	td := testDataDir(t)
-	proj, err := ParseCsproj(filepath.Join(td, "ServiceA", "ServiceA.csproj"))
+	proj, err := ParseCsproj(filepath.Join(td, "ProjectE", "ProjectE.csproj"))
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	pkgNames := pkgNameSet(proj)
-	// Own packages
 	assertContains(t, pkgNames, "MediatR")
 	assertContains(t, pkgNames, "FluentValidation")
-	// From Directory.Build.props
 	assertContains(t, pkgNames, "Serilog")
-	// From nested shared_versions.props
 	assertContains(t, pkgNames, "Microsoft.Extensions.Logging.Abstractions")
 
-	// FluentValidation is defined in its own csproj, not a props file
 	fvSource := proj.SourceFileForPackage("FluentValidation")
-	if filepath.Base(fvSource) != "ServiceA.csproj" {
-		t.Fatalf("FluentValidation source should be ServiceA.csproj, got %s", fvSource)
+	if filepath.Base(fvSource) != "ProjectE.csproj" {
+		t.Fatalf("FluentValidation source should be ProjectE.csproj, got %s", fvSource)
 	}
 }
 
-func TestParseCsproj_CircularRefServiceB(t *testing.T) {
+func TestParseCsproj_CircularRefProjectF(t *testing.T) {
 	td := testDataDir(t)
-	proj, err := ParseCsproj(filepath.Join(td, "ServiceB", "ServiceB.csproj"))
+	proj, err := ParseCsproj(filepath.Join(td, "ProjectF", "ProjectF.csproj"))
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	pkgNames := pkgNameSet(proj)
-	// Own packages
 	assertContains(t, pkgNames, "AutoMapper")
 	assertContains(t, pkgNames, "FluentValidation")
-	// From Directory.Build.props
 	assertContains(t, pkgNames, "Serilog")
 
-	// AutoMapper is defined in its own csproj
 	amSource := proj.SourceFileForPackage("AutoMapper")
-	if filepath.Base(amSource) != "ServiceB.csproj" {
-		t.Fatalf("AutoMapper source should be ServiceB.csproj, got %s", amSource)
+	if filepath.Base(amSource) != "ProjectF.csproj" {
+		t.Fatalf("AutoMapper source should be ProjectF.csproj, got %s", amSource)
 	}
 }
 
 func TestParseCsproj_CircularRefSharedPropsSource(t *testing.T) {
 	td := testDataDir(t)
-	projA, err := ParseCsproj(filepath.Join(td, "ServiceA", "ServiceA.csproj"))
+	projE, err := ParseCsproj(filepath.Join(td, "ProjectE", "ProjectE.csproj"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	projB, err := ParseCsproj(filepath.Join(td, "ServiceB", "ServiceB.csproj"))
+	projF, err := ParseCsproj(filepath.Join(td, "ProjectF", "ProjectF.csproj"))
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Both should source Serilog from the same Directory.Build.props
-	srcA := projA.SourceFileForPackage("Serilog")
-	srcB := projB.SourceFileForPackage("Serilog")
-	if srcA != srcB {
-		t.Fatalf("expected same Serilog source for both projects, got %s vs %s", srcA, srcB)
+	srcE := projE.SourceFileForPackage("Serilog")
+	srcF := projF.SourceFileForPackage("Serilog")
+	if srcE != srcF {
+		t.Fatalf("expected same Serilog source for both projects, got %s vs %s", srcE, srcF)
 	}
-	if filepath.Base(srcA) != "Directory.Build.props" {
-		t.Fatalf("expected Directory.Build.props, got %s", srcA)
+	if filepath.Base(srcE) != "Directory.Build.props" {
+		t.Fatalf("expected Directory.Build.props, got %s", srcE)
 	}
 }
 
@@ -320,9 +311,9 @@ func TestParsePropsAsProject_SharedVersionsProps(t *testing.T) {
 	}
 }
 
-func TestParsePropsAsProject_BuildInfoProps(t *testing.T) {
+func TestParsePropsAsProject_ImportedProps(t *testing.T) {
 	td := testDataDir(t)
-	proj, err := ParsePropsAsProject(filepath.Join(td, "Scryfall", "build_info.props"))
+	proj, err := ParsePropsAsProject(filepath.Join(td, "ProjectB", "imported.props"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -384,7 +375,6 @@ func TestParseCsproj_CPMVersionResolution(t *testing.T) {
 	assertContains(t, pkgNames, "Newtonsoft.Json")
 	assertContains(t, pkgNames, "Polly")
 
-	// Verify versions were resolved from Directory.Packages.props, not left empty.
 	for ref := range proj.Packages {
 		if ref.Version.Raw == "" {
 			t.Fatalf("package %q has an empty version; CPM resolution failed", ref.Name)
@@ -399,8 +389,6 @@ func TestParseCsproj_CPMSource(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Packages resolved via CPM should be sourced from Directory.Packages.props,
-	// not the project file — so the TUI directs edits to the right file.
 	njSource := proj.SourceFileForPackage("Newtonsoft.Json")
 	if filepath.Base(njSource) != "Directory.Packages.props" {
 		t.Fatalf("Newtonsoft.Json source should be Directory.Packages.props, got %s", njSource)
@@ -420,12 +408,11 @@ func TestParsePropsAsProject_CPMDirectoryPackagesProps(t *testing.T) {
 	assertContains(t, pkgs, "Microsoft.Extensions.DependencyInjection")
 	assertContains(t, pkgs, "Microsoft.Extensions.Hosting")
 
-	if proj.Packages.Len() != 4 {
-		t.Fatalf("expected 4 packages, got %d", proj.Packages.Len())
+	if proj.Packages.Len() != 6 {
+		t.Fatalf("expected 6 packages, got %d", proj.Packages.Len())
 	}
 }
 
-// Multi-project CPM: sub-project in the same tree shares Directory.Packages.props.
 func TestParseCsproj_CPMLib(t *testing.T) {
 	td := testDataDir(t)
 	proj, err := ParseCsproj(filepath.Join(td, "CPMProject", "CPMProject.Lib", "CPMProject.Lib.csproj"))
@@ -437,21 +424,18 @@ func TestParseCsproj_CPMLib(t *testing.T) {
 	assertContains(t, pkgNames, "Microsoft.Extensions.DependencyInjection")
 	assertContains(t, pkgNames, "Newtonsoft.Json")
 
-	// Versions must be resolved from the parent Directory.Packages.props.
 	for ref := range proj.Packages {
 		if ref.Version.Raw == "" {
 			t.Fatalf("package %q has empty version in CPMProject.Lib", ref.Name)
 		}
 	}
 
-	// Both packages should be sourced from Directory.Packages.props.
 	diSource := proj.SourceFileForPackage("Microsoft.Extensions.DependencyInjection")
 	if filepath.Base(diSource) != "Directory.Packages.props" {
 		t.Fatalf("expected Directory.Packages.props, got %s", diSource)
 	}
 }
 
-// VersionOverride: a project pins a different version than the central props.
 func TestParseCsproj_CPMVersionOverride(t *testing.T) {
 	td := testDataDir(t)
 	proj, err := ParseCsproj(filepath.Join(td, "CPMProject", "CPMProject.Worker", "CPMProject.Worker.csproj"))
@@ -463,7 +447,6 @@ func TestParseCsproj_CPMVersionOverride(t *testing.T) {
 	assertContains(t, pkgNames, "Newtonsoft.Json")
 	assertContains(t, pkgNames, "Microsoft.Extensions.Hosting")
 
-	// Newtonsoft.Json uses VersionOverride="12.0.3" in the worker csproj.
 	var njVersion string
 	for ref := range proj.Packages {
 		if ref.Name == "Newtonsoft.Json" {
@@ -474,23 +457,17 @@ func TestParseCsproj_CPMVersionOverride(t *testing.T) {
 		t.Fatalf("expected VersionOverride 12.0.3, got %q", njVersion)
 	}
 
-	// The overridden package's source should be the project file, not Directory.Packages.props.
 	njSource := proj.SourceFileForPackage("Newtonsoft.Json")
 	if filepath.Base(njSource) != "CPMProject.Worker.csproj" {
 		t.Fatalf("VersionOverride source should be CPMProject.Worker.csproj, got %s", njSource)
 	}
 
-	// Microsoft.Extensions.Hosting has no override — resolves from CPM.
 	hostingSource := proj.SourceFileForPackage("Microsoft.Extensions.Hosting")
 	if filepath.Base(hostingSource) != "Directory.Packages.props" {
 		t.Fatalf("Microsoft.Extensions.Hosting source should be Directory.Packages.props, got %s", hostingSource)
 	}
 }
 
-// TestLatestStableForFramework_UnknownTargetDoesNotBlock verifies that an
-// unresolved MSBuild property reference (e.g. $(TargetFrameworksForLibraries))
-// parsed as FamilyUnknown does not cause LatestStableForFramework to return nil
-// for packages that are otherwise compatible with the known targets.
 func TestLatestStableForFramework_UnknownTargetDoesNotBlock(t *testing.T) {
 	pkg := &PackageInfo{
 		ID: "Some.Package",
@@ -505,10 +482,9 @@ func TestLatestStableForFramework_UnknownTargetDoesNotBlock(t *testing.T) {
 		},
 	}
 
-	// Mix of a resolved (net8.0) and an unresolved ($(Property)) target.
 	targets := NewSet[TargetFramework]()
 	targets.Add(ParseTargetFramework("net8.0"))
-	targets.Add(ParseTargetFramework("$(TargetFrameworksForLibraries)")) // FamilyUnknown
+	targets.Add(ParseTargetFramework("$(TargetFrameworksForLibraries)"))
 
 	v := pkg.LatestStableForFramework(targets)
 	if v == nil {
@@ -521,7 +497,7 @@ func TestLatestStableForFramework_UnknownTargetDoesNotBlock(t *testing.T) {
 
 func TestParseCsproj_ExactVersionLock(t *testing.T) {
 	td := testDataDir(t)
-	proj, err := ParseCsproj(filepath.Join(td, "PinnedPackages", "PinnedPackages.csproj"))
+	proj, err := ParseCsproj(filepath.Join(td, "ProjectG", "ProjectG.csproj"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -533,7 +509,6 @@ func TestParseCsproj_ExactVersionLock(t *testing.T) {
 		versions[ref.Name] = ref.Version.Raw
 	}
 
-	// [13.0.1] — exact lock, no comma
 	if !locked["Newtonsoft.Json"] {
 		t.Error("Newtonsoft.Json should be Locked=true (specified as [13.0.1])")
 	}
@@ -541,17 +516,15 @@ func TestParseCsproj_ExactVersionLock(t *testing.T) {
 		t.Errorf("Newtonsoft.Json version: got %q, want 13.0.1", versions["Newtonsoft.Json"])
 	}
 
-	// 3.1.1 — plain version, not locked
-	if locked["Serilog"] {
-		t.Error("Serilog should be Locked=false (plain version)")
+	if locked["AutoMapper"] {
+		t.Error("AutoMapper should be Locked=false (plain version)")
 	}
 
-	// [7.0.0,) — range with comma, not an exact lock
-	if locked["Microsoft.Extensions.Http"] {
-		t.Error("Microsoft.Extensions.Http should be Locked=false (version range, not exact lock)")
+	if locked["Polly"] {
+		t.Error("Polly should be Locked=false (version range, not exact lock)")
 	}
-	if versions["Microsoft.Extensions.Http"] != "7.0.0" {
-		t.Errorf("Microsoft.Extensions.Http version: got %q, want 7.0.0 (lower bound of range)", versions["Microsoft.Extensions.Http"])
+	if versions["Polly"] != "8.0.0" {
+		t.Errorf("Polly version: got %q, want 8.0.0 (lower bound of range)", versions["Polly"])
 	}
 }
 
@@ -567,6 +540,115 @@ func assertContains(t *testing.T, set map[string]bool, name string) {
 	t.Helper()
 	if !set[name] {
 		t.Fatalf("expected package %q in set, got: %v", name, keys(set))
+	}
+}
+
+func TestAddPackageVersion(t *testing.T) {
+	content := `<Project>
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageVersion Include="Newtonsoft.Json" Version="13.0.4" />
+  </ItemGroup>
+</Project>`
+	tmp := filepath.Join(t.TempDir(), "Directory.Packages.props")
+	os.WriteFile(tmp, []byte(content), 0644)
+
+	if err := AddPackageVersion(tmp, "Polly", "8.5.2"); err != nil {
+		t.Fatal(err)
+	}
+
+	data, _ := os.ReadFile(tmp)
+	result := string(data)
+	if !strings.Contains(result, `<PackageVersion Include="Polly" Version="8.5.2" />`) {
+		t.Fatalf("expected PackageVersion element, got:\n%s", result)
+	}
+	if !strings.Contains(result, `<PackageVersion Include="Newtonsoft.Json" Version="13.0.4" />`) {
+		t.Fatalf("original PackageVersion missing:\n%s", result)
+	}
+}
+
+func TestAddPackageReference_NoVersion(t *testing.T) {
+	content := `<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <PackageReference Include="Newtonsoft.Json" />
+  </ItemGroup>
+</Project>`
+	tmp := filepath.Join(t.TempDir(), "Test.csproj")
+	os.WriteFile(tmp, []byte(content), 0644)
+
+	if err := AddPackageReference(tmp, "Polly", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	data, _ := os.ReadFile(tmp)
+	result := string(data)
+	if !strings.Contains(result, `<PackageReference Include="Polly" />`) {
+		t.Fatalf("expected version-less PackageReference, got:\n%s", result)
+	}
+	if strings.Contains(result, `Include="Polly" Version=`) {
+		t.Fatalf("should not have Version attribute for CPM package:\n%s", result)
+	}
+}
+
+func TestParseCsproj_AddTargets_Simple(t *testing.T) {
+	td := testDataDir(t)
+	proj, err := ParseCsproj(filepath.Join(td, "ProjectA", "ProjectA.csproj"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(proj.AddTargets) < 2 {
+		t.Fatalf("expected at least 2 AddTargets (project + Directory.Build.props), got %d", len(proj.AddTargets))
+	}
+	if proj.AddTargets[0].Kind != AddTargetProject {
+		t.Fatalf("expected first target to be AddTargetProject, got %v", proj.AddTargets[0].Kind)
+	}
+	found := false
+	for _, at := range proj.AddTargets {
+		if at.Kind == AddTargetBuildProps {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("expected AddTargetBuildProps target")
+	}
+}
+
+func TestParseCsproj_AddTargets_CPM(t *testing.T) {
+	td := testDataDir(t)
+	proj, err := ParseCsproj(filepath.Join(td, "CPMProject", "CPMProject.csproj"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	kinds := make(map[AddTargetKind]bool)
+	for _, at := range proj.AddTargets {
+		kinds[at.Kind] = true
+	}
+	if !kinds[AddTargetProject] {
+		t.Fatal("missing AddTargetProject")
+	}
+	if !kinds[AddTargetCPM] {
+		t.Fatal("missing AddTargetCPM")
+	}
+}
+
+func TestParseCsproj_AddTargets_ImportedProps(t *testing.T) {
+	td := testDataDir(t)
+	proj, err := ParseCsproj(filepath.Join(td, "ProjectB", "ProjectB.csproj"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, at := range proj.AddTargets {
+		if at.Kind == AddTargetImportedProps {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("expected AddTargetImportedProps for ProjectB (imported.props)")
 	}
 }
 

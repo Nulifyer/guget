@@ -40,22 +40,22 @@ func TestFindProjectFiles_IncludesCircularRefProjects(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	foundA := false
-	foundB := false
+	foundE := false
+	foundF := false
 	for _, f := range files {
 		base := filepath.Base(f)
-		if base == "ServiceA.csproj" {
-			foundA = true
+		if base == "ProjectE.csproj" {
+			foundE = true
 		}
-		if base == "ServiceB.csproj" {
-			foundB = true
+		if base == "ProjectF.csproj" {
+			foundF = true
 		}
 	}
-	if !foundA {
-		t.Fatal("expected to find ServiceA.csproj")
+	if !foundE {
+		t.Fatal("expected to find ProjectE.csproj")
 	}
-	if !foundB {
-		t.Fatal("expected to find ServiceB.csproj")
+	if !foundF {
+		t.Fatal("expected to find ProjectF.csproj")
 	}
 }
 
@@ -66,9 +66,6 @@ func TestFindProjectFiles_SkipsIgnoredDirs(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// test-dotnet has bin/ and obj/ subdirectories that contain .nuget.g.props
-	// files but no .csproj files. Verify none of the returned paths go through
-	// an ignored directory.
 	ignored := map[string]bool{
 		"bin": true, "obj": true, "node_modules": true,
 		".git": true, ".vs": true, "packages": true,
@@ -90,16 +87,15 @@ func TestFindProjectFiles_ExpectedCount(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// test-dotnet contains: CapchaValidator, CPMProject, CPMProject.Lib,
-	// CPMProject.Worker, FSharpLib, HttpHelper, PerfTest, PinnedPackages,
-	// Scryfall, Serialization, ServiceA, ServiceB, SqlLinqer, Zettabytes
-	// = 13 .csproj + 1 .fsproj = 14 project files
-	if len(files) != 14 {
+	// test-dotnet contains: ProjectA, ProjectB, ProjectC (fsproj), ProjectD,
+	// ProjectE, ProjectF, ProjectG, CPMProject, CPMProject.Lib, CPMProject.Worker
+	// = 9 .csproj + 1 .fsproj = 10 project files
+	if len(files) != 10 {
 		names := make([]string, len(files))
 		for i, f := range files {
 			names[i] = filepath.Base(f)
 		}
-		t.Fatalf("expected 14 project files, got %d: %v", len(files), names)
+		t.Fatalf("expected 10 project files, got %d: %v", len(files), names)
 	}
 }
 

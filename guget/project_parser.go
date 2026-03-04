@@ -137,12 +137,28 @@ func isExactLock(s string) bool {
 	return len(s) > 2 && s[0] == '[' && s[len(s)-1] == ']' && !strings.ContainsRune(s, ',')
 }
 
+type AddTargetKind int
+
+const (
+	AddTargetProject      AddTargetKind = iota // .csproj/.fsproj
+	AddTargetBuildProps                        // Directory.Build.props
+	AddTargetCPM                               // Directory.Packages.props (CPM)
+	AddTargetImportedProps                     // Explicitly imported .props
+)
+
+type AddTarget struct {
+	FilePath    string
+	Kind        AddTargetKind
+	Description string // e.g., "this project only", "all projects under /path"
+}
+
 type ParsedProject struct {
 	FileName         string
 	FilePath         string // full path to the .csproj/.fsproj file
 	TargetFrameworks Set[TargetFramework]
 	Packages         Set[PackageReference]
 	PackageSources   map[string]string // lowercase pkg name → absolute path of defining file
+	AddTargets       []AddTarget       // possible locations for adding new packages
 }
 
 // SourceFileForPackage returns the file path where pkgName is defined.
@@ -226,11 +242,13 @@ func ParseCsproj(filePath string) (*ParsedProject, error) {
 	}
 
 	// Implicit import: Directory.Build.props (walk up from project dir)
-	if dbp := findDirectoryBuildProps(projectDir); dbp != "" {
+	dbp := findDirectoryBuildProps(projectDir)
+	if dbp != "" {
 		collectPropsPackages(result, dbp, projectDir, visited)
 	}
 
 	// Explicit <Import> elements in the project file
+	var resolvedImports []string
 	for _, imp := range project.Imports {
 		resolved, err := resolveImportPath(imp.Project, projectDir, projectDir)
 		if err != nil {
@@ -238,6 +256,7 @@ func ParseCsproj(filePath string) (*ParsedProject, error) {
 			continue
 		}
 		collectPropsPackages(result, resolved, projectDir, visited)
+		resolvedImports = append(resolvedImports, resolved)
 	}
 
 	// Post-process: imported props files (e.g. Directory.Build.props) may also
@@ -259,6 +278,34 @@ func ParseCsproj(filePath string) (*ParsedProject, error) {
 				result.PackageSources[name] = cpmFilePath
 			}
 		}
+	}
+
+	// Build AddTargets: possible locations for adding new packages.
+	result.AddTargets = []AddTarget{
+		{FilePath: absFilePath, Kind: AddTargetProject, Description: "this project only"},
+	}
+	if dbp != "" {
+		absDBP, _ := filepath.Abs(dbp)
+		result.AddTargets = append(result.AddTargets, AddTarget{
+			FilePath:    absDBP,
+			Kind:        AddTargetBuildProps,
+			Description: "all projects under " + filepath.Base(filepath.Dir(absDBP)),
+		})
+	}
+	if cpmFilePath != "" {
+		result.AddTargets = append(result.AddTargets, AddTarget{
+			FilePath:    cpmFilePath,
+			Kind:        AddTargetCPM,
+			Description: "central package management",
+		})
+	}
+	for _, resolved := range resolvedImports {
+		absResolved, _ := filepath.Abs(resolved)
+		result.AddTargets = append(result.AddTargets, AddTarget{
+			FilePath:    absResolved,
+			Kind:        AddTargetImportedProps,
+			Description: "imported by " + result.FileName,
+		})
 	}
 
 	return result, nil
@@ -545,9 +592,20 @@ func UpdatePackageVersion(filePath, pkgName, newVersion string) error {
 	return writeFileRetry(filePath, []byte(strings.Join(lines, "\n")), 0644)
 }
 
-// AddPackageReference inserts a new <PackageReference Include="pkgName" Version="version" />
-// into a .csproj/.fsproj file without altering any other formatting.
+// AddPackageReference inserts a new <PackageReference> element into a project or props file.
+// If version is empty, the element is written without a Version attribute (for CPM projects).
 func AddPackageReference(filePath, pkgName, version string) error {
+	return addXMLElement(filePath, "PackageReference", pkgName, version)
+}
+
+// AddPackageVersion inserts a new <PackageVersion> element into a Directory.Packages.props file.
+func AddPackageVersion(filePath, pkgName, version string) error {
+	return addXMLElement(filePath, "PackageVersion", pkgName, version)
+}
+
+// addXMLElement inserts a new XML element (PackageReference or PackageVersion) into a
+// project or props file without altering any other formatting.
+func addXMLElement(filePath, elementTag, pkgName, version string) error {
 	data, err := os.ReadFile(filePath)
 	if err != nil {
 		return fmt.Errorf("read %s: %w", filePath, err)
@@ -555,39 +613,44 @@ func AddPackageReference(filePath, pkgName, version string) error {
 
 	lines := strings.Split(string(data), "\n")
 
-	pkgRefRe        := regexp.MustCompile(`(?i)<PackageReference`)
+	elementRe := regexp.MustCompile(`(?i)<` + elementTag)
 	itemGroupOpenRe := regexp.MustCompile(`(?i)<ItemGroup`)
 	itemGroupCloseRe := regexp.MustCompile(`(?i)</ItemGroup>`)
-	projectCloseRe  := regexp.MustCompile(`(?i)</Project>`)
+	projectCloseRe := regexp.MustCompile(`(?i)</Project>`)
 
-	// Detect indentation from the first existing PackageReference line.
+	// Detect indentation from the first existing element line.
 	indent := "  "
 	for _, line := range lines {
-		if pkgRefRe.MatchString(line) {
+		if elementRe.MatchString(line) {
 			trimmed := strings.TrimLeft(line, " \t")
 			indent = line[:len(line)-len(trimmed)]
 			break
 		}
 	}
 
-	newLine := indent + fmt.Sprintf(`<PackageReference Include="%s" Version="%s" />`, pkgName, version)
+	var newLine string
+	if version == "" {
+		newLine = indent + fmt.Sprintf(`<%s Include="%s" />`, elementTag, pkgName)
+	} else {
+		newLine = indent + fmt.Sprintf(`<%s Include="%s" Version="%s" />`, elementTag, pkgName, version)
+	}
 
-	// Stack-scan to find an ItemGroup that already contains PackageReferences.
+	// Stack-scan to find an ItemGroup that already contains matching elements.
 	type igState struct {
-		openLine  int
-		hasPkgRef bool
+		openLine   int
+		hasElement bool
 	}
 	var stack []igState
 	insertAt := -1
 	for i, line := range lines {
 		if itemGroupOpenRe.MatchString(line) {
 			stack = append(stack, igState{openLine: i})
-		} else if pkgRefRe.MatchString(line) && len(stack) > 0 {
-			stack[len(stack)-1].hasPkgRef = true
+		} else if elementRe.MatchString(line) && len(stack) > 0 {
+			stack[len(stack)-1].hasElement = true
 		} else if itemGroupCloseRe.MatchString(line) && len(stack) > 0 {
 			top := stack[len(stack)-1]
 			stack = stack[:len(stack)-1]
-			if top.hasPkgRef {
+			if top.hasElement {
 				insertAt = i
 				break
 			}
@@ -598,7 +661,7 @@ func AddPackageReference(filePath, pkgName, version string) error {
 		// Insert before the closing </ItemGroup>.
 		lines = append(lines[:insertAt], append([]string{newLine}, lines[insertAt:]...)...)
 	} else {
-		// No PackageReference ItemGroup found — create a new one before </Project>.
+		// No matching ItemGroup found — create a new one before </Project>.
 		outerIndent := ""
 		if len(indent) >= 2 {
 			outerIndent = indent[:len(indent)-2]
