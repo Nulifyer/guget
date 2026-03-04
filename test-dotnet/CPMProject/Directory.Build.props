@@ -1,0 +1,4 @@
+<Project>
+  <!-- Stops inheritance from root Directory.Build.props.
+       CPM projects cannot inherit PackageReference with Version attributes. -->
+</Project>
