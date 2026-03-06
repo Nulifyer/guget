@@ -80,7 +80,7 @@ func BuildFlags(flags map[string]IParsedFlag) BuiltFlags {
 }
 
 // initCLI registers CLI flags, parses os.Args, and returns the resolved flag values.
-// Named initCLI (not Init) to avoid confusion with Model.Init() in the same package.
+// Named initCLI (not Init) to avoid confusion with App.Init() in the same package.
 func initCLI() BuiltFlags {
 	logSetLevel(LogLevelWarn)
 	// Allow LOG_LEVEL env var to override the pre-parse default; --verbose will
@@ -275,7 +275,7 @@ func main() {
 		}
 	}
 
-	m := NewModel(parsedProjects, propsProjects, nugetServices, sources, sourceMapping, buf.Lines(), distinctPackages.Len(), builtFlags)
+	m := NewApp(parsedProjects, propsProjects, nugetServices, sources, sourceMapping, buf.Lines(), distinctPackages.Len(), builtFlags)
 
 	p := tea.NewProgram(m)
 

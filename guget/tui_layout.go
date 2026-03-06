@@ -6,36 +6,12 @@ import (
 	lipgloss "charm.land/lipgloss/v2"
 )
 
-func (m Model) footerKeys() []struct{ k, v string } {
-	type kv = struct{ k, v string }
-
-	// Overlay contexts — show only the overlay's keys.
-	if m.depTree.active {
-		return []kv{{"↑↓", "scroll"}, {"esc", "close"}}
-	}
-	if m.releaseNotes.active {
-		return []kv{{"tab", "focus"}, {"↑↓", "nav/scroll"}, {"esc", "close"}}
-	}
-	if m.search.active {
-		return []kv{{"↑↓", "nav"}, {"enter", "select"}, {"esc", "close"}}
-	}
-	if m.locationPick.active {
-		return []kv{{"↑↓", "nav"}, {"enter", "select"}, {"esc", "cancel"}}
-	}
-	if m.picker.active {
-		return []kv{{"↑↓", "nav"}, {"u/U", "update/all"}, {"esc", "close"}}
-	}
-	if m.confirmRemove.active {
-		return []kv{{"enter/y", "confirm"}, {"esc", "cancel"}}
-	}
-	if m.confirmUpdate.active {
-		return []kv{{"enter/y", "confirm"}, {"esc", "cancel"}}
-	}
-	if m.showSources {
-		return []kv{{"esc", "close"}}
-	}
-	if m.showHelp {
-		return []kv{{"↑↓", "scroll"}, {"esc", "close"}}
+func (m *App) footerKeys() []kv {
+	// Overlay contexts — delegate to active overlay.
+	for _, o := range m.overlays() {
+		if o.IsActive() {
+			return o.FooterKeys()
+		}
 	}
 
 	// Main screen — varies by focused panel.
@@ -109,7 +85,7 @@ func (m Model) footerKeys() []struct{ k, v string } {
 	return []kv{{"?", "help"}, {"esc/q", "quit"}}
 }
 
-func (m *Model) footerLines() int {
+func (m *App) footerLines() int {
 	keys := m.footerKeys()
 	w := m.layoutWidth() - 4
 	lines, curW  := 1, 0
@@ -132,7 +108,7 @@ func (m *Model) footerLines() int {
 // bodyOuterHeight returns the outer height for each main panel.
 // In lipgloss v2, .Height(h) is the outer height (borders + padding + content).
 // alignTextVertical does NOT truncate overflow, so content must fit exactly.
-func (m *Model) bodyOuterHeight() int {
+func (m *App) bodyOuterHeight() int {
 	// footer is rendered without .Height(), so its rendered height is
 	// footerLines() content + 1 top border.
 	h := m.ctx.Height - m.footerLines() - 1
@@ -145,16 +121,16 @@ func (m *Model) bodyOuterHeight() int {
 // panelContentHeight returns the usable content lines inside a panel.
 // Panels use stylePanel/stylePanelNoPad with BorderTop(false), so
 // vertical border = 1 (bottom). Content = outer - 1.
-func (m *Model) panelContentHeight() int {
+func (m *App) panelContentHeight() int {
 	return m.bodyOuterHeight() - 1
 }
 
-func (m *Model) packageListHeight() int {
+func (m *App) packageListHeight() int {
 	// content height minus column header (1) + divider (1)
 	return imax(1, m.panelContentHeight()-2)
 }
 
-func (m *Model) projectListHeight() int {
+func (m *App) projectListHeight() int {
 	// content height minus title row (1) + divider row (1)
 	// each item = 3 lines (title + desc + spacing), last item needs only 2
 	avail := m.panelContentHeight() - 2
@@ -164,40 +140,34 @@ func (m *Model) projectListHeight() int {
 	return 1 + (avail-2)/3
 }
 
-func (m *Model) clampProjectOffset() {
-	visible := m.projectListHeight()
-	if m.projectCursor < m.projectOffset {
-		m.projectOffset = m.projectCursor
-	}
-	if m.projectCursor >= m.projectOffset+visible {
-		m.projectOffset = m.projectCursor - visible + 1
-	}
+func (m *App) clampProjectOffset() {
+	clampListScroll(m.projects.cursor, &m.projects.scroll, m.projectListHeight(), len(m.projects.items), 0)
 }
 
-func (m *Model) relayout() {
+func (m *App) relayout() {
 	_, _, rightW := m.panelWidths()
 	// viewport height = panel content height - title(1) - divider(1)
 	innerH := m.panelContentHeight() - 2
-	m.detailView.SetWidth(rightW - 4)
-	m.detailView.SetHeight(innerH)
+	m.detail.vp.SetWidth(rightW - 4)
+	m.detail.vp.SetHeight(innerH)
 	if m.ctx.ShowLogs {
-		m.logView.SetWidth(m.layoutWidth() - 4) // stylePanel: hBorder(2) + hPadding(2) = 4
-		m.logView.SetHeight(logPanelLines)
+		m.log.vp.SetWidth(m.layoutWidth() - 4) // stylePanel: hBorder(2) + hPadding(2) = 4
+		m.log.vp.SetHeight(logPanelLines)
 	}
 }
 
-func (m *Model) panelWidths() (left, mid, right int) {
+func (m *App) panelWidths() (left, mid, right int) {
 	lw := m.layoutWidth()
 	// lipgloss v2 .Width(w) is outer (border-box) — border chars are inside w.
 	// So the three panel widths must sum to exactly lw.
 
-	left = 30 + m.leftWidthOffset
-	right = 50 + m.rightWidthOffset
-	if left < 10 {
-		left = 10
+	left = m.projects.baseWidth + m.projects.widthOffset
+	right = m.detail.baseWidth + m.detail.widthOffset
+	if left < m.projects.minWidth {
+		left = m.projects.minWidth
 	}
-	if right < 10 {
-		right = 10
+	if right < m.detail.minWidth {
+		right = m.detail.minWidth
 	}
 	mid = lw - left - right
 
@@ -229,11 +199,11 @@ func (m *Model) panelWidths() (left, mid, right int) {
 	return
 }
 
-func (m Model) overlayHeight() int {
+func (m *App) overlayHeight() int {
 	return m.ctx.Height - m.footerLines() - 1 // footer content + top border
 }
 
-func (m Model) renderFooter() string {
+func (m *App) renderFooter() string {
 	keys := m.footerKeys()
 
 	w := m.layoutWidth() - 4 // padding

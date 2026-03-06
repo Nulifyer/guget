@@ -164,7 +164,7 @@ var themes = map[string]Theme{
 }
 
 // initTheme applies the named theme to the package-level color and style vars.
-// Call this before NewModel. If noColor is true, all color output is disabled.
+// Call this before NewApp. If noColor is true, all color output is disabled.
 func initTheme(name string, noColor bool) {
 	if noColor {
 		hyperlinkEnabled = false

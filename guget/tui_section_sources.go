@@ -4,25 +4,26 @@ import (
 	"strings"
 
 	bubble_tea "charm.land/bubbletea/v2"
-	lipgloss "charm.land/lipgloss/v2"
 )
 
-func (m *Model) handleSourcesKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
+func (s *sourcesOverlay) FooterKeys() []kv {
+	return []kv{{"esc", "close"}}
+}
+
+func (s *sourcesOverlay) HandleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 	switch msg.String() {
 	case "[":
-		adjustOffset(&m.overlayWidthOffset, -4, 90, 40, m.ctx.Width-4)
+		s.Resize(-4)
 	case "]":
-		adjustOffset(&m.overlayWidthOffset, 4, 90, 40, m.ctx.Width-4)
+		s.Resize(4)
 	case "esc", "s", "q":
-		m.overlayWidthOffset = 0
-		m.showSources = false
-		m.ctx.StatusLine = ""
+		s.closeOverlay()
 	}
 	return nil
 }
 
-func (m Model) renderSourcesOverlay() string {
-	w := clampW(90+m.overlayWidthOffset, 40, m.ctx.Width-4)
+func (s *sourcesOverlay) Render() string {
+	w := s.Width()
 	innerW := w - 6 // border (2) + padding (2*2)
 
 	var lines []string
@@ -33,12 +34,12 @@ func (m Model) renderSourcesOverlay() string {
 		styleBorder.Render(strings.Repeat("─", innerW)),
 	)
 
-	if len(m.ctx.Sources) == 0 {
+	if len(s.app.ctx.Sources) == 0 {
 		lines = append(lines,
 			styleMuted.Render("No sources detected"),
 		)
 	} else {
-		for _, src := range m.ctx.Sources {
+		for _, src := range s.app.ctx.Sources {
 			nameStyle := styleTextBold
 			name := nameStyle.Render(truncate(src.Name, innerW-18))
 			auth := ""
@@ -57,5 +58,5 @@ func (m Model) renderSourcesOverlay() string {
 		Width(w).
 		Render(strings.Join(lines, "\n"))
 
-	return lipgloss.Place(m.ctx.Width, m.overlayHeight(), lipgloss.Center, lipgloss.Center, box)
+	return s.centerOverlay(box)
 }

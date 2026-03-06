@@ -60,7 +60,7 @@ func renderAvailableVersion(row packageRow) string {
 	return compStyle.Render(compat)
 }
 
-func (m Model) renderPackagePanel(w int) string {
+func (m *App) renderPackagePanel(w int) string {
 	focused := m.focus == focusPackages
 
 	visibleH := m.packageListHeight()
@@ -78,7 +78,7 @@ func (m Model) renderPackagePanel(w int) string {
 	colCurrent := len("Current")
 	colAvail := len("Available")
 	colSource := len("Source")
-	for _, row := range m.packageRows {
+	for _, row := range m.packages.rows {
 		if n := len(currentVersionText(row)); n > colCurrent {
 			colCurrent = n
 		}
@@ -111,10 +111,10 @@ func (m Model) renderPackagePanel(w int) string {
 	// Header
 	hStyle := styleSubtleBold
 	sortArrow := "▼"
-	if m.packageSortDir {
+	if m.packages.sortDir {
 		sortArrow = "▲"
 	}
-	pkgHeader := "Package (by " + m.packageSortMode.label() + " " + sortArrow + ")"
+	pkgHeader := "Package (by " + m.packages.sortMode.label() + " " + sortArrow + ")"
 	header := "  " + padRight(hStyle.Render(pkgHeader), nameW) +
 		padRight(hStyle.Render("Current"), colCurrent)
 	if showAvail {
@@ -129,20 +129,20 @@ func (m Model) renderPackagePanel(w int) string {
 	)
 
 	// rows
-	if len(m.packageRows) == 0 {
+	if len(m.packages.rows) == 0 {
 		lines = append(lines, "")
 		lines = append(lines, styleMuted.Render("  No packages found"))
 		lines = append(lines, styleMuted.Render("  Press / to search NuGet"))
 	}
 
-	end := m.packageOffset + visibleH
-	if end > len(m.packageRows) {
-		end = len(m.packageRows)
+	end := m.packages.scroll + visibleH
+	if end > len(m.packages.rows) {
+		end = len(m.packages.rows)
 	}
 
-	for i := m.packageOffset; i < end; i++ {
-		row := m.packageRows[i]
-		selected := i == m.packageCursor
+	for i := m.packages.scroll; i < end; i++ {
+		row := m.packages.rows[i]
+		selected := i == m.packages.cursor
 
 		// icon
 		icon := row.statusStyle().Render(row.statusIcon())
@@ -235,14 +235,7 @@ func defaultVersionCursor(versions []PackageVersion, targets Set[TargetFramework
 	return 0
 }
 
-func (m *Model) selectedProject() *ParsedProject {
-	if m.projectCursor >= 0 && m.projectCursor < len(m.projectItems) {
-		return m.projectItems[m.projectCursor].project
-	}
-	return nil
-}
-
-func (m *Model) rebuildPackageRows() {
+func (m *App) rebuildPackageRows() {
 	if m.ctx.Results == nil {
 		return
 	}
@@ -333,7 +326,7 @@ func (m *Model) rebuildPackageRows() {
 		}
 	}
 
-	switch m.packageSortMode {
+	switch m.packages.sortMode {
 	case sortByName:
 		sortPackageRowsByName(rows)
 	case sortBySource:
@@ -350,15 +343,15 @@ func (m *Model) rebuildPackageRows() {
 		sortPackageRowsByStatus(rows)
 	}
 
-	if !m.packageSortDir {
+	if !m.packages.sortDir {
 		for i, j := 0, len(rows)-1; i < j; i, j = i+1, j-1 {
 			rows[i], rows[j] = rows[j], rows[i]
 		}
 	}
 
-	m.packageRows = rows
-	if m.packageCursor >= len(rows) {
-		m.packageCursor = imax(0, len(rows)-1)
+	m.packages.rows = rows
+	if m.packages.cursor >= len(rows) {
+		m.packages.cursor = imax(0, len(rows)-1)
 	}
 	m.clampOffset()
 }
@@ -451,25 +444,15 @@ func sortPackageRowsByAvailable(rows []packageRow) {
 	}
 }
 
-func (m *Model) refreshDetail() {
-	if m.packageCursor >= len(m.packageRows) {
-		m.detailView.SetContent("")
+func (m *App) refreshDetail() {
+	if m.packages.cursor >= len(m.packages.rows) {
+		m.detail.vp.SetContent("")
 		return
 	}
-	m.detailView.SetContent(m.renderDetail(m.packageRows[m.packageCursor]))
-	m.detailView.GotoTop()
+	m.detail.vp.SetContent(m.renderDetail(m.packages.rows[m.packages.cursor]))
+	m.detail.vp.GotoTop()
 }
 
-func (m *Model) clampOffset() {
-	visible := m.packageListHeight()
-	if m.packageCursor < m.packageOffset {
-		m.packageOffset = m.packageCursor
-	}
-	pad := 0
-	if m.packageCursor == len(m.packageRows)-1 {
-		pad = 1
-	}
-	if m.packageCursor+pad >= m.packageOffset+visible {
-		m.packageOffset = m.packageCursor + pad - visible + 1
-	}
+func (m *App) clampOffset() {
+	clampListScroll(m.packages.cursor, &m.packages.scroll, m.packageListHeight(), len(m.packages.rows), 1)
 }

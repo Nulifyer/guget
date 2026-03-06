@@ -8,11 +8,11 @@ import (
 	bubble_tea "charm.land/bubbletea/v2"
 )
 
-func (m *Model) updatePackage(useStable bool, scope actionScope) bubble_tea.Cmd {
-	if m.packageCursor >= len(m.packageRows) {
+func (m *App) updatePackage(useStable bool, scope actionScope) bubble_tea.Cmd {
+	if m.packages.cursor >= len(m.packages.rows) {
 		return nil
 	}
-	row := m.packageRows[m.packageCursor]
+	row := m.packages.rows[m.packages.cursor]
 	if row.err != nil {
 		return nil
 	}
@@ -32,7 +32,7 @@ func (m *Model) updatePackage(useStable bool, scope actionScope) bubble_tea.Cmd 
 	return m.applyOrConfirmUpdate(row.ref.Name, target.SemVer.String(), project)
 }
 
-func (m *Model) isPropsProject(p *ParsedProject) bool {
+func (m *App) isPropsProject(p *ParsedProject) bool {
 	for _, pp := range m.ctx.PropsProjects {
 		if pp == p {
 			return true
@@ -42,14 +42,14 @@ func (m *Model) isPropsProject(p *ParsedProject) bool {
 }
 
 // allProjects returns every project (parsed + props) for propagation purposes.
-func (m *Model) allProjects() []*ParsedProject {
+func (m *App) allProjects() []*ParsedProject {
 	all := make([]*ParsedProject, 0, len(m.ctx.ParsedProjects)+len(m.ctx.PropsProjects))
 	all = append(all, m.ctx.ParsedProjects...)
 	all = append(all, m.ctx.PropsProjects...)
 	return all
 }
 
-func (m *Model) applyVersion(pkgName, version string, targetProject *ParsedProject) bubble_tea.Cmd {
+func (m *App) applyVersion(pkgName, version string, targetProject *ParsedProject) bubble_tea.Cmd {
 	projects := m.ctx.ParsedProjects
 	if targetProject != nil {
 		projects = []*ParsedProject{targetProject}
@@ -133,7 +133,7 @@ func (m *Model) applyVersion(pkgName, version string, targetProject *ParsedProje
 	}
 }
 
-func (m *Model) restore(scope actionScope) bubble_tea.Cmd {
+func (m *App) restore(scope actionScope) bubble_tea.Cmd {
 	m.ctx.Restoring = true
 	if scope == scopeSelected {
 		sel := m.selectedProject()
@@ -166,7 +166,7 @@ func runDotnetRestore(projects []*ParsedProject) bubble_tea.Cmd {
 	}
 }
 
-func (m *Model) removePackage(pkgName string) bubble_tea.Cmd {
+func (m *App) removePackage(pkgName string) bubble_tea.Cmd {
 	targetProject := m.selectedProject() // nil = all projects
 	var toWrite []string
 	var propsSource string
@@ -229,8 +229,8 @@ func (m *Model) removePackage(pkgName string) bubble_tea.Cmd {
 	}
 
 	m.rebuildPackageRows()
-	if m.packageCursor >= len(m.packageRows) && len(m.packageRows) > 0 {
-		m.packageCursor = len(m.packageRows) - 1
+	if m.packages.cursor >= len(m.packages.rows) && len(m.packages.rows) > 0 {
+		m.packages.cursor = len(m.packages.rows) - 1
 	}
 	m.clampOffset()
 	m.refreshDetail()

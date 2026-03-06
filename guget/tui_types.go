@@ -153,32 +153,67 @@ type releaseNotesReadyMsg struct {
 	err     error
 }
 
+// --- Panel state types ---
+
+type projectPanel struct {
+	sectionBase // baseWidth=30, minWidth=10
+	cursor      int
+	scroll      int // list scroll offset
+	items       []projectItem
+}
+
+type packagePanel struct {
+	cursor   int
+	scroll   int
+	rows     []packageRow
+	sortMode packageSortMode
+	sortDir  bool
+}
+
+type detailPanel struct {
+	sectionBase // baseWidth=50, minWidth=10
+	vp          bubbles_viewport.Model
+}
+
+type logPanel struct {
+	vp bubbles_viewport.Model
+}
+
 // --- Overlay state types ---
 
 type depTreeOverlay struct {
-	active  bool
-	loading bool // true while dotnet list is running (T key)
-	content string
-	err     error
-	vp      bubbles_viewport.Model
-	title   string
+	sectionBase // basePct=80, minWidth=40, maxMargin=4
+	loading     bool // true while dotnet list is running (T key)
+	content     string
+	err         error
+	vp          bubbles_viewport.Model
+	title       string
 }
 
 type releaseNotesOverlay struct {
-	active     bool
-	loading    bool
-	focusRight bool             // false = release list, true = notes viewport
-	releases   []GitHubRelease  // list of release tags
-	cursor     int              // selected release index
-	notes      string           // rendered release notes body
-	notesURL   string           // link to the release on GitHub
-	err        error
-	vp         bubbles_viewport.Model
-	title      string
-	owner      string // GitHub owner
-	repo       string // GitHub repo name
+	sectionBase // basePct=85, minWidth=60, maxMargin=4
+	loading     bool
+	focusRight  bool             // false = release list, true = notes viewport
+	releases    []GitHubRelease  // list of release tags
+	cursor      int              // selected release index
+	notes       string           // rendered release notes body
+	notesURL    string           // link to the release on GitHub
+	err         error
+	vp          bubbles_viewport.Model
+	title       string
+	owner       string // GitHub owner
+	repo        string // GitHub repo name
 	// fallback: nuspec release notes (non-git or GitHub fetch failed)
 	nuspecNotes string
+}
+
+type sourcesOverlay struct {
+	sectionBase // baseWidth=90, minWidth=40, maxMargin=4
+}
+
+type helpOverlay struct {
+	sectionBase // basePct=60, minWidth=56, maxMargin=4
+	vp          bubbles_viewport.Model
 }
 
 // --- Data display types ---
@@ -286,7 +321,7 @@ func (r packageRow) statusStyle() lipgloss.Style {
 // --- Component state types ---
 
 type versionPicker struct {
-	active        bool
+	sectionBase   // baseWidth=50, minWidth=40, maxMargin=4
 	pkgName       string
 	versions      []PackageVersion
 	cursor        int
@@ -303,7 +338,7 @@ func (vp *versionPicker) selectedVersion() *PackageVersion {
 }
 
 type packageSearch struct {
-	active          bool
+	sectionBase     // baseWidth=90, minWidth=56, maxMargin=4
 	input           bubbles_textinpute.Model
 	debounceID      int
 	lastQuery       string
@@ -317,19 +352,19 @@ type packageSearch struct {
 }
 
 type confirmRemove struct {
-	active  bool
+	sectionBase // baseWidth=48, minWidth=36, maxMargin=4
 	pkgName string
 }
 
 type confirmUpdate struct {
-	active     bool
+	sectionBase // baseWidth=52, minWidth=40, maxMargin=4
 	pkgName    string
 	newVersion string
 	project    *ParsedProject
 }
 
 type locationPicker struct {
-	active        bool
+	sectionBase   // baseWidth=80, minWidth=60, maxMargin=4
 	pkgName       string
 	version       string
 	targets       []AddTarget

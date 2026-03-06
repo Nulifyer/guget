@@ -7,89 +7,94 @@ import (
 	lipgloss "charm.land/lipgloss/v2"
 )
 
-func (m *Model) handlePickerKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
+func (s *versionPicker) FooterKeys() []kv {
+	return []kv{{"↑↓", "nav"}, {"u/U", "update/all"}, {"esc", "close"}}
+}
+
+func (s *versionPicker) HandleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 	switch msg.String() {
 	case "[":
-		adjustOffset(&m.overlayWidthOffset, -4, m.ctx.Width, 30, m.ctx.Width-4)
+		s.Resize(-4)
 		return nil
 	case "]":
-		adjustOffset(&m.overlayWidthOffset, 4, m.ctx.Width, 30, m.ctx.Width-4)
+		s.Resize(4)
 		return nil
 	case "esc", "q":
-		m.overlayWidthOffset = 0
-		m.picker.active = false
-		m.picker.addMode = false
-		m.picker.targetProject = nil
-		m.ctx.StatusLine = ""
+		s.closeOverlay()
+		s.addMode = false
+		s.targetProject = nil
 	case "up", "k":
-		if m.picker.cursor > 0 {
-			m.picker.cursor--
+		if s.cursor > 0 {
+			s.cursor--
 		}
 	case "down", "j":
-		if m.picker.cursor < len(m.picker.versions)-1 {
-			m.picker.cursor++
+		if s.cursor < len(s.versions)-1 {
+			s.cursor++
 		}
 	case "u":
-		return m.applyPickerVersion(scopeSelected)
+		return s.applyPickerVersion(scopeSelected)
 	case "U":
-		return m.applyPickerVersion(scopeAll)
+		return s.applyPickerVersion(scopeAll)
 	case "enter":
-		if v := m.picker.selectedVersion(); v != nil {
-			m.overlayWidthOffset = 0
-			m.picker.active = false
-			if m.picker.addMode && m.picker.targetProject != nil {
-				return m.openLocationPickerOrAdd(m.picker.pkgName, v.SemVer.String(), m.picker.targetProject)
+		if v := s.selectedVersion(); v != nil {
+			s.closeOverlay()
+			if s.addMode && s.targetProject != nil {
+				return s.app.openLocationPickerOrAdd(s.pkgName, v.SemVer.String(), s.targetProject)
 			}
-			return m.applyOrConfirmUpdate(m.picker.pkgName, v.SemVer.String(), m.picker.targetProject)
+			return s.app.applyOrConfirmUpdate(s.pkgName, v.SemVer.String(), s.targetProject)
 		}
 	}
 	return nil
 }
 
-func (m *Model) applyPickerVersion(scope actionScope) bubble_tea.Cmd {
-	v := m.picker.selectedVersion()
+func (s *versionPicker) applyPickerVersion(scope actionScope) bubble_tea.Cmd {
+	v := s.selectedVersion()
 	if v == nil {
 		return nil
 	}
-	m.overlayWidthOffset = 0
-	m.picker.active = false
-	if m.picker.addMode && m.picker.targetProject != nil {
-		return m.openLocationPickerOrAdd(m.picker.pkgName, v.SemVer.String(), m.picker.targetProject)
+	s.closeOverlay()
+	if s.addMode && s.targetProject != nil {
+		return s.app.openLocationPickerOrAdd(s.pkgName, v.SemVer.String(), s.targetProject)
 	}
 	var project *ParsedProject
 	if scope == scopeSelected {
-		project = m.selectedProject()
+		project = s.app.selectedProject()
 	}
-	return m.applyOrConfirmUpdate(m.picker.pkgName, v.SemVer.String(), project)
+	return s.app.applyOrConfirmUpdate(s.pkgName, v.SemVer.String(), project)
 }
 
-func (m *Model) openVersionPicker() {
-	if m.packageCursor >= len(m.packageRows) {
+func newVersionPicker(m *App, pkgName string, versions []PackageVersion, targets Set[TargetFramework], project *ParsedProject, addMode bool) versionPicker {
+	return versionPicker{
+		sectionBase:   sectionBase{app: m, baseWidth: 50, minWidth: 40, maxMargin: 4, active: true},
+		pkgName:       pkgName,
+		versions:      versions,
+		cursor:        defaultVersionCursor(versions, targets),
+		targets:       targets,
+		addMode:       addMode,
+		targetProject: project,
+	}
+}
+
+func (m *App) openVersionPicker() {
+	if m.packages.cursor >= len(m.packages.rows) {
 		return
 	}
-	row := m.packageRows[m.packageCursor]
+	row := m.packages.rows[m.packages.cursor]
 	if row.info == nil {
 		return
 	}
 	m.ctx.StatusLine = ""
-	m.picker = versionPicker{
-		active:        true,
-		pkgName:       row.ref.Name,
-		versions:      row.info.Versions,
-		cursor:        defaultVersionCursor(row.info.Versions, row.project.TargetFrameworks),
-		targets:       row.project.TargetFrameworks, // used for compatibility display only
-		targetProject: m.selectedProject(),          // nil = all projects, specific = scoped
-	}
+	m.picker = newVersionPicker(m, row.ref.Name, row.info.Versions, row.project.TargetFrameworks, m.selectedProject(), false)
 }
 
-func (m Model) renderPickerOverlay() string {
-	w := clampW(50+m.overlayWidthOffset, 40, m.ctx.Width-4)
+func (s *versionPicker) Render() string {
+	w := s.Width()
 	maxVisible := 16
-	versions := m.picker.versions
+	versions := s.versions
 
 	start := 0
-	if m.picker.cursor > maxVisible-1 {
-		start = m.picker.cursor - maxVisible + 1
+	if s.cursor > maxVisible-1 {
+		start = s.cursor - maxVisible + 1
 	}
 	end := start + maxVisible
 	if end > len(versions) {
@@ -99,7 +104,7 @@ func (m Model) renderPickerOverlay() string {
 	// Look up package-level info for deprecation notice and source.
 	var pkgInfo *PackageInfo
 	var pkgSource string
-	if res, ok := m.ctx.Results[m.picker.pkgName]; ok {
+	if res, ok := s.app.ctx.Results[s.pkgName]; ok {
 		pkgInfo = res.pkg
 		pkgSource = res.source
 	}
@@ -109,7 +114,7 @@ func (m Model) renderPickerOverlay() string {
 		styleAccentBold.Render("Select version"),
 	)
 	lines = append(lines,
-		styleSubtle.Render(m.picker.pkgName),
+		styleSubtle.Render(s.pkgName),
 	)
 	// Deprecation notice directly under the name.
 	if pkgInfo != nil && pkgInfo.Deprecated {
@@ -126,8 +131,8 @@ func (m Model) renderPickerOverlay() string {
 
 	for i := start; i < end; i++ {
 		v := versions[i]
-		selected := i == m.picker.cursor
-		compat := versionCompatible(v, m.picker.targets)
+		selected := i == s.cursor
+		compat := versionCompatible(v, s.targets)
 		isPre := v.SemVer.IsPreRelease()
 		isVulnerable := len(v.Vulnerabilities) > 0
 
@@ -178,7 +183,7 @@ func (m Model) renderPickerOverlay() string {
 
 		verStr := style.Render(v.SemVer.String())
 		if strings.EqualFold(pkgSource, "nuget.org") || (pkgInfo != nil && pkgInfo.NugetOrgURL != "") {
-			verURL := "https://www.nuget.org/packages/" + m.picker.pkgName + "/" + v.SemVer.String()
+			verURL := "https://www.nuget.org/packages/" + s.pkgName + "/" + v.SemVer.String()
 			verStr = hyperlink(verURL, verStr)
 		}
 		verText := style.Render(prefix) + verStr + extras
@@ -208,5 +213,5 @@ func (m Model) renderPickerOverlay() string {
 		Width(w).
 		Render(strings.Join(lines, "\n"))
 
-	return lipgloss.Place(m.ctx.Width, m.overlayHeight(), lipgloss.Center, lipgloss.Center, box)
+	return s.centerOverlay(box)
 }

@@ -8,7 +8,35 @@ import (
 	lipgloss "charm.land/lipgloss/v2"
 )
 
-func (m Model) renderDetailPanel(w int) string {
+// advisoryLabel extracts a short display label from an advisory URL.
+func advisoryLabel(url string) string {
+	if i := strings.LastIndex(url, "/"); i >= 0 && i < len(url)-1 {
+		return url[i+1:]
+	}
+	return url
+}
+
+func wordWrap(s string, width int) string {
+	words := strings.Fields(s)
+	var lines []string
+	var cur strings.Builder
+	for _, w := range words {
+		if cur.Len()+len(w)+1 > width {
+			lines = append(lines, cur.String())
+			cur.Reset()
+		}
+		if cur.Len() > 0 {
+			cur.WriteString(" ")
+		}
+		cur.WriteString(w)
+	}
+	if cur.Len() > 0 {
+		lines = append(lines, cur.String())
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (m *App) renderDetailPanel(w int) string {
 	s := stylePanel
 	if m.focus == focusDetail {
 		s = s.BorderForeground(colorAccent)
@@ -17,12 +45,12 @@ func (m Model) renderDetailPanel(w int) string {
 	title := styleSubtleBold.Render("Package Detail")
 	divider := styleBorder.Render(strings.Repeat("─", w-4))
 
-	content := lipgloss.JoinVertical(lipgloss.Left, title, divider, m.detailView.View())
+	content := lipgloss.JoinVertical(lipgloss.Left, title, divider, m.detail.vp.View())
 
 	return renderToPanel(s, w, m.bodyOuterHeight(), content)
 }
 
-func (m Model) renderDetail(row packageRow) string {
+func (m *App) renderDetail(row packageRow) string {
 	if row.err != nil {
 		return styleRed.Render("Error: " + row.err.Error())
 	}
@@ -30,21 +58,27 @@ func (m Model) renderDetail(row packageRow) string {
 		return "No data"
 	}
 
-	w := m.detailView.Width() - 2
+	w := m.detail.vp.Width() - 2
 	if w < 10 {
 		w = 10
 	}
 
 	var s strings.Builder
+	s.WriteString(m.renderDetailHeader(row, w))
+	s.WriteString(m.renderDetailVulnerabilities(row))
+	s.WriteString(m.renderDetailDeprecation(row, w))
+	s.WriteString(m.renderDetailSource(row))
+	s.WriteString(m.renderDetailDefinedIn(row))
+	s.WriteString(m.renderDetailProjectVersions(row))
+	s.WriteString(m.renderDetailVersionList(row, w))
+	s.WriteString(m.renderDetailFrameworks(row))
+	return s.String()
+}
 
-	label := func(text string) string {
-		return styleMuted.Render(text)
-	}
-	value := func(text string) string {
-		return styleText.Render(text)
-	}
+func (m *App) renderDetailHeader(row packageRow, w int) string {
+	var s strings.Builder
 
-	// name + verified — link to project URL, nuget.org URL, or constructed nuget.org link
+	// name — link to project URL, nuget.org URL, or constructed nuget.org link
 	pkgLink := row.info.ProjectURL
 	if pkgLink == "" {
 		if row.info.NugetOrgURL != "" {
@@ -58,8 +92,7 @@ func (m Model) renderDetail(row packageRow) string {
 
 	// description
 	if row.info.Description != "" {
-		s.WriteString(styleSubtle.
-			Render(wordWrap(row.info.Description, w)) + "\n\n")
+		s.WriteString(styleSubtle.Render(wordWrap(row.info.Description, w)) + "\n\n")
 	}
 
 	// authors
@@ -68,53 +101,68 @@ func (m Model) renderDetail(row packageRow) string {
 		for a := range row.info.Authors {
 			authors = append(authors, a)
 		}
-		s.WriteString(label("Authors") + "\n")
-		s.WriteString(value(strings.Join(authors, ", ")) + "\n\n")
+		s.WriteString(styleMuted.Render("Authors") + "\n")
+		s.WriteString(styleText.Render(strings.Join(authors, ", ")) + "\n\n")
 	}
 
-	// vulnerabilities in the installed version
-	if row.vulnerable {
-		var vulns []PackageVulnerability
-		for _, v := range row.info.Versions {
-			if v.SemVer.String() == row.ref.Version.String() {
-				vulns = v.Vulnerabilities
-				break
-			}
-		}
-		if len(vulns) > 0 {
-			s.WriteString(styleRedBold.Render("Vulnerabilities") + "\n")
-			for _, vuln := range vulns {
-				sev := vuln.SeverityLabel()
-				var sevStyle lipgloss.Style
-				switch sev {
-				case "critical", "high":
-					sevStyle = styleRedBold
-				case "moderate":
-					sevStyle = styleYellowBold
-				default:
-					sevStyle = styleTextBold
-				}
-				sevStr := sevStyle.Render(sev)
-				label := hyperlink(vuln.AdvisoryURL, styleSubtle.Render(advisoryLabel(vuln.AdvisoryURL)))
-				s.WriteString("  " + sevStr + "  " + label + "\n")
-			}
-			s.WriteString("\n")
+	return s.String()
+}
+
+func (m *App) renderDetailVulnerabilities(row packageRow) string {
+	if !row.vulnerable {
+		return ""
+	}
+	var vulns []PackageVulnerability
+	for _, v := range row.info.Versions {
+		if v.SemVer.String() == row.ref.Version.String() {
+			vulns = v.Vulnerabilities
+			break
 		}
 	}
-
-	// deprecation
-	if row.info.Deprecated {
-		s.WriteString(styleYellowBold.Render("Deprecated") + "\n")
-		if row.info.DeprecationMessage != "" {
-			s.WriteString(value(wordWrap(row.info.DeprecationMessage, w)) + "\n")
-		}
-		if row.info.AlternatePackageID != "" {
-			s.WriteString(label("Use instead: ") + value(row.info.AlternatePackageID) + "\n")
-		}
-		s.WriteString("\n")
+	if len(vulns) == 0 {
+		return ""
 	}
 
-	// source — link to the package page on the source
+	var s strings.Builder
+	s.WriteString(styleRedBold.Render("Vulnerabilities") + "\n")
+	for _, vuln := range vulns {
+		sev := vuln.SeverityLabel()
+		var sevStyle lipgloss.Style
+		switch sev {
+		case "critical", "high":
+			sevStyle = styleRedBold
+		case "moderate":
+			sevStyle = styleYellowBold
+		default:
+			sevStyle = styleTextBold
+		}
+		sevStr := sevStyle.Render(sev)
+		label := hyperlink(vuln.AdvisoryURL, styleSubtle.Render(advisoryLabel(vuln.AdvisoryURL)))
+		s.WriteString("  " + sevStr + "  " + label + "\n")
+	}
+	s.WriteString("\n")
+	return s.String()
+}
+
+func (m *App) renderDetailDeprecation(row packageRow, w int) string {
+	if !row.info.Deprecated {
+		return ""
+	}
+	var s strings.Builder
+	s.WriteString(styleYellowBold.Render("Deprecated") + "\n")
+	if row.info.DeprecationMessage != "" {
+		s.WriteString(styleText.Render(wordWrap(row.info.DeprecationMessage, w)) + "\n")
+	}
+	if row.info.AlternatePackageID != "" {
+		s.WriteString(styleMuted.Render("Use instead: ") + styleText.Render(row.info.AlternatePackageID) + "\n")
+	}
+	s.WriteString("\n")
+	return s.String()
+}
+
+func (m *App) renderDetailSource(row packageRow) string {
+	var s strings.Builder
+
 	sourceURL := ""
 	for _, svc := range m.ctx.NugetServices {
 		if strings.EqualFold(svc.SourceName(), row.source) {
@@ -122,48 +170,57 @@ func (m Model) renderDetail(row packageRow) string {
 			break
 		}
 	}
-	s.WriteString(label("Source") + "\n")
+	s.WriteString(styleMuted.Render("Source") + "\n")
 	s.WriteString(hyperlink(sourceURL, styleSubtle.Render(row.source)) + "\n")
 	if row.info.NugetOrgURL != "" && !strings.EqualFold(row.source, "nuget.org") {
 		s.WriteString(hyperlink(row.info.NugetOrgURL, styleMuted.Render("nuget.org")) + "\n")
 	}
 	s.WriteString("\n")
+	return s.String()
+}
 
-	// show defining file if it's from a .props file
-	if sel := m.selectedProject(); sel != nil {
-		sourceFile := sel.SourceFileForPackage(row.ref.Name)
-		if sourceFile != sel.FilePath {
-			s.WriteString(label("Defined in") + "\n")
-			s.WriteString(styleCyan.
-				Render(filepath.Base(sourceFile)) + "\n\n")
-		}
+func (m *App) renderDetailDefinedIn(row packageRow) string {
+	sel := m.selectedProject()
+	if sel == nil {
+		return ""
+	}
+	sourceFile := sel.SourceFileForPackage(row.ref.Name)
+	if sourceFile == sel.FilePath {
+		return ""
+	}
+	return styleMuted.Render("Defined in") + "\n" +
+		styleCyan.Render(filepath.Base(sourceFile)) + "\n\n"
+}
+
+func (m *App) renderDetailProjectVersions(row packageRow) string {
+	if !row.diverged && m.selectedProject() != nil {
+		return ""
 	}
 
-	// diverged project breakdown
-	if row.diverged || m.selectedProject() == nil {
-		s.WriteString(label("Project versions") + "\n")
-		for _, p := range m.ctx.ParsedProjects {
-			for ref := range p.Packages {
-				if ref.Name == row.ref.Name {
-					proj := styleSubtle.
-						Render(fmt.Sprintf("  %-20s", truncate(p.FileName, 20)))
-					ver := styleText.Render(ref.Version.String())
-					if ref.Locked {
-						ver = styleYellow.Render("[") + ver + styleYellow.Render("]")
-					}
-					line := proj + " " + ver
-					sourceFile := p.SourceFileForPackage(ref.Name)
-					if sourceFile != p.FilePath {
-						line += " " + styleCyan.
-							Render("("+filepath.Base(sourceFile)+")")
-					}
-					s.WriteString(line + "\n")
+	var s strings.Builder
+	s.WriteString(styleMuted.Render("Project versions") + "\n")
+	for _, p := range m.ctx.ParsedProjects {
+		for ref := range p.Packages {
+			if ref.Name == row.ref.Name {
+				proj := styleSubtle.Render(fmt.Sprintf("  %-20s", truncate(p.FileName, 20)))
+				ver := styleText.Render(ref.Version.String())
+				if ref.Locked {
+					ver = styleYellow.Render("[") + ver + styleYellow.Render("]")
 				}
+				line := proj + " " + ver
+				sourceFile := p.SourceFileForPackage(ref.Name)
+				if sourceFile != p.FilePath {
+					line += " " + styleCyan.Render("("+filepath.Base(sourceFile)+")")
+				}
+				s.WriteString(line + "\n")
 			}
 		}
-		s.WriteString("\n")
 	}
+	s.WriteString("\n")
+	return s.String()
+}
 
+func (m *App) renderDetailVersionList(row packageRow, w int) string {
 	// versions — all stable releases + only the latest pre-release
 	var displayVersions []PackageVersion
 	preAdded := false
@@ -178,12 +235,10 @@ func (m Model) renderDetail(row packageRow) string {
 		}
 	}
 
-	s.WriteString(label("Versions") + "\n")
-	const limit = 12 // max version rows shown before "… and N more"
+	var s strings.Builder
+	s.WriteString(styleMuted.Render("Versions") + "\n")
+	const limit = 12
 
-	// Identify versions that must always appear even if beyond the limit:
-	// 1. The currently installed version.
-	// 2. The latest non-pre-release patch in the same major.minor series.
 	installedStr := row.ref.Version.String()
 	oldestStr := ""
 	if row.diverged {
@@ -194,7 +249,7 @@ func (m Model) renderDetail(row packageRow) string {
 	for _, v := range displayVersions {
 		if v.SemVer.Major == curMajor && v.SemVer.Minor == curMinor && !v.SemVer.IsPreRelease() {
 			latestPatchStr = v.SemVer.String()
-			break // displayVersions is newest-first
+			break
 		}
 	}
 
@@ -268,22 +323,24 @@ func (m Model) renderDetail(row packageRow) string {
 	if len(displayVersions) > limit {
 		hidden := len(displayVersions) - limit - len(pinnedAfter)
 		if hidden > 0 {
-			s.WriteString(styleMuted.
-				Render(fmt.Sprintf("  … and %d more", hidden)) + "\n")
+			s.WriteString(styleMuted.Render(fmt.Sprintf("  … and %d more", hidden)) + "\n")
 		}
 		for _, pv := range pinnedAfter {
 			renderVRow(pv)
 		}
 	}
 
-	// frameworks
-	if row.latestCompatible != nil && len(row.latestCompatible.Frameworks) > 0 {
-		s.WriteString("\n" + label("Frameworks") + "\n")
-		for _, fw := range row.latestCompatible.Frameworks {
-			s.WriteString(styleSubtle.
-				Render("  "+fw.String()) + "\n")
-		}
-	}
+	return s.String()
+}
 
+func (m *App) renderDetailFrameworks(row packageRow) string {
+	if row.latestCompatible == nil || len(row.latestCompatible.Frameworks) == 0 {
+		return ""
+	}
+	var s strings.Builder
+	s.WriteString("\n" + styleMuted.Render("Frameworks") + "\n")
+	for _, fw := range row.latestCompatible.Frameworks {
+		s.WriteString(styleSubtle.Render("  "+fw.String()) + "\n")
+	}
 	return s.String()
 }

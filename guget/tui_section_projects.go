@@ -4,7 +4,7 @@ import (
 	"strings"
 )
 
-func (m Model) renderProjectPanel(w int) string {
+func (m *App) renderProjectPanel(w int) string {
 	focused := m.focus == focusProjects
 	innerW := w - 2 // border only, no padding
 	visibleH := m.projectListHeight()
@@ -17,14 +17,14 @@ func (m Model) renderProjectPanel(w int) string {
 		styleBorder.Render(strings.Repeat("─", innerW)),
 	)
 
-	end := m.projectOffset + visibleH
-	if end > len(m.projectItems) {
-		end = len(m.projectItems)
+	end := m.projects.scroll + visibleH
+	if end > len(m.projects.items) {
+		end = len(m.projects.items)
 	}
 
-	for i := m.projectOffset; i < end; i++ {
-		item := m.projectItems[i]
-		selected := i == m.projectCursor
+	for i := m.projects.scroll; i < end; i++ {
+		item := m.projects.items[i]
+		selected := i == m.projects.cursor
 
 		title := item.Title()
 		desc := item.Description()

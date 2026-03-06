@@ -12,23 +12,33 @@ import (
 
 const releaseListWidth = 22 // width of the left release list panel
 
-func (m *Model) openReleaseNotes() bubble_tea.Cmd {
-	if m.packageCursor >= len(m.packageRows) {
+func newReleaseNotesOverlay(m *App, title string) releaseNotesOverlay {
+	rn := releaseNotesOverlay{
+		sectionBase: sectionBase{app: m, basePct: 85, minWidth: 60, maxMargin: 4, active: true},
+		loading:     true,
+		title:       title,
+	}
+	_, rightW := rn.panelWidths()
+	_, overlayH := rn.overlaySize()
+	vpH := overlayH - 4
+	if vpH < 4 {
+		vpH = 4
+	}
+	rn.vp = bubbles_viewport.New(bubbles_viewport.WithWidth(rightW), bubbles_viewport.WithHeight(vpH))
+	return rn
+}
+
+func (m *App) openReleaseNotes() bubble_tea.Cmd {
+	if m.packages.cursor >= len(m.packages.rows) {
 		return nil
 	}
-	row := m.packageRows[m.packageCursor]
+	row := m.packages.rows[m.packages.cursor]
 	if row.info == nil {
 		return nil
 	}
 	m.ctx.StatusLine = ""
 
-	_, rightW := m.releaseNotesPanelWidths()
-	_, overlayH := m.releaseNotesOverlaySize()
-	vpH := overlayH - 4 // title(1) + titleDivider(1) + colHeaders(1) + headerBorder(1)
-	if vpH < 4 {
-		vpH = 4
-	}
-	vp := bubbles_viewport.New(bubbles_viewport.WithWidth(rightW), bubbles_viewport.WithHeight(vpH))
+	title := row.info.ID + " — Release Notes"
 
 	// Check for git repository URL (prefer RepositoryURL, fall back to ProjectURL)
 	repoURL := row.info.RepositoryURL
@@ -40,27 +50,19 @@ func (m *Model) openReleaseNotes() bubble_tea.Cmd {
 
 	if owner != "" && repo != "" {
 		logTrace("openReleaseNotes: %s → GitHub %s/%s, fetching release list", row.info.ID, owner, repo)
-		vp.SetContent(m.ctx.Spinner.View() + " " + styleSubtle.Render("Loading releases…"))
-		m.releaseNotes = releaseNotesOverlay{
-			active:  true,
-			loading: true,
-			title:   row.info.ID + " — Release Notes",
-			vp:      vp,
-			owner:   owner,
-			repo:    repo,
-		}
-		return m.fetchReleaseListCmd(owner, repo)
+		rn := newReleaseNotesOverlay(m, title)
+		rn.owner = owner
+		rn.repo = repo
+		rn.vp.SetContent(m.ctx.Spinner.View() + " " + styleSubtle.Render("Loading releases…"))
+		m.releaseNotes = rn
+		return m.releaseNotes.fetchReleaseListCmd(owner, repo)
 	}
 
 	// No GitHub repo in metadata — try nuspec for repo URL or release notes.
 	logTrace("openReleaseNotes: %s → no GitHub repo in metadata, trying nuspec", row.info.ID)
-	vp.SetContent(m.ctx.Spinner.View() + " " + styleSubtle.Render("Checking NuGet release notes…"))
-	m.releaseNotes = releaseNotesOverlay{
-		active:  true,
-		loading: true,
-		title:   row.info.ID + " — Release Notes",
-		vp:      vp,
-	}
+	rn := newReleaseNotesOverlay(m, title)
+	rn.vp.SetContent(m.ctx.Spinner.View() + " " + styleSubtle.Render("Checking NuGet release notes…"))
+	m.releaseNotes = rn
 	pkgID := row.info.ID
 	version := row.info.LatestVersion
 	var svc *NugetService
@@ -92,121 +94,122 @@ func (m *Model) openReleaseNotes() bubble_tea.Cmd {
 	}
 }
 
-func (m *Model) fetchReleaseListCmd(owner, repo string) bubble_tea.Cmd {
+func (s *releaseNotesOverlay) fetchReleaseListCmd(owner, repo string) bubble_tea.Cmd {
 	return func() bubble_tea.Msg {
 		releases, err := FetchGitHubReleases(owner, repo, 20)
 		return releaseListReadyMsg{releases: releases, err: err}
 	}
 }
 
-func (m *Model) fetchReleaseNotesCmd(rel GitHubRelease) bubble_tea.Cmd {
+func (s *releaseNotesOverlay) fetchReleaseNotesCmd(rel GitHubRelease) bubble_tea.Cmd {
 	return func() bubble_tea.Msg {
 		return releaseNotesReadyMsg{body: rel.Body, htmlURL: rel.HTMLURL}
 	}
 }
 
-func (m *Model) handleReleaseNotesKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
+func (s *releaseNotesOverlay) FooterKeys() []kv {
+	return []kv{{"tab", "focus"}, {"↑↓", "nav/scroll"}, {"esc", "close"}}
+}
+
+func (s *releaseNotesOverlay) HandleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 	switch msg.String() {
 	case "[":
-		adjustOffset(&m.overlayWidthOffset, -4, m.ctx.Width, 30, m.ctx.Width-4)
-		m.resizeReleaseNotesViewport()
+		s.Resize(-4)
+		s.resizeViewport()
 		return nil
 	case "]":
-		adjustOffset(&m.overlayWidthOffset, 4, m.ctx.Width, 30, m.ctx.Width-4)
-		m.resizeReleaseNotesViewport()
+		s.Resize(4)
+		s.resizeViewport()
 		return nil
 	case "esc", "q":
-		m.overlayWidthOffset = 0
-		m.releaseNotes.active = false
-		m.ctx.StatusLine = ""
+		s.closeOverlay()
 		return nil
 	case "tab", "shift+tab":
-		m.releaseNotes.focusRight = !m.releaseNotes.focusRight
+		s.focusRight = !s.focusRight
 		return nil
 	case "up", "k":
-		if m.releaseNotes.focusRight {
+		if s.focusRight {
 			// scroll notes viewport
 			var cmd bubble_tea.Cmd
-			m.releaseNotes.vp, cmd = m.releaseNotes.vp.Update(msg)
+			s.vp, cmd = s.vp.Update(msg)
 			return cmd
 		}
 		// navigate release list
-		if len(m.releaseNotes.releases) > 0 && m.releaseNotes.cursor > 0 {
-			m.releaseNotes.cursor--
-			m.releaseNotes.loading = true
-			return m.fetchReleaseNotesCmd(m.releaseNotes.releases[m.releaseNotes.cursor])
+		if len(s.releases) > 0 && s.cursor > 0 {
+			s.cursor--
+			s.loading = true
+			return s.fetchReleaseNotesCmd(s.releases[s.cursor])
 		}
 		return nil
 	case "down", "j":
-		if m.releaseNotes.focusRight {
+		if s.focusRight {
 			var cmd bubble_tea.Cmd
-			m.releaseNotes.vp, cmd = m.releaseNotes.vp.Update(msg)
+			s.vp, cmd = s.vp.Update(msg)
 			return cmd
 		}
-		if len(m.releaseNotes.releases) > 0 && m.releaseNotes.cursor < len(m.releaseNotes.releases)-1 {
-			m.releaseNotes.cursor++
-			m.releaseNotes.loading = true
-			return m.fetchReleaseNotesCmd(m.releaseNotes.releases[m.releaseNotes.cursor])
+		if len(s.releases) > 0 && s.cursor < len(s.releases)-1 {
+			s.cursor++
+			s.loading = true
+			return s.fetchReleaseNotesCmd(s.releases[s.cursor])
 		}
 		return nil
 	default:
 		// pass everything else to viewport (pgup/pgdn, home/end, etc.)
 		var cmd bubble_tea.Cmd
-		m.releaseNotes.vp, cmd = m.releaseNotes.vp.Update(msg)
+		s.vp, cmd = s.vp.Update(msg)
 		return cmd
 	}
 }
 
-func (m Model) releaseNotesOverlaySize() (w, h int) {
-	w = clampW(m.ctx.Width*85/100+m.overlayWidthOffset, 60, m.ctx.Width-4)
-	h = m.overlayHeight() - 4
+func (s *releaseNotesOverlay) overlaySize() (w, h int) {
+	w = s.Width()
+	h = s.app.overlayHeight() - 4
 	return
 }
 
-func (m Model) buildReleaseNotesContent() string {
-	rn := m.releaseNotes
-	var s strings.Builder
+func (s *releaseNotesOverlay) buildContent() string {
+	var sb strings.Builder
 
-	if len(rn.releases) > 0 {
-		rel := rn.releases[rn.cursor]
+	if len(s.releases) > 0 {
+		rel := s.releases[s.cursor]
 
 		// Title
 		title := rel.TagName
 		if rel.Name != "" && rel.Name != rel.TagName {
 			title = rel.Name + " (" + rel.TagName + ")"
 		}
-		s.WriteString(styleAccentBold.Render(title))
+		sb.WriteString(styleAccentBold.Render(title))
 
 		// Date
 		if rel.PublishedAt != "" {
 			if t, err := time.Parse(time.RFC3339, rel.PublishedAt); err == nil {
-				s.WriteString("  " + styleMuted.Render(t.Format("2006-01-02")))
+				sb.WriteString("  " + styleMuted.Render(t.Format("2006-01-02")))
 			}
 		}
 
 		// Link
-		if rn.notesURL != "" {
-			s.WriteString("  " + hyperlink(rn.notesURL, styleSubtle.Render("view on GitHub")))
+		if s.notesURL != "" {
+			sb.WriteString("  " + hyperlink(s.notesURL, styleSubtle.Render("view on GitHub")))
 		}
 
-		s.WriteString("\n")
-		s.WriteString(styleBorder.Render(strings.Repeat("─", m.releaseNotes.vp.Width())) + "\n")
+		sb.WriteString("\n")
+		sb.WriteString(styleBorder.Render(strings.Repeat("─", s.vp.Width())) + "\n")
 	}
 
-	body := rn.notes
+	body := s.notes
 	if body == "" {
 		body = styleMuted.Render("(no release notes)")
 	}
 	// Word-wrap the body to fit within the viewport width
-	if m.releaseNotes.vp.Width() > 0 {
-		body = lipgloss.NewStyle().Width(m.releaseNotes.vp.Width()).Render(body)
+	if s.vp.Width() > 0 {
+		body = lipgloss.NewStyle().Width(s.vp.Width()).Render(body)
 	}
-	s.WriteString(body)
-	return s.String()
+	sb.WriteString(body)
+	return sb.String()
 }
 
-func (m *Model) releaseNotesPanelWidths() (listW, rightW int) {
-	overlayW, _ := m.releaseNotesOverlaySize()
+func (s *releaseNotesOverlay) panelWidths() (listW, rightW int) {
+	overlayW, _ := s.overlaySize()
 	innerW := overlayW - 6 // subtract styleOverlay border(2) + padding(4)
 	listW = releaseListWidth
 	if listW > innerW/3 {
@@ -219,29 +222,29 @@ func (m *Model) releaseNotesPanelWidths() (listW, rightW int) {
 	return
 }
 
-func (m *Model) resizeReleaseNotesViewport() {
-	_, rightW := m.releaseNotesPanelWidths()
-	_, overlayH := m.releaseNotesOverlaySize()
+func (s *releaseNotesOverlay) resizeViewport() {
+	_, rightW := s.panelWidths()
+	_, overlayH := s.overlaySize()
 	// bodyH = overlayH - 4 (title(1) + titleDivider(1) + tableHeader(1) + headerBorder(1))
 	// (overlay padding already subtracted in overlaySize)
 	vpH := overlayH - 4
 	if vpH < 4 {
 		vpH = 4
 	}
-	m.releaseNotes.vp.SetWidth(rightW)
-	m.releaseNotes.vp.SetHeight(vpH)
+	s.vp.SetWidth(rightW)
+	s.vp.SetHeight(vpH)
 	// Re-wrap content at new width
-	if !m.releaseNotes.loading {
-		m.releaseNotes.vp.SetContent(m.buildReleaseNotesContent())
+	if !s.loading {
+		s.vp.SetContent(s.buildContent())
 	}
 }
 
-func (m Model) renderReleaseNotesOverlay() string {
-	overlayW, overlayH := m.releaseNotesOverlaySize()
+func (s *releaseNotesOverlay) Render() string {
+	overlayW, overlayH := s.overlaySize()
 	// innerW is the usable content width inside styleOverlay (border 2 + padding 4 = 6)
 	innerW := overlayW - 6
-	listW, rightW := m.releaseNotesPanelWidths()
-	focusLeft := !m.releaseNotes.focusRight
+	listW, rightW := s.panelWidths()
+	focusLeft := !s.focusRight
 	div := styleBorder.Render("│")
 
 	// bodyH = overlayH minus title(1) + titleDivider(1) + columnHeaders(1) + headerDivider(1)
@@ -252,7 +255,7 @@ func (m Model) renderReleaseNotesOverlay() string {
 	}
 
 	// ── Title ──
-	title := styleAccentBold.Render(m.releaseNotes.title)
+	title := styleAccentBold.Render(s.title)
 	titleDivider := styleBorder.Render(strings.Repeat("─", innerW))
 
 	// ── Column headers ──
@@ -274,12 +277,12 @@ func (m Model) renderReleaseNotesOverlay() string {
 		maxTagW = 5
 	}
 	var allLeft []string
-	if m.releaseNotes.loading && len(m.releaseNotes.releases) == 0 {
-		allLeft = append(allLeft, " "+m.ctx.Spinner.View()+" "+styleSubtle.Render("Loading…"))
+	if s.loading && len(s.releases) == 0 {
+		allLeft = append(allLeft, " "+s.app.ctx.Spinner.View()+" "+styleSubtle.Render("Loading…"))
 	}
-	for i, rel := range m.releaseNotes.releases {
+	for i, rel := range s.releases {
 		tag := truncate(rel.TagName, maxTagW)
-		if i == m.releaseNotes.cursor {
+		if i == s.cursor {
 			allLeft = append(allLeft, styleAccent.Render(" ▶ "+tag))
 		} else {
 			allLeft = append(allLeft, styleMuted.Render("   "+tag))
@@ -287,8 +290,8 @@ func (m Model) renderReleaseNotesOverlay() string {
 	}
 	// Scroll window: keep cursor visible
 	scrollStart := 0
-	if m.releaseNotes.cursor >= bodyH {
-		scrollStart = m.releaseNotes.cursor - bodyH + 1
+	if s.cursor >= bodyH {
+		scrollStart = s.cursor - bodyH + 1
 	}
 	var leftLines []string
 	for i := scrollStart; i < len(allLeft) && i < scrollStart+bodyH; i++ {
@@ -301,20 +304,20 @@ func (m Model) renderReleaseNotesOverlay() string {
 
 	// ── Right panel: viewport or loading state ──
 	var rightLines []string
-	if m.releaseNotes.loading {
-		line := " " + m.ctx.Spinner.View() + " " + styleSubtle.Render("Loading release notes…")
+	if s.loading {
+		line := " " + s.app.ctx.Spinner.View() + " " + styleSubtle.Render("Loading release notes…")
 		rightLines = append(rightLines, padRight(line, rightW))
 		for len(rightLines) < bodyH {
 			rightLines = append(rightLines, strings.Repeat(" ", rightW))
 		}
-	} else if len(m.releaseNotes.releases) == 0 && m.releaseNotes.nuspecNotes != "" {
-		line := " " + styleText.Render(m.releaseNotes.nuspecNotes)
+	} else if len(s.releases) == 0 && s.nuspecNotes != "" {
+		line := " " + styleText.Render(s.nuspecNotes)
 		rightLines = append(rightLines, padRight(line, rightW))
 		for len(rightLines) < bodyH {
 			rightLines = append(rightLines, strings.Repeat(" ", rightW))
 		}
 	} else {
-		vpView := m.releaseNotes.vp.View()
+		vpView := s.vp.View()
 		rightLines = strings.Split(vpView, "\n")
 	}
 
@@ -344,5 +347,5 @@ func (m Model) renderReleaseNotesOverlay() string {
 		Width(overlayW).
 		Render(content)
 
-	return lipgloss.Place(m.ctx.Width, m.overlayHeight(), lipgloss.Center, lipgloss.Center, box)
+	return s.centerOverlay(box)
 }

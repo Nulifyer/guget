@@ -6,13 +6,13 @@ import (
 	lipgloss "charm.land/lipgloss/v2"
 )
 
-func (m *Model) updateLogView() {
+func (m *App) updateLogView() {
 	var colored []string
 	for _, line := range m.ctx.LogLines {
 		colored = append(colored, colorizeLogLine(line))
 	}
-	m.logView.SetContent(strings.Join(colored, "\n"))
-	m.logView.GotoBottom()
+	m.log.vp.SetContent(strings.Join(colored, "\n"))
+	m.log.vp.GotoBottom()
 }
 
 func colorizeLogLine(line string) string {
@@ -32,7 +32,7 @@ func colorizeLogLine(line string) string {
 	}
 }
 
-func (m Model) renderLogPanel() string {
+func (m *App) renderLogPanel() string {
 	s := stylePanel
 	if m.focus == focusLog {
 		s = s.BorderForeground(colorAccent)
@@ -40,7 +40,7 @@ func (m Model) renderLogPanel() string {
 
 	title := styleAccentBold.Render("Logs")
 	div := styleBorder.Render(strings.Repeat("─", m.layoutWidth()-4))
-	content := lipgloss.JoinVertical(lipgloss.Left, title, div, m.logView.View())
+	content := lipgloss.JoinVertical(lipgloss.Left, title, div, m.log.vp.View())
 
 	return renderToPanel(s, m.layoutWidth(), logPanelOuterHeight, content)
 }

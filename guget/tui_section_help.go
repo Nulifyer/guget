@@ -7,27 +7,29 @@ import (
 	lipgloss "charm.land/lipgloss/v2"
 )
 
-func (m *Model) handleHelpKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
+func (s *helpOverlay) FooterKeys() []kv {
+	return []kv{{"↑↓", "scroll"}, {"esc", "close"}}
+}
+
+func (s *helpOverlay) HandleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 	switch msg.String() {
 	case "[":
-		adjustOffset(&m.overlayWidthOffset, -4, m.ctx.Width*60/100, 56, m.ctx.Width-4)
-		m.refreshHelpView()
+		s.Resize(-4)
+		s.refreshView()
 	case "]":
-		adjustOffset(&m.overlayWidthOffset, 4, m.ctx.Width*60/100, 56, m.ctx.Width-4)
-		m.refreshHelpView()
+		s.Resize(4)
+		s.refreshView()
 	case "esc", "?", "q":
-		m.overlayWidthOffset = 0
-		m.showHelp = false
-		m.ctx.StatusLine = ""
+		s.closeOverlay()
 	default:
 		var cmd bubble_tea.Cmd
-		m.helpView, cmd = m.helpView.Update(msg)
+		s.vp, cmd = s.vp.Update(msg)
 		return cmd
 	}
 	return nil
 }
 
-func (m *Model) refreshHelpView() {
+func (s *helpOverlay) refreshView() {
 	type section struct {
 		title string
 		rows  [][2]string // [key, description]
@@ -131,29 +133,29 @@ func (m *Model) refreshHelpView() {
 			lines = append(lines, k+"  "+d)
 		}
 	}
-	w := clampW(m.ctx.Width*60/100+m.overlayWidthOffset, 56, m.ctx.Width-4)
+	w := s.Width()
 
 	content := strings.Join(lines, "\n")
 	// Available height for content inside the overlay box:
 	// overlay area - border (2) - padding (2) - margin (2)
-	maxH := m.overlayHeight() - 6
+	maxH := s.app.overlayHeight() - 6
 	if maxH < 8 {
 		maxH = 8
 	}
 
-	m.helpView.SetWidth(w - 4)
-	m.helpView.SetHeight(maxH)
-	m.helpView.SetContent(content)
+	s.vp.SetWidth(w - 4)
+	s.vp.SetHeight(maxH)
+	s.vp.SetContent(content)
 }
 
-func (m Model) renderHelpOverlay() string {
-	w := clampW(m.ctx.Width*60/100+m.overlayWidthOffset, 56, m.ctx.Width-4)
+func (s *helpOverlay) Render() string {
+	w := s.Width()
 
-	content := m.helpView.View()
+	content := s.vp.View()
 
 	box := styleOverlay.
 		Width(w).
 		Render(content)
 
-	return lipgloss.Place(m.ctx.Width, m.overlayHeight(), lipgloss.Center, lipgloss.Center, box)
+	return s.centerOverlay(box)
 }

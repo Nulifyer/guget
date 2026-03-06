@@ -4,62 +4,73 @@ import (
 	"strings"
 
 	bubble_tea "charm.land/bubbletea/v2"
-	lipgloss "charm.land/lipgloss/v2"
 )
 
-func (m *Model) handleConfirmRemoveKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
+func newConfirmRemove(m *App, pkgName string) confirmRemove {
+	return confirmRemove{
+		sectionBase: sectionBase{app: m, baseWidth: 48, minWidth: 36, maxMargin: 4, active: true},
+		pkgName:     pkgName,
+	}
+}
+
+func newConfirmUpdate(m *App, pkgName, newVersion string, project *ParsedProject) confirmUpdate {
+	return confirmUpdate{
+		sectionBase: sectionBase{app: m, baseWidth: 52, minWidth: 40, maxMargin: 4, active: true},
+		pkgName:     pkgName,
+		newVersion:  newVersion,
+		project:     project,
+	}
+}
+
+func (s *confirmRemove) FooterKeys() []kv {
+	return []kv{{"enter/y", "confirm"}, {"esc", "cancel"}}
+}
+
+func (s *confirmRemove) HandleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 	switch msg.String() {
 	case "[":
-		adjustOffset(&m.overlayWidthOffset, -4, m.ctx.Width, 30, m.ctx.Width-4)
+		s.Resize(-4)
 		return nil
 	case "]":
-		adjustOffset(&m.overlayWidthOffset, 4, m.ctx.Width, 30, m.ctx.Width-4)
+		s.Resize(4)
 		return nil
 	case "esc", "n", "q":
-		m.overlayWidthOffset = 0
-		m.confirmRemove.active = false
-		m.ctx.StatusLine = ""
+		s.closeOverlay()
 	case "enter", "y":
-		m.overlayWidthOffset = 0
-		m.confirmRemove.active = false
-		return m.removePackage(m.confirmRemove.pkgName)
+		s.closeOverlay()
+		return s.app.removePackage(s.pkgName)
 	}
 	return nil
 }
 
-func (m *Model) handleConfirmUpdateKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
+func (s *confirmUpdate) FooterKeys() []kv {
+	return []kv{{"enter/y", "confirm"}, {"esc", "cancel"}}
+}
+
+func (s *confirmUpdate) HandleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 	switch msg.String() {
 	case "[":
-		adjustOffset(&m.overlayWidthOffset, -4, m.ctx.Width, 30, m.ctx.Width-4)
+		s.Resize(-4)
 		return nil
 	case "]":
-		adjustOffset(&m.overlayWidthOffset, 4, m.ctx.Width, 30, m.ctx.Width-4)
+		s.Resize(4)
 		return nil
 	case "esc", "n", "q":
-		m.overlayWidthOffset = 0
-		m.confirmUpdate.active = false
-		m.ctx.StatusLine = ""
+		s.closeOverlay()
 	case "enter", "y":
-		m.overlayWidthOffset = 0
-		cu := m.confirmUpdate
-		m.confirmUpdate.active = false
-		return m.applyVersion(cu.pkgName, cu.newVersion, cu.project)
+		s.closeOverlay()
+		return s.app.applyVersion(s.pkgName, s.newVersion, s.project)
 	}
 	return nil
 }
 
 // applyOrConfirmUpdate calls applyVersion directly, or opens the lock-confirm
 // overlay if the currently-installed version is pinned with [x.y.z].
-func (m *Model) applyOrConfirmUpdate(pkgName, newVersion string, project *ParsedProject) bubble_tea.Cmd {
+func (m *App) applyOrConfirmUpdate(pkgName, newVersion string, project *ParsedProject) bubble_tea.Cmd {
 	if project != nil {
-		for _, row := range m.packageRows {
+		for _, row := range m.packages.rows {
 			if strings.EqualFold(row.ref.Name, pkgName) && row.ref.Locked {
-				m.confirmUpdate = confirmUpdate{
-					active:     true,
-					pkgName:    pkgName,
-					newVersion: newVersion,
-					project:    project,
-				}
+				m.confirmUpdate = newConfirmUpdate(m, pkgName, newVersion, project)
 				return nil
 			}
 		}
@@ -67,36 +78,35 @@ func (m *Model) applyOrConfirmUpdate(pkgName, newVersion string, project *Parsed
 	return m.applyVersion(pkgName, newVersion, project)
 }
 
-func (m Model) renderConfirmRemoveOverlay() string {
-	w := clampW(48+m.overlayWidthOffset, 36, m.ctx.Width-4)
+func (s *confirmRemove) Render() string {
+	w := s.Width()
 	lines := []string{
 		styleRedBold.Render("Remove package?"),
-		styleSubtle.Render(m.confirmRemove.pkgName),
+		styleSubtle.Render(s.pkgName),
 	}
 	box := styleOverlayDanger.
 		Width(w).
 		Render(strings.Join(lines, "\n"))
-	return lipgloss.Place(m.ctx.Width, m.overlayHeight(), lipgloss.Center, lipgloss.Center, box)
+	return s.centerOverlay(box)
 }
 
-func (m Model) renderConfirmUpdateOverlay() string {
-	w := clampW(52+m.overlayWidthOffset, 40, m.ctx.Width-4)
-	cu := m.confirmUpdate
+func (s *confirmUpdate) Render() string {
+	w := s.Width()
 	pinnedVer := ""
-	for _, row := range m.packageRows {
-		if strings.EqualFold(row.ref.Name, cu.pkgName) {
+	for _, row := range s.app.packages.rows {
+		if strings.EqualFold(row.ref.Name, s.pkgName) {
 			pinnedVer = row.ref.Version.String()
 			break
 		}
 	}
 	lines := []string{
 		styleYellowBold.Render("Version is pinned"),
-		styleSubtle.Render(cu.pkgName) + "  " + styleYellow.Render("["+pinnedVer+"]"),
+		styleSubtle.Render(s.pkgName) + "  " + styleYellow.Render("["+pinnedVer+"]"),
 		"",
-		styleMuted.Render("Update to " + cu.newVersion + " anyway?"),
+		styleMuted.Render("Update to " + s.newVersion + " anyway?"),
 	}
 	box := styleOverlay.
 		Width(w).
 		Render(strings.Join(lines, "\n"))
-	return lipgloss.Place(m.ctx.Width, m.overlayHeight(), lipgloss.Center, lipgloss.Center, box)
+	return s.centerOverlay(box)
 }

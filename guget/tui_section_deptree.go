@@ -21,11 +21,23 @@ func runDepTreeCmd(project *ParsedProject) bubble_tea.Cmd {
 	}
 }
 
-func (m *Model) openDepTree() bubble_tea.Cmd {
-	if m.packageCursor >= len(m.packageRows) {
+func newDepTreeOverlay(m *App, title string, loading bool) depTreeOverlay {
+	dt := depTreeOverlay{
+		sectionBase: sectionBase{app: m, basePct: 80, minWidth: 40, maxMargin: 4, active: true},
+		title:       title,
+		loading:     loading,
+	}
+	m.depTree = dt // assign so depTreeOverlaySize() reads the correct Width()
+	overlayW, overlayH := m.depTreeOverlaySize()
+	dt.vp = bubbles_viewport.New(bubbles_viewport.WithWidth(overlayW-6), bubbles_viewport.WithHeight(overlayH-8))
+	return dt
+}
+
+func (m *App) openDepTree() bubble_tea.Cmd {
+	if m.packages.cursor >= len(m.packages.rows) {
 		return nil
 	}
-	row := m.packageRows[m.packageCursor]
+	row := m.packages.rows[m.packages.cursor]
 	if row.info == nil {
 		return nil
 	}
@@ -38,38 +50,26 @@ func (m *Model) openDepTree() bubble_tea.Cmd {
 			break
 		}
 	}
-	overlayW, overlayH := m.depTreeOverlaySize()
-	vp := bubbles_viewport.New(bubbles_viewport.WithWidth(overlayW-6), bubbles_viewport.WithHeight(overlayH-8))
-	vp.SetContent(m.formatDepGroups(installedVer))
-	m.depTree = depTreeOverlay{
-		active:  true,
-		title:   row.ref.Name + " " + row.ref.Version.String(),
-		content: vp.View(),
-		vp:      vp,
-	}
+	dt := newDepTreeOverlay(m, row.ref.Name+" "+row.ref.Version.String(), false)
+	dt.content = dt.formatDepGroups(installedVer)
+	dt.vp.SetContent(dt.content)
+	m.depTree = dt
 	return nil
 }
 
-func (m *Model) openTransitiveDepTree() bubble_tea.Cmd {
+func (m *App) openTransitiveDepTree() bubble_tea.Cmd {
 	proj := m.selectedProject()
 	if proj == nil {
 		return m.setStatus("▲ Select a project first", true)
 	}
 	m.ctx.StatusLine = ""
-	overlayW, overlayH := m.depTreeOverlaySize()
-	vp := bubbles_viewport.New(bubbles_viewport.WithWidth(overlayW-6), bubbles_viewport.WithHeight(overlayH-8))
-	m.depTree = depTreeOverlay{
-		active:  true,
-		loading: true,
-		title:   proj.FileName + " (transitive packages)",
-		vp:      vp,
-	}
+	m.depTree = newDepTreeOverlay(m, proj.FileName+" (transitive packages)", true)
 	return runDepTreeCmd(proj)
 }
 
-func (m Model) depTreeOverlaySize() (w, h int) {
-	w = clampW(m.ctx.Width*80/100+m.overlayWidthOffset, 40, m.ctx.Width-4)
-	h = m.overlayHeight() - 4 // fill available space (minus box chrome)
+func (m *App) depTreeOverlaySize() (w, h int) {
+	w = m.depTree.Width()
+	h = m.overlayHeight() - 4
 	return
 }
 
@@ -125,7 +125,7 @@ func formatVersionRange(r string) string {
 	return result.String()
 }
 
-func (m *Model) formatDepGroups(v *PackageVersion) string {
+func (s *depTreeOverlay) formatDepGroups(v *PackageVersion) string {
 	if v == nil || len(v.DependencyGroups) == 0 {
 		return styleMuted.Render("(no dependency information available)")
 	}
@@ -152,7 +152,7 @@ func (m *Model) formatDepGroups(v *PackageVersion) string {
 		} else {
 			for _, dep := range dg.Dependencies {
 				icon, iconStyle := " ", styleMuted
-				if row := m.rowByName(dep.ID); row != nil {
+				if row := s.app.rowByName(dep.ID); row != nil {
 					icon, iconStyle = row.statusIcon(), row.statusStyle()
 				}
 				rangeStr := formatVersionRange(dep.Range)
@@ -166,23 +166,14 @@ func (m *Model) formatDepGroups(v *PackageVersion) string {
 	return sb.String()
 }
 
-func (m Model) rowByName(name string) *packageRow {
-	for i := range m.packageRows {
-		if strings.EqualFold(m.packageRows[i].ref.Name, name) {
-			return &m.packageRows[i]
-		}
+func (s *depTreeOverlay) buildContent() string {
+	if s.err != nil {
+		return styleRed.Render("Error: " + s.err.Error())
 	}
-	return nil
-}
-
-func (m *Model) buildDepTreeContent() string {
-	if m.depTree.err != nil {
-		return styleRed.Render("Error: " + m.depTree.err.Error())
-	}
-	if m.depTree.loading {
+	if s.loading {
 		return "Loading…"
 	}
-	return m.depTree.content
+	return s.content
 }
 
 type dotnetListPkg struct {
@@ -296,7 +287,7 @@ func rejoinIntervals(fields []string) []string {
 	return result
 }
 
-func (m Model) renderParsedDotnetList(projects []dotnetListProject) string {
+func (s *depTreeOverlay) renderParsedDotnetList(projects []dotnetListProject) string {
 	// Compute max package name width across all frameworks so the version
 	// column starts at the same position regardless of name length.
 	maxNameW := 20
@@ -328,7 +319,7 @@ func (m Model) renderParsedDotnetList(projects []dotnetListProject) string {
 				sb.WriteString(styleSubtle.Render("  top-level") + "\n")
 				for _, pkg := range fw.TopLevel {
 					icon, iconStyle := " ", styleMuted
-					if row := m.rowByName(pkg.Name); row != nil {
+					if row := s.app.rowByName(pkg.Name); row != nil {
 						icon, iconStyle = row.statusIcon(), row.statusStyle()
 					}
 					sb.WriteString("  " + iconStyle.Render(icon) + " ")
@@ -356,7 +347,7 @@ func (m Model) renderParsedDotnetList(projects []dotnetListProject) string {
 				sb.WriteString("\n" + styleSubtle.Render("  transitive") + "\n")
 				for _, pkg := range fw.Transitive {
 					icon, iconStyle := " ", styleMuted
-					if row := m.rowByName(pkg.Name); row != nil {
+					if row := s.app.rowByName(pkg.Name); row != nil {
 						icon, iconStyle = row.statusIcon(), row.statusStyle()
 					}
 					sb.WriteString("  " + iconStyle.Render(icon) + " ")
@@ -375,21 +366,43 @@ func (m Model) renderParsedDotnetList(projects []dotnetListProject) string {
 	return sb.String()
 }
 
-func (m Model) renderDepTreeOverlay() string {
-	overlayW, overlayH := m.depTreeOverlaySize()
+func (s *depTreeOverlay) FooterKeys() []kv {
+	return []kv{{"↑↓", "scroll"}, {"esc", "close"}}
+}
+
+func (s *depTreeOverlay) HandleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
+	switch msg.String() {
+	case "[":
+		s.Resize(-4)
+		return nil
+	case "]":
+		s.Resize(4)
+		return nil
+	case "esc", "q":
+		s.closeOverlay()
+		return nil
+	default:
+		var cmd bubble_tea.Cmd
+		s.vp, cmd = s.vp.Update(msg)
+		return cmd
+	}
+}
+
+func (s *depTreeOverlay) Render() string {
+	overlayW, overlayH := s.app.depTreeOverlaySize()
 	innerW := overlayW - 6
 
 	var lines []string
 	lines = append(lines,
-		styleAccentBold.Render(m.depTree.title),
+		styleAccentBold.Render(s.title),
 	)
 	lines = append(lines,
 		styleBorder.Render(strings.Repeat("─", innerW)),
 	)
 
-	if m.depTree.loading {
+	if s.loading {
 		lines = append(lines,
-			m.ctx.Spinner.View()+" "+
+			s.app.ctx.Spinner.View()+" "+
 				styleSubtle.Render("Loading dependency tree…"),
 		)
 		// pad to fill viewport height
@@ -398,32 +411,12 @@ func (m Model) renderDepTreeOverlay() string {
 			lines = append(lines, "")
 		}
 	} else {
-		lines = append(lines, m.depTree.vp.View())
+		lines = append(lines, s.vp.View())
 	}
 
 	box := styleOverlay.
 		Width(overlayW).
 		Render(strings.Join(lines, "\n"))
 
-	return lipgloss.Place(m.ctx.Width, m.overlayHeight(), lipgloss.Center, lipgloss.Center, box)
-}
-
-func (m *Model) handleDepTreeKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
-	switch msg.String() {
-	case "[":
-		adjustOffset(&m.overlayWidthOffset, -4, m.ctx.Width, 30, m.ctx.Width-4)
-		return nil
-	case "]":
-		adjustOffset(&m.overlayWidthOffset, 4, m.ctx.Width, 30, m.ctx.Width-4)
-		return nil
-	case "esc", "q":
-		m.overlayWidthOffset = 0
-		m.depTree.active = false
-		m.ctx.StatusLine = ""
-		return nil
-	default:
-		var cmd bubble_tea.Cmd
-		m.depTree.vp, cmd = m.depTree.vp.Update(msg)
-		return cmd
-	}
+	return s.centerOverlay(box)
 }

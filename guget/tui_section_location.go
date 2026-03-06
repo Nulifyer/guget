@@ -5,10 +5,9 @@ import (
 	"strings"
 
 	bubble_tea "charm.land/bubbletea/v2"
-	lipgloss "charm.land/lipgloss/v2"
 )
 
-func (m *Model) addPackageToProject(pkgName, version string, project *ParsedProject) bubble_tea.Cmd {
+func (m *App) addPackageToProject(pkgName, version string, project *ParsedProject) bubble_tea.Cmd {
 	project.Packages.Add(PackageReference{Name: pkgName, Version: ParseSemVer(version)})
 	project.PackageSources[strings.ToLower(pkgName)] = project.FilePath
 	if m.ctx.Results == nil {
@@ -20,9 +19,9 @@ func (m *Model) addPackageToProject(pkgName, version string, project *ParsedProj
 		m.search.fetchedSource = ""
 	}
 	m.rebuildPackageRows()
-	for i, row := range m.packageRows {
+	for i, row := range m.packages.rows {
 		if strings.EqualFold(row.ref.Name, pkgName) {
-			m.packageCursor = i
+			m.packages.cursor = i
 			break
 		}
 	}
@@ -42,7 +41,7 @@ func (m *Model) addPackageToProject(pkgName, version string, project *ParsedProj
 // openLocationPickerOrAdd shows the location picker if the project has multiple
 // AddTargets (e.g. Directory.Build.props, CPM, imported props). If the project
 // is a .props file or has only one target, it adds directly.
-func (m *Model) openLocationPickerOrAdd(pkgName, version string, project *ParsedProject) bubble_tea.Cmd {
+func (m *App) openLocationPickerOrAdd(pkgName, version string, project *ParsedProject) bubble_tea.Cmd {
 	// Props files: add directly, no picker needed.
 	if strings.HasSuffix(strings.ToLower(project.FilePath), ".props") {
 		return m.addPackageToProject(pkgName, version, project)
@@ -52,45 +51,49 @@ func (m *Model) openLocationPickerOrAdd(pkgName, version string, project *Parsed
 		return m.addPackageToProject(pkgName, version, project)
 	}
 	// Multiple targets: open the location picker.
-	m.locationPick = locationPicker{
-		active:        true,
-		pkgName:       pkgName,
-		version:       version,
-		targets:       project.AddTargets,
-		cursor:        0,
-		targetProject: project,
-	}
+	m.locationPick = newLocationPicker(m, pkgName, version, project)
 	return nil
 }
 
-func (m *Model) handleLocationPickKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
+func newLocationPicker(m *App, pkgName, version string, project *ParsedProject) locationPicker {
+	return locationPicker{
+		sectionBase:   sectionBase{app: m, baseWidth: 80, minWidth: 60, maxMargin: 4, active: true},
+		pkgName:       pkgName,
+		version:       version,
+		targets:       project.AddTargets,
+		targetProject: project,
+	}
+}
+
+func (s *locationPicker) FooterKeys() []kv {
+	return []kv{{"↑↓", "nav"}, {"enter", "select"}, {"esc", "cancel"}}
+}
+
+func (s *locationPicker) HandleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 	switch msg.String() {
 	case "[":
-		adjustOffset(&m.overlayWidthOffset, -4, m.ctx.Width, 30, m.ctx.Width-4)
+		s.Resize(-4)
 		return nil
 	case "]":
-		adjustOffset(&m.overlayWidthOffset, 4, m.ctx.Width, 30, m.ctx.Width-4)
+		s.Resize(4)
 		return nil
 	case "esc", "q":
-		m.overlayWidthOffset = 0
-		m.locationPick.active = false
-		m.ctx.StatusLine = ""
+		s.closeOverlay()
 	case "up", "k":
-		if m.locationPick.cursor > 0 {
-			m.locationPick.cursor--
+		if s.cursor > 0 {
+			s.cursor--
 		}
 	case "down", "j":
-		if m.locationPick.cursor < len(m.locationPick.targets)-1 {
-			m.locationPick.cursor++
+		if s.cursor < len(s.targets)-1 {
+			s.cursor++
 		}
 	case "enter":
-		m.overlayWidthOffset = 0
-		m.locationPick.active = false
-		selected := m.locationPick.targets[m.locationPick.cursor]
-		return m.addPackageToLocation(
-			m.locationPick.pkgName,
-			m.locationPick.version,
-			m.locationPick.targetProject,
+		s.closeOverlay()
+		selected := s.targets[s.cursor]
+		return s.app.addPackageToLocation(
+			s.pkgName,
+			s.version,
+			s.targetProject,
 			selected,
 		)
 	}
@@ -100,7 +103,7 @@ func (m *Model) handleLocationPickKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 // addPackageToLocation adds a package to the specified target location.
 // For CPM targets, it performs a dual write: PackageVersion to the CPM file
 // and a version-less PackageReference to the project file.
-func (m *Model) addPackageToLocation(pkgName, version string, project *ParsedProject, target AddTarget) bubble_tea.Cmd {
+func (m *App) addPackageToLocation(pkgName, version string, project *ParsedProject, target AddTarget) bubble_tea.Cmd {
 	project.Packages.Add(PackageReference{Name: pkgName, Version: ParseSemVer(version)})
 	project.PackageSources[strings.ToLower(pkgName)] = target.FilePath
 
@@ -130,9 +133,9 @@ func (m *Model) addPackageToLocation(pkgName, version string, project *ParsedPro
 	}
 
 	m.rebuildPackageRows()
-	for i, row := range m.packageRows {
+	for i, row := range m.packages.rows {
 		if strings.EqualFold(row.ref.Name, pkgName) {
-			m.packageCursor = i
+			m.packages.cursor = i
 			break
 		}
 	}
@@ -165,12 +168,12 @@ func (m *Model) addPackageToLocation(pkgName, version string, project *ParsedPro
 	}
 }
 
-func (m Model) renderLocationPickOverlay() string {
-	w := clampW(80+m.overlayWidthOffset, 60, m.ctx.Width-4)
+func (s *locationPicker) Render() string {
+	w := s.Width()
 
 	lines := []string{
 		styleAccentBold.Render("Add to which file?"),
-		styleSubtle.Render(m.locationPick.pkgName + " " + m.locationPick.version),
+		styleSubtle.Render(s.pkgName + " " + s.version),
 		"",
 	}
 
@@ -179,10 +182,10 @@ func (m Model) renderLocationPickOverlay() string {
 		kindLabel string
 		desc      string
 	}
-	rows := make([]row, len(m.locationPick.targets))
+	rows := make([]row, len(s.targets))
 	maxName := 0
 	maxKind := 0
-	for i, target := range m.locationPick.targets {
+	for i, target := range s.targets {
 		var kind string
 		switch target.Kind {
 		case AddTargetProject:
@@ -206,7 +209,7 @@ func (m Model) renderLocationPickOverlay() string {
 	for i, r := range rows {
 		prefix := "  "
 		nameStyle := styleMuted
-		if i == m.locationPick.cursor {
+		if i == s.cursor {
 			prefix = "▶ "
 			nameStyle = styleAccentBold
 		}
@@ -220,5 +223,5 @@ func (m Model) renderLocationPickOverlay() string {
 	box := styleOverlay.
 		Width(w).
 		Render(strings.Join(lines, "\n"))
-	return lipgloss.Place(m.ctx.Width, m.overlayHeight(), lipgloss.Center, lipgloss.Center, box)
+	return s.centerOverlay(box)
 }

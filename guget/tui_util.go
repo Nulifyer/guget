@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	bubble_tea "charm.land/bubbletea/v2"
 	lipgloss "charm.land/lipgloss/v2"
 )
 
@@ -37,6 +38,86 @@ func timeAgo(t time.Time) string {
 		return "1 day ago"
 	}
 	return fmt.Sprintf("%d days ago", days)
+}
+
+// sectionBase holds width configuration and resize state for any TUI section
+// (panel or overlay). Centralizes the resize logic that was previously
+// scattered across every section file.
+type sectionBase struct {
+	app *App // back-reference, set once at creation
+
+	// Config (set once at creation)
+	baseWidth int // fixed base width in columns; 0 means use basePct
+	basePct   int // base as % of availW (e.g. 85 = 85%); 0 means use baseWidth
+	minWidth  int // hard floor
+	maxMargin int // subtracted from availW for max (e.g. 4 → max = availW-4)
+
+	// State
+	active      bool // overlays: whether this overlay is currently shown
+	widthOffset int  // mutated by [ / ] resize
+}
+
+// Section is satisfied by any type that embeds sectionBase.
+type Section interface {
+	Width() int
+	Resize(delta int) bool
+	ResetOffset()
+}
+
+// Overlay is implemented by all overlay sections (search, picker, confirms, etc.).
+type Overlay interface {
+	IsActive() bool
+	HandleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd
+	Render() string
+	FooterKeys() []kv
+}
+
+// kv is a key-value pair used for footer keybinding display.
+type kv struct{ k, v string }
+
+// Base returns the effective base width given available width.
+func (s *sectionBase) Base() int {
+	if s.basePct > 0 {
+		return s.app.ctx.Width * s.basePct / 100
+	}
+	return s.baseWidth
+}
+
+// Width returns the clamped outer width for this section.
+func (s *sectionBase) Width() int {
+	return clampW(s.Base()+s.widthOffset, s.minWidth, s.app.ctx.Width-s.maxMargin)
+}
+
+// Resize adjusts widthOffset by delta, respecting bounds. Returns true if changed.
+func (s *sectionBase) Resize(delta int) bool {
+	base := s.Base()
+	maxW := s.app.ctx.Width - s.maxMargin
+	proposed := base + s.widthOffset + delta
+	if proposed < s.minWidth || proposed > maxW {
+		return false
+	}
+	s.widthOffset += delta
+	return true
+}
+
+// IsActive returns whether this section's overlay is currently shown.
+func (s *sectionBase) IsActive() bool { return s.active }
+
+// ResetOffset zeroes the resize offset.
+func (s *sectionBase) ResetOffset() {
+	s.widthOffset = 0
+}
+
+// closeOverlay resets the overlay to its default closed state.
+func (s *sectionBase) closeOverlay() {
+	s.ResetOffset()
+	s.active = false
+	s.app.ctx.StatusLine = ""
+}
+
+// centerOverlay wraps a rendered box in lipgloss.Place centered in the overlay area.
+func (s *sectionBase) centerOverlay(box string) string {
+	return lipgloss.Place(s.app.ctx.Width, s.app.overlayHeight(), lipgloss.Center, lipgloss.Center, box)
 }
 
 func clampW(w, minW, maxW int) int {
@@ -120,33 +201,19 @@ func hyperlink(url, text string) string {
 	return "\x1b]8;;" + url + "\x1b\\" + text + "\x1b]8;;\x1b\\ ↗"
 }
 
-// advisoryLabel extracts a short display label from an advisory URL.
-// e.g. "https://github.com/advisories/GHSA-5crp-9r3c-p9vr" → "GHSA-5crp-9r3c-p9vr"
-func advisoryLabel(url string) string {
-	if i := strings.LastIndex(url, "/"); i >= 0 && i < len(url)-1 {
-		return url[i+1:]
+// clampListScroll adjusts *scroll so that cursor is visible within a viewport
+// of the given height. extraPad adds bottom padding when cursor is at the end.
+func clampListScroll(cursor int, scroll *int, visible, total, extraPad int) {
+	if cursor < *scroll {
+		*scroll = cursor
 	}
-	return url
-}
-
-func wordWrap(s string, width int) string {
-	words := strings.Fields(s)
-	var lines []string
-	var cur strings.Builder
-	for _, w := range words {
-		if cur.Len()+len(w)+1 > width {
-			lines = append(lines, cur.String())
-			cur.Reset()
-		}
-		if cur.Len() > 0 {
-			cur.WriteString(" ")
-		}
-		cur.WriteString(w)
+	pad := 0
+	if extraPad > 0 && cursor == total-1 {
+		pad = extraPad
 	}
-	if cur.Len() > 0 {
-		lines = append(lines, cur.String())
+	if cursor+pad >= *scroll+visible {
+		*scroll = cursor + pad - visible + 1
 	}
-	return strings.Join(lines, "\n")
 }
 
 func imax(a, b int) int {

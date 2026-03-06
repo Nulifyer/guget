@@ -18,7 +18,7 @@ const (
 )
 
 // layoutWidth returns the effective width for the main content area.
-func (m *Model) layoutWidth() int {
+func (m *App) layoutWidth() int {
 	const minLayoutWidth = 80
 	if m.ctx.Width < minLayoutWidth {
 		return minLayoutWidth
@@ -26,22 +26,15 @@ func (m *Model) layoutWidth() int {
 	return m.ctx.Width
 }
 
-type Model struct {
+type App struct {
 	ctx *AppContext
 
 	focus focusPanel
 
-	projectItems  []projectItem
-	projectCursor int
-	projectOffset int
-
-	packageRows     []packageRow
-	packageCursor   int
-	packageOffset   int
-	packageSortMode packageSortMode
-	packageSortDir  bool
-
-	detailView bubbles_viewport.Model
+	projects projectPanel
+	packages packagePanel
+	detail   detailPanel
+	log      logPanel
 
 	picker        versionPicker
 	search        packageSearch
@@ -50,21 +43,23 @@ type Model struct {
 	locationPick  locationPicker
 	depTree       depTreeOverlay
 	releaseNotes  releaseNotesOverlay
-
-	showSources bool
-	showHelp    bool
-	helpView    bubbles_viewport.Model
-
-	logView bubbles_viewport.Model
+	sources       sourcesOverlay
+	help          helpOverlay
 
 	resizeDebounceID int
-
-	leftWidthOffset    int // projects panel width offset ([ / ])
-	rightWidthOffset   int // detail panel width offset ([ / ])
-	overlayWidthOffset int // active overlay width offset, reset on close
 }
 
-func NewModel(parsedProjects []*ParsedProject, propsProjects []*ParsedProject, nugetServices []*NugetService, sources []NugetSource, sourceMapping *PackageSourceMapping, initialLogLines []string, loadingTotal int, flags BuiltFlags) Model {
+// overlays returns all overlay sections in priority order (highest first).
+// Used for generic key dispatch and rendering.
+func (m *App) overlays() []Overlay {
+	return []Overlay{
+		&m.depTree, &m.releaseNotes, &m.sources, &m.help,
+		&m.search, &m.picker, &m.locationPick,
+		&m.confirmRemove, &m.confirmUpdate,
+	}
+}
+
+func NewApp(parsedProjects []*ParsedProject, propsProjects []*ParsedProject, nugetServices []*NugetService, sources []NugetSource, sourceMapping *PackageSourceMapping, initialLogLines []string, loadingTotal int, flags BuiltFlags) *App {
 	sp := bubbles_spinner.New()
 	sp.Spinner = bubbles_spinner.Dot
 	sp.Style = styleAccent
@@ -102,23 +97,47 @@ func NewModel(parsedProjects []*ParsedProject, propsProjects []*ParsedProject, n
 		LogLines:       initialLogLines,
 	}
 
-	m := Model{
-		ctx:             ctx,
-		projectItems:    projItems,
-		detailView:      dv,
-		search:          packageSearch{input: ti},
-		logView:         lv,
-		packageSortMode: sortMode,
-		packageSortDir:  sortDir,
+	m := &App{
+		ctx: ctx,
+		projects: projectPanel{
+			sectionBase: sectionBase{baseWidth: 30, minWidth: 10},
+			items:       projItems,
+		},
+		packages: packagePanel{
+			sortMode: sortMode,
+			sortDir:  sortDir,
+		},
+		detail: detailPanel{
+			sectionBase: sectionBase{baseWidth: 50, minWidth: 10},
+			vp:          dv,
+		},
+		log: logPanel{vp: lv},
+		search: packageSearch{
+			sectionBase: sectionBase{baseWidth: 90, minWidth: 56, maxMargin: 4},
+			input:       ti,
+		},
+		sources: sourcesOverlay{
+			sectionBase: sectionBase{baseWidth: 90, minWidth: 40, maxMargin: 4},
+		},
+		help: helpOverlay{
+			sectionBase: sectionBase{basePct: 60, minWidth: 56, maxMargin: 4},
+			vp:          bubbles_viewport.New(bubbles_viewport.WithWidth(60), bubbles_viewport.WithHeight(20)),
+		},
 	}
+	// Set back-pointers so sections can access the App.
+	m.projects.app = m
+	m.detail.app = m
+	m.search.app = m
+	m.sources.app = m
+	m.help.app = m
 	return m
 }
 
-func (m Model) Init() bubble_tea.Cmd {
+func (m *App) Init() bubble_tea.Cmd {
 	return m.ctx.Spinner.Tick
 }
 
-func (m Model) Update(msg bubble_tea.Msg) (bubble_tea.Model, bubble_tea.Cmd) {
+func (m *App) Update(msg bubble_tea.Msg) (bubble_tea.Model, bubble_tea.Cmd) {
 	var cmds []bubble_tea.Cmd
 
 	switch msg := msg.(type) {
@@ -138,11 +157,11 @@ func (m Model) Update(msg bubble_tea.Msg) (bubble_tea.Model, bubble_tea.Cmd) {
 
 	case resizeDebounceMsg:
 		if msg.id == m.resizeDebounceID {
-			if m.showHelp {
-				m.refreshHelpView()
+			if m.help.active {
+				m.help.refreshView()
 			}
 			if m.releaseNotes.active {
-				m.resizeReleaseNotesViewport()
+				m.releaseNotes.resizeViewport()
 			}
 		}
 
@@ -185,7 +204,7 @@ func (m Model) Update(msg bubble_tea.Msg) (bubble_tea.Model, bubble_tea.Cmd) {
 	case searchDebounceMsg:
 		if msg.id == m.search.debounceID && msg.query != "" {
 			m.search.loading = true
-			cmds = append(cmds, m.doSearchCmd(msg.query))
+			cmds = append(cmds, m.search.doSearchCmd(msg.query))
 		}
 
 	case searchResultsMsg:
@@ -210,18 +229,9 @@ func (m Model) Update(msg bubble_tea.Msg) (bubble_tea.Model, bubble_tea.Cmd) {
 		}
 		m.search.fetchedInfo = msg.info
 		m.search.fetchedSource = msg.source
-		m.overlayWidthOffset = 0
-		m.search.active = false
+		m.search.closeOverlay()
 		m.search.input.Blur()
-		m.picker = versionPicker{
-			active:        true,
-			pkgName:       msg.info.ID,
-			versions:      msg.info.Versions,
-			cursor:        defaultVersionCursor(msg.info.Versions, proj.TargetFrameworks),
-			targets:       proj.TargetFrameworks,
-			addMode:       true,
-			targetProject: proj,
-		}
+		m.picker = newVersionPicker(m, msg.info.ID, msg.info.Versions, proj.TargetFrameworks, proj, true)
 
 	case logLineMsg:
 		m.ctx.LogLines = append(m.ctx.LogLines, msg.line)
@@ -246,7 +256,7 @@ func (m Model) Update(msg bubble_tea.Msg) (bubble_tea.Model, bubble_tea.Cmd) {
 		m.releaseNotes.cursor = 0
 		// Auto-fetch notes for the first release
 		m.releaseNotes.loading = true
-		cmds = append(cmds, m.fetchReleaseNotesCmd(msg.releases[0]))
+		cmds = append(cmds, m.releaseNotes.fetchReleaseNotesCmd(msg.releases[0]))
 
 	case releaseNotesReadyMsg:
 		m.releaseNotes.loading = false
@@ -257,54 +267,28 @@ func (m Model) Update(msg bubble_tea.Msg) (bubble_tea.Model, bubble_tea.Cmd) {
 		}
 		m.releaseNotes.notes = msg.body
 		m.releaseNotes.notesURL = msg.htmlURL
-		m.releaseNotes.vp.SetContent(m.buildReleaseNotesContent())
+		m.releaseNotes.vp.SetContent(m.releaseNotes.buildContent())
 
 	case depTreeReadyMsg:
 		m.depTree.loading = false
 		m.depTree.err = msg.err
 		if msg.err == nil {
-			m.depTree.content = m.renderParsedDotnetList(parseDotnetListOutput(msg.content))
+			m.depTree.content = m.depTree.renderParsedDotnetList(parseDotnetListOutput(msg.content))
 		}
-		m.depTree.vp.SetContent(m.buildDepTreeContent())
+		m.depTree.vp.SetContent(m.depTree.buildContent())
 
 	case bubble_tea.KeyMsg:
-		if m.depTree.active {
-			cmds = append(cmds, m.handleDepTreeKey(msg))
-			return m, bubble_tea.Batch(cmds...)
+		handled := false
+		for _, o := range m.overlays() {
+			if o.IsActive() {
+				cmds = append(cmds, o.HandleKey(msg))
+				handled = true
+				break
+			}
 		}
-		if m.releaseNotes.active {
-			cmds = append(cmds, m.handleReleaseNotesKey(msg))
-			return m, bubble_tea.Batch(cmds...)
+		if !handled {
+			cmds = append(cmds, m.handleKey(msg))
 		}
-		if m.showSources {
-			cmds = append(cmds, m.handleSourcesKey(msg))
-			return m, bubble_tea.Batch(cmds...)
-		}
-		if m.showHelp {
-			cmds = append(cmds, m.handleHelpKey(msg))
-			return m, bubble_tea.Batch(cmds...)
-		}
-		if m.search.active {
-			cmds = append(cmds, m.handleSearchKey(msg))
-			return m, bubble_tea.Batch(cmds...)
-		}
-		if m.picker.active {
-			cmds = append(cmds, m.handlePickerKey(msg))
-			return m, bubble_tea.Batch(cmds...)
-		}
-		if m.confirmRemove.active {
-			cmds = append(cmds, m.handleConfirmRemoveKey(msg))
-			return m, bubble_tea.Batch(cmds...)
-		}
-		if m.confirmUpdate.active {
-			cmds = append(cmds, m.handleConfirmUpdateKey(msg))
-			return m, bubble_tea.Batch(cmds...)
-		}
-		if m.locationPick.active {
-			cmds = append(cmds, m.handleLocationPickKey(msg))
-			return m, bubble_tea.Batch(cmds...)
-		}
-		cmds = append(cmds, m.handleKey(msg))
 	}
 
 	if !m.picker.active && !m.search.active && !m.confirmRemove.active && !m.confirmUpdate.active && !m.locationPick.active {
@@ -313,20 +297,20 @@ func (m Model) Update(msg bubble_tea.Msg) (bubble_tea.Model, bubble_tea.Cmd) {
 			if keyMsg, ok := msg.(bubble_tea.KeyMsg); ok {
 				switch keyMsg.String() {
 				case "up", "k":
-					if m.projectCursor > 0 {
-						m.projectCursor--
+					if m.projects.cursor > 0 {
+						m.projects.cursor--
 						m.clampProjectOffset()
-						m.packageCursor = 0
-						m.packageOffset = 0
+						m.packages.cursor = 0
+						m.packages.scroll = 0
 						m.rebuildPackageRows()
 						m.refreshDetail()
 					}
 				case "down", "j":
-					if m.projectCursor < len(m.projectItems)-1 {
-						m.projectCursor++
+					if m.projects.cursor < len(m.projects.items)-1 {
+						m.projects.cursor++
 						m.clampProjectOffset()
-						m.packageCursor = 0
-						m.packageOffset = 0
+						m.packages.cursor = 0
+						m.packages.scroll = 0
 						m.rebuildPackageRows()
 						m.refreshDetail()
 					}
@@ -340,13 +324,13 @@ func (m Model) Update(msg bubble_tea.Msg) (bubble_tea.Model, bubble_tea.Cmd) {
 				}
 			} else {
 				var cmd bubble_tea.Cmd
-				m.detailView, cmd = m.detailView.Update(msg)
+				m.detail.vp, cmd = m.detail.vp.Update(msg)
 				cmds = append(cmds, cmd)
 			}
 		case focusLog:
 			if m.ctx.ShowLogs {
 				var cmd bubble_tea.Cmd
-				m.logView, cmd = m.logView.Update(msg)
+				m.log.vp, cmd = m.log.vp.Update(msg)
 				cmds = append(cmds, cmd)
 			}
 		}
@@ -355,7 +339,7 @@ func (m Model) Update(msg bubble_tea.Msg) (bubble_tea.Model, bubble_tea.Cmd) {
 	return m, bubble_tea.Batch(cmds...)
 }
 
-func (m *Model) setStatus(text string, isErr bool) bubble_tea.Cmd {
+func (m *App) setStatus(text string, isErr bool) bubble_tea.Cmd {
 	// Strip newlines and truncate to keep the status on a single line.
 	if i := strings.IndexByte(text, '\n'); i >= 0 {
 		text = text[:i]
@@ -369,7 +353,7 @@ func (m *Model) setStatus(text string, isErr bool) bubble_tea.Cmd {
 	return nil
 }
 
-func (m *Model) handleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
+func (m *App) handleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 	switch msg.String() {
 	case "ctrl+c", "q", "esc":
 		return bubble_tea.Quit
@@ -399,28 +383,28 @@ func (m *Model) handleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 		m.relayout()
 
 	case "s":
-		m.showSources = !m.showSources
-		if m.showSources {
+		m.sources.active = !m.sources.active
+		if m.sources.active {
 			m.ctx.StatusLine = ""
 		}
 
 	case "?":
-		m.showHelp = !m.showHelp
-		if m.showHelp {
+		m.help.active = !m.help.active
+		if m.help.active {
 			m.ctx.StatusLine = ""
-			m.refreshHelpView()
+			m.help.refreshView()
 		}
 
 	case "up", "k":
-		if m.focus == focusPackages && m.packageCursor > 0 {
-			m.packageCursor--
+		if m.focus == focusPackages && m.packages.cursor > 0 {
+			m.packages.cursor--
 			m.clampOffset()
 			m.refreshDetail()
 		}
 
 	case "down", "j":
-		if m.focus == focusPackages && m.packageCursor < len(m.packageRows)-1 {
-			m.packageCursor++
+		if m.focus == focusPackages && m.packages.cursor < len(m.packages.rows)-1 {
+			m.packages.cursor++
 			m.clampOffset()
 			m.refreshDetail()
 		}
@@ -475,29 +459,26 @@ func (m *Model) handleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 
 	case "o":
 		if m.focus == focusPackages {
-			m.packageSortMode = m.packageSortMode.next()
-			m.packageSortDir = m.packageSortMode.defaultDir()
-			m.packageCursor = 0
-			m.packageOffset = 0
+			m.packages.sortMode = m.packages.sortMode.next()
+			m.packages.sortDir = m.packages.sortMode.defaultDir()
+			m.packages.cursor = 0
+			m.packages.scroll = 0
 			m.rebuildPackageRows()
 			m.refreshDetail()
 		}
 
 	case "O":
 		if m.focus == focusPackages {
-			m.packageSortDir = !m.packageSortDir
-			m.packageCursor = 0
-			m.packageOffset = 0
+			m.packages.sortDir = !m.packages.sortDir
+			m.packages.cursor = 0
+			m.packages.scroll = 0
 			m.rebuildPackageRows()
 			m.refreshDetail()
 		}
 
 	case "d":
-		if m.focus == focusPackages && m.packageCursor < len(m.packageRows) {
-			m.confirmRemove = confirmRemove{
-				active:  true,
-				pkgName: m.packageRows[m.packageCursor].ref.Name,
-			}
+		if m.focus == focusPackages && m.packages.cursor < len(m.packages.rows) {
+			m.confirmRemove = newConfirmRemove(m, m.packages.rows[m.packages.cursor].ref.Name)
 			m.ctx.StatusLine = ""
 		}
 
@@ -505,11 +486,7 @@ func (m *Model) handleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 		if m.selectedProject() == nil {
 			return m.setStatus("▲ Select project", true)
 		}
-		m.search = packageSearch{input: m.search.input}
-		m.search.input.Reset()
-		m.search.active = true
-		m.ctx.StatusLine = ""
-		return m.search.input.Focus()
+		return m.openSearch()
 
 	case "[":
 		m.resizeFocused(-2)
@@ -528,30 +505,44 @@ func (m *Model) handleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 	return nil
 }
 
-func (m *Model) resizeFocused(delta int) {
+func (m *App) resizeFocused(delta int) {
 	const (
 		borders = 6
 		minW    = 10
 	)
 	lw := m.layoutWidth()
-	// maxW for one side = total minus the other side's base+offset minus borders minus minW for mid panel.
 	switch m.focus {
 	case focusProjects:
-		maxW := lw - (50 + m.rightWidthOffset) - borders - minW
-		adjustOffset(&m.leftWidthOffset, delta, 30, minW, maxW)
+		maxW := lw - (m.detail.baseWidth + m.detail.widthOffset) - borders - minW
+		adjustOffset(&m.projects.widthOffset, delta, m.projects.baseWidth, minW, maxW)
 	case focusPackages:
-		// Growing packages shrinks detail (right), so we shrink rightWidthOffset.
-		maxW := lw - (30 + m.leftWidthOffset) - borders - minW
-		adjustOffset(&m.rightWidthOffset, -delta, 50, minW, maxW)
+		maxW := lw - (m.projects.baseWidth + m.projects.widthOffset) - borders - minW
+		adjustOffset(&m.detail.widthOffset, -delta, m.detail.baseWidth, minW, maxW)
 		m.refreshDetail()
 	case focusDetail:
-		maxW := lw - (30 + m.leftWidthOffset) - borders - minW
-		adjustOffset(&m.rightWidthOffset, delta, 50, minW, maxW)
+		maxW := lw - (m.projects.baseWidth + m.projects.widthOffset) - borders - minW
+		adjustOffset(&m.detail.widthOffset, delta, m.detail.baseWidth, minW, maxW)
 		m.refreshDetail()
 	}
 }
 
-func (m Model) View() bubble_tea.View {
+func (m *App) selectedProject() *ParsedProject {
+	if m.projects.cursor >= 0 && m.projects.cursor < len(m.projects.items) {
+		return m.projects.items[m.projects.cursor].project
+	}
+	return nil
+}
+
+func (m *App) rowByName(name string) *packageRow {
+	for i := range m.packages.rows {
+		if strings.EqualFold(m.packages.rows[i].ref.Name, name) {
+			return &m.packages.rows[i]
+		}
+	}
+	return nil
+}
+
+func (m *App) View() bubble_tea.View {
 	v := bubble_tea.NewView("")
 	v.AltScreen = true
 
@@ -575,25 +566,11 @@ func (m Model) View() bubble_tea.View {
 
 	// Overlay views — render in the space above the footer.
 	var overlay string
-	switch {
-	case m.depTree.active:
-		overlay = m.renderDepTreeOverlay()
-	case m.releaseNotes.active:
-		overlay = m.renderReleaseNotesOverlay()
-	case m.search.active:
-		overlay = m.renderSearchOverlay()
-	case m.locationPick.active:
-		overlay = m.renderLocationPickOverlay()
-	case m.picker.active:
-		overlay = m.renderPickerOverlay()
-	case m.confirmRemove.active:
-		overlay = m.renderConfirmRemoveOverlay()
-	case m.confirmUpdate.active:
-		overlay = m.renderConfirmUpdateOverlay()
-	case m.showSources:
-		overlay = m.renderSourcesOverlay()
-	case m.showHelp:
-		overlay = m.renderHelpOverlay()
+	for _, o := range m.overlays() {
+		if o.IsActive() {
+			overlay = o.Render()
+			break
+		}
 	}
 
 	if overlay != "" {

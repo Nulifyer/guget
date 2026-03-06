@@ -9,92 +9,104 @@ import (
 	lipgloss "charm.land/lipgloss/v2"
 )
 
-func (m *Model) handleSearchKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
+func (m *App) openSearch() bubble_tea.Cmd {
+	m.search = packageSearch{
+		sectionBase: sectionBase{app: m, baseWidth: 90, minWidth: 56, maxMargin: 4},
+		input:       m.search.input,
+	}
+	m.search.input.Reset()
+	m.search.active = true
+	m.ctx.StatusLine = ""
+	return m.search.input.Focus()
+}
+
+func (s *packageSearch) FooterKeys() []kv {
+	return []kv{{"↑↓", "nav"}, {"enter", "select"}, {"esc", "close"}}
+}
+
+func (s *packageSearch) HandleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 	switch msg.String() {
 	case "[":
-		adjustOffset(&m.overlayWidthOffset, -4, m.ctx.Width, 30, m.ctx.Width-4)
+		s.Resize(-4)
 		return nil
 	case "]":
-		adjustOffset(&m.overlayWidthOffset, 4, m.ctx.Width, 30, m.ctx.Width-4)
+		s.Resize(4)
 		return nil
 	case "esc":
-		m.overlayWidthOffset = 0
-		m.search.active = false
-		m.search.input.Blur()
-		m.ctx.StatusLine = ""
+		s.closeOverlay()
+		s.input.Blur()
 		return nil
 
 	case "up", "ctrl+p":
-		if m.search.cursor > 0 {
-			m.search.cursor--
+		if s.cursor > 0 {
+			s.cursor--
 		}
 		return nil
 
 	case "down", "ctrl+n":
-		if m.search.cursor < len(m.search.results)-1 {
-			m.search.cursor++
+		if s.cursor < len(s.results)-1 {
+			s.cursor++
 		}
 		return nil
 
 	case "enter":
-		if m.search.fetchingVersion || len(m.search.results) == 0 {
+		if s.fetchingVersion || len(s.results) == 0 {
 			return nil
 		}
-		selected := m.search.results[m.search.cursor]
+		selected := s.results[s.cursor]
 		// Check if already installed in this project
-		if proj := m.selectedProject(); proj != nil {
+		if proj := s.app.selectedProject(); proj != nil {
 			for ref := range proj.Packages {
 				if strings.EqualFold(ref.Name, selected.ID) {
-					m.overlayWidthOffset = 0
-					m.search.active = false
-					m.search.input.Blur()
-					return m.setStatus("▲ "+selected.ID+" is in project", true)
+					s.closeOverlay()
+					s.input.Blur()
+					return s.app.setStatus("▲ "+selected.ID+" is in project", true)
 				}
 			}
 		}
 		// Use cached info if we already fetched this package (e.g. it's in another project).
-		if cached, ok := m.ctx.Results[selected.ID]; ok && cached.pkg != nil {
+		if cached, ok := s.app.ctx.Results[selected.ID]; ok && cached.pkg != nil {
 			return func() bubble_tea.Msg {
 				return packageFetchedMsg{info: cached.pkg, source: cached.source}
 			}
 		}
-		m.search.fetchingVersion = true
-		m.search.err = nil
-		return m.fetchPackageCmd(selected.ID)
+		s.fetchingVersion = true
+		s.err = nil
+		return s.fetchPackageCmd(selected.ID)
 	}
 
 	// Forward all other keys to the textinput
 	var cmd bubble_tea.Cmd
-	m.search.input, cmd = m.search.input.Update(msg)
-	newQuery := m.search.input.Value()
+	s.input, cmd = s.input.Update(msg)
+	newQuery := s.input.Value()
 
 	if newQuery == "" {
-		m.search.results = nil
-		m.search.loading = false
-		m.search.debounceID++ // invalidate any in-flight debounce
-		m.search.lastQuery = ""
+		s.results = nil
+		s.loading = false
+		s.debounceID++ // invalidate any in-flight debounce
+		s.lastQuery = ""
 		return cmd
 	}
 
-	if newQuery != m.search.lastQuery {
-		m.search.lastQuery = newQuery
-		m.search.loading = true
-		return bubble_tea.Batch(cmd, m.searchDebounceCmd(newQuery))
+	if newQuery != s.lastQuery {
+		s.lastQuery = newQuery
+		s.loading = true
+		return bubble_tea.Batch(cmd, s.debounceCmd(newQuery))
 	}
 	return cmd
 }
 
-func (m *Model) searchDebounceCmd(query string) bubble_tea.Cmd {
-	m.search.debounceID++
-	id := m.search.debounceID
+func (s *packageSearch) debounceCmd(query string) bubble_tea.Cmd {
+	s.debounceID++
+	id := s.debounceID
 	return bubble_tea.Tick(500*time.Millisecond, func(t time.Time) bubble_tea.Msg {
 		return searchDebounceMsg{id: id, query: query}
 	})
 }
 
-func (m *Model) doSearchCmd(query string) bubble_tea.Cmd {
-	services := m.ctx.NugetServices
-	sourceMapping := m.ctx.SourceMapping
+func (s *packageSearch) doSearchCmd(query string) bubble_tea.Cmd {
+	services := s.app.ctx.NugetServices
+	sourceMapping := s.app.ctx.SourceMapping
 	return func() bubble_tea.Msg {
 		type sourceResult struct {
 			results []SearchResult
@@ -158,8 +170,8 @@ func (m *Model) doSearchCmd(query string) bubble_tea.Cmd {
 	}
 }
 
-func (m *Model) fetchPackageCmd(id string) bubble_tea.Cmd {
-	services := FilterServices(m.ctx.NugetServices, m.ctx.SourceMapping, id)
+func (s *packageSearch) fetchPackageCmd(id string) bubble_tea.Cmd {
+	services := FilterServices(s.app.ctx.NugetServices, s.app.ctx.SourceMapping, id)
 	return func() bubble_tea.Msg {
 		var lastErr error
 		for _, svc := range services {
@@ -173,15 +185,15 @@ func (m *Model) fetchPackageCmd(id string) bubble_tea.Cmd {
 	}
 }
 
-func (m Model) renderSearchOverlay() string {
-	w := clampW(90+m.overlayWidthOffset, 56, m.ctx.Width-4)
+func (s *packageSearch) Render() string {
+	w := s.Width()
 	innerW := w - 6 // border (2) + padding (2*2)
 
 	var lines []string
 
 	// Title row
 	title := styleAccentBold.Render("Add Package")
-	proj := m.selectedProject()
+	proj := s.app.selectedProject()
 	projName := ""
 	if proj != nil {
 		projName = styleSubtle.
@@ -190,7 +202,7 @@ func (m Model) renderSearchOverlay() string {
 	lines = append(lines, title+projName)
 
 	// Text input
-	lines = append(lines, m.search.input.View())
+	lines = append(lines, s.input.View())
 
 	// Divider
 	lines = append(lines,
@@ -207,7 +219,7 @@ func (m Model) renderSearchOverlay() string {
 
 	// Body — scale with terminal height but cap at 20 rows.
 	// 7 = 3 fixed content lines + 4 box chrome (border 2 + padding 2).
-	maxVisible := m.overlayHeight() - 7
+	maxVisible := s.app.overlayHeight() - 7
 	if maxVisible < 5 {
 		maxVisible = 5
 	}
@@ -215,25 +227,25 @@ func (m Model) renderSearchOverlay() string {
 		maxVisible = 20
 	}
 	switch {
-	case m.search.fetchingVersion:
+	case s.fetchingVersion:
 		lines = append(lines,
-			m.ctx.Spinner.View()+" "+
+			s.app.ctx.Spinner.View()+" "+
 				styleAccent.Render("Fetching package info…"))
 
-	case m.search.loading:
+	case s.loading:
 		lines = append(lines,
-			m.ctx.Spinner.View()+" "+
+			s.app.ctx.Spinner.View()+" "+
 				styleSubtle.Render("Searching…"))
 
-	case m.search.err != nil:
+	case s.err != nil:
 		lines = append(lines,
-			styleRed.Render("✗ "+m.search.err.Error()))
+			styleRed.Render("✗ "+s.err.Error()))
 
-	case len(m.search.results) == 0 && m.search.lastQuery != "":
+	case len(s.results) == 0 && s.lastQuery != "":
 		lines = append(lines,
 			styleMuted.Render("No results found"))
 
-	case len(m.search.results) == 0:
+	case len(s.results) == 0:
 		lines = append(lines,
 			styleMuted.Render("Type to search NuGet…"))
 
@@ -246,17 +258,17 @@ func (m Model) renderSearchOverlay() string {
 		}
 
 		start := 0
-		if m.search.cursor >= maxVisible {
-			start = m.search.cursor - maxVisible + 1
+		if s.cursor >= maxVisible {
+			start = s.cursor - maxVisible + 1
 		}
 		end := start + maxVisible
-		if end > len(m.search.results) {
-			end = len(m.search.results)
+		if end > len(s.results) {
+			end = len(s.results)
 		}
 
 		for i := start; i < end; i++ {
-			r := m.search.results[i]
-			selected := i == m.search.cursor
+			r := s.results[i]
+			selected := i == s.cursor
 
 			prefix := "  "
 			idStyle := styleText
@@ -296,5 +308,5 @@ func (m Model) renderSearchOverlay() string {
 		Width(w).
 		Render(strings.Join(lines, "\n"))
 
-	return lipgloss.Place(m.ctx.Width, m.overlayHeight(), lipgloss.Center, lipgloss.Center, box)
+	return s.centerOverlay(box)
 }
