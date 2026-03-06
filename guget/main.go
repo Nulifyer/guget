@@ -10,7 +10,7 @@ import (
 	"sync"
 	"syscall"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 var version = "dev"
@@ -278,10 +278,7 @@ func main() {
 
 	m := NewModel(parsedProjects, propsProjects, nugetServices, sources, sourceMapping, buf.Lines(), distinctPackages.Len(), builtFlags)
 
-	p := tea.NewProgram(
-		m,
-		tea.WithAltScreen(),
-	)
+	p := tea.NewProgram(m)
 
 	// Wire up live log forwarding to the TUI now that the program exists.
 	buf.mu.Lock()

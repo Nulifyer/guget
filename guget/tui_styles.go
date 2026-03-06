@@ -1,18 +1,22 @@
 package main
 
-import lipgloss "github.com/charmbracelet/lipgloss"
+import (
+	"image/color"
+
+	lipgloss "charm.land/lipgloss/v2"
+)
 
 var (
-	colorBorder lipgloss.TerminalColor = lipgloss.Color("#30363d")
-	colorMuted  lipgloss.TerminalColor = lipgloss.Color("#484f58")
-	colorText   lipgloss.TerminalColor = lipgloss.Color("#e6edf3")
-	colorSubtle lipgloss.TerminalColor = lipgloss.Color("#8b949e")
-	colorAccent lipgloss.TerminalColor = lipgloss.Color("#58a6ff")
-	colorGreen  lipgloss.TerminalColor = lipgloss.Color("#3fb950")
-	colorYellow lipgloss.TerminalColor = lipgloss.Color("#d29922")
-	colorRed    lipgloss.TerminalColor = lipgloss.Color("#f85149")
-	colorPurple lipgloss.TerminalColor = lipgloss.Color("#bc8cff")
-	colorCyan   lipgloss.TerminalColor = lipgloss.Color("#56d7c2")
+	colorBorder color.Color = lipgloss.Color("#30363d")
+	colorMuted  color.Color = lipgloss.Color("#484f58")
+	colorText   color.Color = lipgloss.Color("#e6edf3")
+	colorSubtle color.Color = lipgloss.Color("#8b949e")
+	colorAccent color.Color = lipgloss.Color("#58a6ff")
+	colorGreen  color.Color = lipgloss.Color("#3fb950")
+	colorYellow color.Color = lipgloss.Color("#d29922")
+	colorRed    color.Color = lipgloss.Color("#f85149")
+	colorPurple color.Color = lipgloss.Color("#bc8cff")
+	colorCyan   color.Color = lipgloss.Color("#56d7c2")
 )
 
 var (

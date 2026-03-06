@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	lipgloss "github.com/charmbracelet/lipgloss"
+	lipgloss "charm.land/lipgloss/v2"
 )
 
 var logStartTime = time.Now()

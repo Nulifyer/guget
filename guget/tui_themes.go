@@ -1,22 +1,24 @@
 package main
 
 import (
+	"image/color"
+	"os"
 	"strings"
 
-	lipgloss "github.com/charmbracelet/lipgloss"
+	lipgloss "charm.land/lipgloss/v2"
 )
 
 type Theme struct {
-	Border lipgloss.TerminalColor
-	Muted  lipgloss.TerminalColor
-	Text   lipgloss.TerminalColor
-	Subtle lipgloss.TerminalColor
-	Accent lipgloss.TerminalColor
-	Green  lipgloss.TerminalColor
-	Yellow lipgloss.TerminalColor
-	Red    lipgloss.TerminalColor
-	Purple lipgloss.TerminalColor
-	Cyan   lipgloss.TerminalColor
+	Border color.Color
+	Muted  color.Color
+	Text   color.Color
+	Subtle color.Color
+	Accent color.Color
+	Green  color.Color
+	Yellow color.Color
+	Red    color.Color
+	Purple color.Color
+	Cyan   color.Color
 }
 
 var validThemeNames = []string{
@@ -26,18 +28,7 @@ var validThemeNames = []string{
 }
 
 var themes = map[string]Theme{
-	"auto": {
-		Border: lipgloss.AdaptiveColor{Dark: "#30363d", Light: "#d0d7de"},
-		Muted:  lipgloss.AdaptiveColor{Dark: "#484f58", Light: "#8c959f"},
-		Text:   lipgloss.AdaptiveColor{Dark: "#e6edf3", Light: "#1f2328"},
-		Subtle: lipgloss.AdaptiveColor{Dark: "#8b949e", Light: "#656d76"},
-		Accent: lipgloss.AdaptiveColor{Dark: "#58a6ff", Light: "#0969da"},
-		Green:  lipgloss.AdaptiveColor{Dark: "#3fb950", Light: "#1a7f37"},
-		Yellow: lipgloss.AdaptiveColor{Dark: "#d29922", Light: "#9a6700"},
-		Red:    lipgloss.AdaptiveColor{Dark: "#f85149", Light: "#cf222e"},
-		Purple: lipgloss.AdaptiveColor{Dark: "#bc8cff", Light: "#8250df"},
-		Cyan:   lipgloss.AdaptiveColor{Dark: "#56d7c2", Light: "#0d7680"},
-	},
+	// "auto" is resolved at runtime in initTheme via HasDarkBackground
 	"auto-light": {
 		Border: lipgloss.Color("#d0d7de"),
 		Muted:  lipgloss.Color("#8c959f"),
@@ -177,14 +168,38 @@ var themes = map[string]Theme{
 func initTheme(name string, noColor bool) {
 	if noColor {
 		hyperlinkEnabled = false
-		lipgloss.SetColorProfile(0)
+		// In lipgloss v2, color downsampling is handled by bubbletea.
+		// Setting all colors to NoColor effectively disables color output.
+		nc := lipgloss.NoColor{}
+		colorBorder = nc
+		colorMuted = nc
+		colorText = nc
+		colorSubtle = nc
+		colorAccent = nc
+		colorGreen = nc
+		colorYellow = nc
+		colorRed = nc
+		colorPurple = nc
+		colorCyan = nc
+		rebuildStyles()
 		return
 	}
 
-	t, ok := themes[strings.ToLower(name)]
+	lower := strings.ToLower(name)
+
+	// "auto" resolves to auto-dark or auto-light based on terminal background.
+	if lower == "auto" {
+		if lipgloss.HasDarkBackground(os.Stdin, os.Stdout) {
+			lower = "auto-dark"
+		} else {
+			lower = "auto-light"
+		}
+	}
+
+	t, ok := themes[lower]
 	if !ok {
-		logWarn("Unknown theme %q, falling back to \"auto\"", name)
-		t = themes["auto"]
+		logWarn("Unknown theme %q, falling back to \"auto-dark\"", name)
+		t = themes["auto-dark"]
 	}
 
 	colorBorder = t.Border
