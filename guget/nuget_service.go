@@ -325,6 +325,7 @@ type NugetService struct {
 	client         *http.Client
 	searchBase     string // resolved from service index
 	regBase        string // RegistrationsBaseUrl
+	flatBase       string // PackageBaseAddress (flat container for .nupkg/.nuspec)
 	detailTemplate string // PackageDetailsUriTemplate (e.g. "https://…/packages/{id}/{version}")
 	adoSearchBase  string // Azure DevOps REST API base (faster alternative to SearchQueryService)
 	adoUpstreams   []string // public NuGet upstream source URLs discovered from ADO feed config
@@ -613,6 +614,8 @@ func (s *NugetService) resolveEndpoints() error {
 				s.regBase = r.ID
 				regVer = v
 			}
+		case strings.HasPrefix(r.Type, "PackageBaseAddress"):
+			s.flatBase = strings.TrimSuffix(r.ID, "/")
 		case strings.HasPrefix(r.Type, "PackageDetailsUriTemplate"):
 			s.detailTemplate = r.ID
 		}
@@ -1171,31 +1174,39 @@ func parseGitHubRepo(rawURL string) (owner, repo string) {
 // FetchGitHubReleases returns up to `limit` releases for the given GitHub repo.
 func FetchGitHubReleases(owner, repo string, limit int) ([]GitHubRelease, error) {
 	apiURL := fmt.Sprintf("https://api.github.com/repos/%s/%s/releases?per_page=%d", owner, repo, limit)
+	logTrace("FetchGitHubReleases: GET %s", apiURL)
 	req, err := http.NewRequest("GET", apiURL, nil)
 	if err != nil {
+		logTrace("FetchGitHubReleases: request error: %v", err)
 		return nil, err
 	}
 	req.Header.Set("Accept", "application/vnd.github.v3+json")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
+		logTrace("FetchGitHubReleases: fetch error: %v", err)
 		return nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
+		logTrace("FetchGitHubReleases: %s/%s returned HTTP %d", owner, repo, resp.StatusCode)
 		return nil, fmt.Errorf("GitHub API returned %d", resp.StatusCode)
 	}
 	var releases []GitHubRelease
 	if err := json.NewDecoder(resp.Body).Decode(&releases); err != nil {
+		logTrace("FetchGitHubReleases: decode error: %v", err)
 		return nil, err
 	}
+	logTrace("FetchGitHubReleases: %s/%s returned %d release(s)", owner, repo, len(releases))
 	return releases, nil
 }
 
 // FetchGitHubReleaseByTag returns the release for a specific tag.
 // Tries the exact version string first, then with a "v" prefix.
 func FetchGitHubReleaseByTag(owner, repo, version string) (*GitHubRelease, error) {
+	logTrace("FetchGitHubReleaseByTag: %s/%s tag=%s", owner, repo, version)
 	for _, tag := range []string{version, "v" + version} {
 		apiURL := fmt.Sprintf("https://api.github.com/repos/%s/%s/releases/tags/%s", owner, repo, tag)
+		logTrace("FetchGitHubReleaseByTag: trying GET %s", apiURL)
 		req, err := http.NewRequest("GET", apiURL, nil)
 		if err != nil {
 			continue
@@ -1203,48 +1214,119 @@ func FetchGitHubReleaseByTag(owner, repo, version string) (*GitHubRelease, error
 		req.Header.Set("Accept", "application/vnd.github.v3+json")
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
+			logTrace("FetchGitHubReleaseByTag: fetch error for tag %s: %v", tag, err)
 			continue
 		}
 		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
+			logTrace("FetchGitHubReleaseByTag: tag %s returned HTTP %d", tag, resp.StatusCode)
 			continue
 		}
 		var rel GitHubRelease
 		if err := json.NewDecoder(resp.Body).Decode(&rel); err != nil {
+			logTrace("FetchGitHubReleaseByTag: decode error for tag %s: %v", tag, err)
 			continue
 		}
+		logTrace("FetchGitHubReleaseByTag: found release %q for tag %s", rel.Name, tag)
 		return &rel, nil
 	}
+	logTrace("FetchGitHubReleaseByTag: no release found for %s/%s tag %s", owner, repo, version)
 	return nil, fmt.Errorf("no release found for %s/%s tag %s", owner, repo, version)
 }
 
 // FetchNuspecReleaseNotes fetches the nuspec from the NuGet flat container
 // and extracts the <releaseNotes> element. Returns "" if not found.
-func FetchNuspecReleaseNotes(packageID, version string) string {
-	u := fmt.Sprintf("https://api.nuget.org/v3-flatcontainer/%s/%s/%s.nuspec",
-		strings.ToLower(packageID), version, strings.ToLower(packageID))
+// fetchNuspec fetches the .nuspec from the given flat container base URL.
+func fetchNuspec(flatBase, packageID, version string) string {
+	lower := strings.ToLower(packageID)
+	u := fmt.Sprintf("%s/%s/%s/%s.nuspec", flatBase, lower, version, lower)
+	logTrace("fetchNuspec: GET %s", u)
 	resp, err := http.DefaultClient.Get(u)
-	if err != nil || resp.StatusCode != http.StatusOK {
-		if resp != nil {
-			resp.Body.Close()
-		}
+	if err != nil {
 		return ""
 	}
 	defer resp.Body.Close()
-	// Simple extraction — avoid pulling in encoding/xml for one element.
+	if resp.StatusCode != http.StatusOK {
+		logTrace("fetchNuspec: %s/%s returned HTTP %d", packageID, version, resp.StatusCode)
+		return ""
+	}
 	buf := make([]byte, 64*1024)
 	n, _ := resp.Body.Read(buf)
-	body := string(buf[:n])
+	return string(buf[:n])
+}
+
+// extractRepoURL extracts the <repository url="..."> attribute from nuspec XML.
+func extractRepoURL(body string) string {
+	idx := strings.Index(body, "<repository ")
+	if idx < 0 {
+		return ""
+	}
+	tag := body[idx:]
+	end := strings.Index(tag, "/>")
+	if end < 0 {
+		end = strings.Index(tag, ">")
+	}
+	if end < 0 {
+		return ""
+	}
+	tag = tag[:end]
+	const urlAttr = `url="`
+	ui := strings.Index(tag, urlAttr)
+	if ui < 0 {
+		return ""
+	}
+	urlStart := ui + len(urlAttr)
+	urlEnd := strings.Index(tag[urlStart:], `"`)
+	if urlEnd < 0 {
+		return ""
+	}
+	return tag[urlStart : urlStart+urlEnd]
+}
+
+// FetchNuspecRepoURL fetches the .nuspec and extracts <repository url="...">.
+// The registration API often omits the repository field even when the nuspec has it.
+func (s *NugetService) FetchNuspecRepoURL(packageID, version string) string {
+	if s.flatBase == "" {
+		logTrace("FetchNuspecRepoURL: [%s] no PackageBaseAddress available", s.sourceName)
+		return ""
+	}
+	body := fetchNuspec(s.flatBase, packageID, version)
+	if body == "" {
+		return ""
+	}
+	repoURL := extractRepoURL(body)
+	if repoURL != "" {
+		logTrace("FetchNuspecRepoURL: %s/%s found repository url=%q", packageID, version, repoURL)
+	} else {
+		logTrace("FetchNuspecRepoURL: %s/%s no <repository> tag found", packageID, version)
+	}
+	return repoURL
+}
+
+// FetchNuspecReleaseNotes fetches the nuspec and extracts inline <releaseNotes>.
+func (s *NugetService) FetchNuspecReleaseNotes(packageID, version string) string {
+	if s.flatBase == "" {
+		logTrace("FetchNuspecReleaseNotes: [%s] no PackageBaseAddress available", s.sourceName)
+		return ""
+	}
+	body := fetchNuspec(s.flatBase, packageID, version)
+	if body == "" {
+		return ""
+	}
 	const openTag = "<releaseNotes>"
 	const closeTag = "</releaseNotes>"
 	start := strings.Index(body, openTag)
 	if start < 0 {
+		logTrace("FetchNuspecReleaseNotes: %s/%s no <releaseNotes> tag found", packageID, version)
 		return ""
 	}
 	start += len(openTag)
 	end := strings.Index(body[start:], closeTag)
 	if end < 0 {
+		logTrace("FetchNuspecReleaseNotes: %s/%s unclosed <releaseNotes> tag", packageID, version)
 		return ""
 	}
-	return strings.TrimSpace(body[start : start+end])
+	notes := strings.TrimSpace(body[start : start+end])
+	logTrace("FetchNuspecReleaseNotes: %s/%s found %d chars of release notes", packageID, version, len(notes))
+	return notes
 }

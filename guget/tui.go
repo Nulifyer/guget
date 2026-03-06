@@ -13,7 +13,6 @@ import (
 	bubbles_viewport "github.com/charmbracelet/bubbles/viewport"
 	bubble_tea "github.com/charmbracelet/bubbletea"
 	lipgloss "github.com/charmbracelet/lipgloss"
-	lipgloss_table "github.com/charmbracelet/lipgloss/table"
 )
 
 const (
@@ -172,6 +171,8 @@ type depTreeReadyMsg struct {
 type releaseListReadyMsg struct {
 	releases []GitHubRelease
 	err      error
+	owner    string // set when repo was discovered late (e.g. from nuspec)
+	repo     string
 }
 
 type releaseNotesReadyMsg struct {
@@ -578,6 +579,10 @@ func (m Model) Update(msg bubble_tea.Msg) (bubble_tea.Model, bubble_tea.Cmd) {
 
 	case releaseListReadyMsg:
 		m.releaseNotes.loading = false
+		if msg.owner != "" {
+			m.releaseNotes.owner = msg.owner
+			m.releaseNotes.repo = msg.repo
+		}
 		if msg.err != nil {
 			m.releaseNotes.err = msg.err
 			m.releaseNotes.vp.SetContent(styleRed.Render("Error: " + msg.err.Error()))
@@ -2084,7 +2089,7 @@ func (m *Model) openReleaseNotes() bubble_tea.Cmd {
 
 	_, rightW := m.releaseNotesPanelWidths()
 	_, overlayH := m.releaseNotesOverlaySize()
-	vpH := overlayH - 6 // padding(2) + title(1) + titleDivider(1) + colHeaders(1) + colDividers(1)
+	vpH := overlayH - 4 // title(1) + titleDivider(1) + colHeaders(1) + headerBorder(1)
 	if vpH < 4 {
 		vpH = 4
 	}
@@ -2095,10 +2100,11 @@ func (m *Model) openReleaseNotes() bubble_tea.Cmd {
 	if repoURL == "" {
 		repoURL = row.info.ProjectURL
 	}
+	logTrace("openReleaseNotes: %s repoURL=%q", row.info.ID, repoURL)
 	owner, repo := parseGitHubRepo(repoURL)
 
 	if owner != "" && repo != "" {
-		// GitHub repo — fetch release list
+		logTrace("openReleaseNotes: %s → GitHub %s/%s, fetching release list", row.info.ID, owner, repo)
 		vp.SetContent(m.spinner.View() + " " + styleSubtle.Render("Loading releases…"))
 		m.releaseNotes = releaseNotesOverlay{
 			active:  true,
@@ -2111,7 +2117,8 @@ func (m *Model) openReleaseNotes() bubble_tea.Cmd {
 		return m.fetchReleaseListCmd(owner, repo)
 	}
 
-	// No GitHub repo — try nuspec release notes
+	// No GitHub repo in metadata — try nuspec for repo URL or release notes.
+	logTrace("openReleaseNotes: %s → no GitHub repo in metadata, trying nuspec", row.info.ID)
 	vp.SetContent(m.spinner.View() + " " + styleSubtle.Render("Checking NuGet release notes…"))
 	m.releaseNotes = releaseNotesOverlay{
 		active:  true,
@@ -2121,8 +2128,28 @@ func (m *Model) openReleaseNotes() bubble_tea.Cmd {
 	}
 	pkgID := row.info.ID
 	version := row.info.LatestVersion
+	var svc *NugetService
+	for _, s := range m.nugetServices {
+		if strings.EqualFold(s.SourceName(), row.source) {
+			svc = s
+			break
+		}
+	}
+	if svc == nil {
+		return func() bubble_tea.Msg {
+			return releaseNotesReadyMsg{err: fmt.Errorf("no release notes available")}
+		}
+	}
 	return func() bubble_tea.Msg {
-		notes := FetchNuspecReleaseNotes(pkgID, version)
+		// Check if the nuspec has a GitHub repo URL the registration API missed
+		nuspecRepo := svc.FetchNuspecRepoURL(pkgID, version)
+		if nuspecOwner, nuspecRepoName := parseGitHubRepo(nuspecRepo); nuspecOwner != "" && nuspecRepoName != "" {
+			logTrace("openReleaseNotes: %s → nuspec has GitHub repo %s/%s, fetching releases", pkgID, nuspecOwner, nuspecRepoName)
+			releases, err := FetchGitHubReleases(nuspecOwner, nuspecRepoName, 20)
+			return releaseListReadyMsg{releases: releases, err: err, owner: nuspecOwner, repo: nuspecRepoName}
+		}
+		// Fall back to inline release notes from nuspec
+		notes := svc.FetchNuspecReleaseNotes(pkgID, version)
 		if notes == "" {
 			return releaseNotesReadyMsg{err: fmt.Errorf("no release notes available")}
 		}
@@ -2247,7 +2274,7 @@ func (m Model) buildReleaseNotesContent() string {
 
 func (m *Model) releaseNotesPanelWidths() (listW, rightW int) {
 	overlayW, _ := m.releaseNotesOverlaySize()
-	innerW := overlayW - 6
+	innerW := overlayW - 6 // subtract styleOverlay border(2) + padding(4)
 	listW = releaseListWidth
 	if listW > innerW/3 {
 		listW = innerW / 3
@@ -2262,8 +2289,9 @@ func (m *Model) releaseNotesPanelWidths() (listW, rightW int) {
 func (m *Model) resizeReleaseNotesViewport() {
 	_, rightW := m.releaseNotesPanelWidths()
 	_, overlayH := m.releaseNotesOverlaySize()
-	// bodyH = overlayH - 6 (padding(2) + title(1) + titleDivider(1) + tableHeader(1) + headerBorder(1))
-	vpH := overlayH - 6
+	// bodyH = overlayH - 4 (title(1) + titleDivider(1) + tableHeader(1) + headerBorder(1))
+	// (overlay padding already subtracted in overlaySize)
+	vpH := overlayH - 4
 	if vpH < 4 {
 		vpH = 4
 	}
@@ -2277,73 +2305,110 @@ func (m *Model) resizeReleaseNotesViewport() {
 
 func (m Model) renderReleaseNotesOverlay() string {
 	overlayW, overlayH := m.releaseNotesOverlaySize()
+	// innerW is the usable content width inside styleOverlay (border 2 + padding 4 = 6)
 	innerW := overlayW - 6
-	listW, _ := m.releaseNotesPanelWidths()
-
-	// bodyH = overlayH - padding(2) - title(1) - titleDivider(1) - tableHeader(1) - headerBorder(1)
-	bodyH := overlayH - 6
-
-	// --- Left panel: release version list ---
-	var leftLines []string
-	if m.releaseNotes.loading && len(m.releaseNotes.releases) == 0 {
-		leftLines = append(leftLines, m.spinner.View()+" "+styleSubtle.Render("Loading…"))
-	}
-	for i, rel := range m.releaseNotes.releases {
-		if i == m.releaseNotes.cursor {
-			leftLines = append(leftLines, styleAccent.Render("▶ "+rel.TagName))
-		} else {
-			leftLines = append(leftLines, styleMuted.Render("  "+rel.TagName))
-		}
-	}
-	leftCell := lipgloss.NewStyle().Height(bodyH).Render(strings.Join(leftLines, "\n"))
-
-	// --- Right panel: release notes content ---
-	var rightCell string
-	if m.releaseNotes.loading {
-		rightCell = lipgloss.NewStyle().Height(bodyH).Render(
-			m.spinner.View() + " " + styleSubtle.Render("Loading release notes…"))
-	} else if len(m.releaseNotes.releases) == 0 && m.releaseNotes.nuspecNotes != "" {
-		rightCell = lipgloss.NewStyle().Height(bodyH).Render(
-			styleText.Render(m.releaseNotes.nuspecNotes))
-	} else {
-		rightCell = m.releaseNotes.vp.View()
-	}
-
-	// --- Table layout ---
+	listW, rightW := m.releaseNotesPanelWidths()
 	focusLeft := !m.releaseNotes.focusRight
-	t := lipgloss_table.New().
-		Width(innerW).
-		Headers("Releases", "Notes").
-		Row(leftCell, rightCell).
-		Border(lipgloss.NormalBorder()).
-		BorderStyle(lipgloss.NewStyle().Foreground(colorBorder)).
-		BorderTop(false).
-		BorderBottom(false).
-		BorderLeft(false).
-		BorderRight(false).
-		BorderColumn(true).
-		BorderHeader(true).
-		StyleFunc(func(row, col int) lipgloss.Style {
-			s := lipgloss.NewStyle().PaddingLeft(1).PaddingRight(1)
-			if col == 0 {
-				s = s.Width(listW)
-			}
-			if row == lipgloss_table.HeaderRow {
-				if (col == 0 && focusLeft) || (col == 1 && !focusLeft) {
-					return s.Foreground(colorAccent).Bold(true)
-				}
-				return s.Foreground(colorSubtle).Bold(true)
-			}
-			return s
-		})
+	div := styleBorder.Render("│")
 
-	// Wrap in overlay box with title
+	// bodyH = overlayH minus title(1) + titleDivider(1) + columnHeaders(1) + headerDivider(1)
+	// overlayH already excludes styleOverlay chrome
+	bodyH := overlayH - 4
+	if bodyH < 1 {
+		bodyH = 1
+	}
+
+	// ── Title ──
 	title := styleAccentBold.Render(m.releaseNotes.title)
 	titleDivider := styleBorder.Render(strings.Repeat("─", innerW))
-	content := lipgloss.JoinVertical(lipgloss.Left, title, titleDivider, t.Render())
+
+	// ── Column headers ──
+	leftHdr := " Releases"
+	rightHdr := " Notes"
+	if focusLeft {
+		leftHdr = styleAccentBold.Render(leftHdr)
+		rightHdr = lipgloss.NewStyle().Foreground(colorSubtle).Bold(true).Render(rightHdr)
+	} else {
+		leftHdr = lipgloss.NewStyle().Foreground(colorSubtle).Bold(true).Render(leftHdr)
+		rightHdr = styleAccentBold.Render(rightHdr)
+	}
+	headerLine := padRight(leftHdr, listW) + div + padRight(rightHdr, rightW)
+	headerDivider := styleBorder.Render(strings.Repeat("─", listW) + "┼" + strings.Repeat("─", rightW))
+
+	// ── Left panel: release list (scrolled) ──
+	maxTagW := listW - 3 // prefix "▶ " (2) + left margin (1)
+	if maxTagW < 5 {
+		maxTagW = 5
+	}
+	var allLeft []string
+	if m.releaseNotes.loading && len(m.releaseNotes.releases) == 0 {
+		allLeft = append(allLeft, " "+m.spinner.View()+" "+styleSubtle.Render("Loading…"))
+	}
+	for i, rel := range m.releaseNotes.releases {
+		tag := truncate(rel.TagName, maxTagW)
+		if i == m.releaseNotes.cursor {
+			allLeft = append(allLeft, styleAccent.Render(" ▶ "+tag))
+		} else {
+			allLeft = append(allLeft, styleMuted.Render("   "+tag))
+		}
+	}
+	// Scroll window: keep cursor visible
+	scrollStart := 0
+	if m.releaseNotes.cursor >= bodyH {
+		scrollStart = m.releaseNotes.cursor - bodyH + 1
+	}
+	var leftLines []string
+	for i := scrollStart; i < len(allLeft) && i < scrollStart+bodyH; i++ {
+		leftLines = append(leftLines, padRight(allLeft[i], listW))
+	}
+	// Pad to bodyH
+	for len(leftLines) < bodyH {
+		leftLines = append(leftLines, strings.Repeat(" ", listW))
+	}
+
+	// ── Right panel: viewport or loading state ──
+	var rightLines []string
+	if m.releaseNotes.loading {
+		line := " " + m.spinner.View() + " " + styleSubtle.Render("Loading release notes…")
+		rightLines = append(rightLines, padRight(line, rightW))
+		for len(rightLines) < bodyH {
+			rightLines = append(rightLines, strings.Repeat(" ", rightW))
+		}
+	} else if len(m.releaseNotes.releases) == 0 && m.releaseNotes.nuspecNotes != "" {
+		line := " " + styleText.Render(m.releaseNotes.nuspecNotes)
+		rightLines = append(rightLines, padRight(line, rightW))
+		for len(rightLines) < bodyH {
+			rightLines = append(rightLines, strings.Repeat(" ", rightW))
+		}
+	} else {
+		vpView := m.releaseNotes.vp.View()
+		rightLines = strings.Split(vpView, "\n")
+	}
+
+	// ── Join left + divider + right line by line ──
+	var bodyLines []string
+	for i := 0; i < bodyH; i++ {
+		left := ""
+		if i < len(leftLines) {
+			left = leftLines[i]
+		}
+		right := ""
+		if i < len(rightLines) {
+			right = rightLines[i]
+		}
+		bodyLines = append(bodyLines, left+div+right)
+	}
+
+	content := lipgloss.JoinVertical(lipgloss.Left,
+		title,
+		titleDivider,
+		headerLine,
+		headerDivider,
+		strings.Join(bodyLines, "\n"),
+	)
 
 	box := styleOverlay.
-		Width(overlayW).
+		Width(innerW).
 		Render(content)
 
 	return lipgloss.Place(m.width, m.overlayHeight(), lipgloss.Center, lipgloss.Center, box)

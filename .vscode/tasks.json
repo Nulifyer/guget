@@ -2,6 +2,23 @@
     "version": "2.0.0",
     "tasks": [
         {
+            "label": "go-test",
+            "type": "shell",
+            "command": "go test ./...",
+            "options": {
+                "cwd": "${workspaceFolder}/guget"
+            },
+            "group": {
+                "kind": "test",
+                "isDefault": true
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "focus": true
+            }
+        },
+        {
             "label": "reset-test-dotnet",
             "type": "shell",
             "command": "git checkout -- ./test-dotnet/",
