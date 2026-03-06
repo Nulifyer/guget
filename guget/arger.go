@@ -70,13 +70,13 @@ func (f Flag[T]) parse(value string) (IParsedFlag, error) {
 	if f.Parser == nil {
 		_, err := fmt.Sscan(value, &v)
 		if err != nil {
-			flagError(f, "could not parse value %s", value)
+			flagError(f, "could not parse value %s: %v", value, err)
 		}
 	} else {
 		var err error
 		v, err = f.Parser(value)
 		if err != nil {
-			flagError(f, "could not parse value %s", value)
+			flagError(f, "could not parse value %s: %v", value, err)
 		}
 	}
 

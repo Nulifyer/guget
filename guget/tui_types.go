@@ -100,11 +100,6 @@ type packageReadyMsg struct {
 	result nugetResult
 }
 
-// resultsReadyMsg is kept for compatibility but is no longer sent by main.go.
-type resultsReadyMsg struct {
-	results map[string]nugetResult
-}
-
 type writeResultMsg struct {
 	err     error
 	written int // number of files written (0 = unknown / not an applyVersion call)

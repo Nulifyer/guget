@@ -186,6 +186,7 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Failed to open log file %q: %v\n", builtFlags.LogFile, err)
 			os.Exit(1)
 		}
+		defer f.Close()
 		logSetOutput(io.MultiWriter(buf, f))
 	} else {
 		logSetOutput(buf)

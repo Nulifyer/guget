@@ -181,7 +181,11 @@ func ParseCsproj(filePath string) (*ParsedProject, error) {
 		return nil, fmt.Errorf("failed to parse XML: %w", err)
 	}
 
-	absFilePath, _ := filepath.Abs(filePath)
+	absFilePath, err := filepath.Abs(filePath)
+	if err != nil {
+		logWarn("filepath.Abs(%s): %v", filePath, err)
+		absFilePath = filePath
+	}
 
 	result := &ParsedProject{
 		FileName:         filepath.Base(filePath),
@@ -284,15 +288,25 @@ func ParseCsproj(filePath string) (*ParsedProject, error) {
 	// Use the visited map to include ALL transitively discovered props files.
 	absDBP := ""
 	if dbp != "" {
-		absDBP, _ = filepath.Abs(dbp)
+		if absDBP, err = filepath.Abs(dbp); err != nil {
+			logWarn("filepath.Abs(%s): %v", dbp, err)
+			absDBP = dbp
+		}
 	}
 	absCPM := ""
 	if cpmFilePath != "" {
-		absCPM, _ = filepath.Abs(cpmFilePath)
+		if absCPM, err = filepath.Abs(cpmFilePath); err != nil {
+			logWarn("filepath.Abs(%s): %v", cpmFilePath, err)
+			absCPM = cpmFilePath
+		}
 	}
 	directImports := make(map[string]bool)
 	for _, resolved := range resolvedImports {
-		abs, _ := filepath.Abs(resolved)
+		abs, absErr := filepath.Abs(resolved)
+		if absErr != nil {
+			logWarn("filepath.Abs(%s): %v", resolved, absErr)
+			abs = resolved
+		}
 		directImports[abs] = true
 	}
 

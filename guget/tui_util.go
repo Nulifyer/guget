@@ -46,8 +46,8 @@ func clampW(w, minW, maxW int) int {
 	if w > maxW {
 		w = maxW
 	}
-	if w < 10 {
-		w = 10
+	if w < 1 {
+		w = 1
 	}
 	return w
 }

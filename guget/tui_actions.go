@@ -54,10 +54,7 @@ func (m *Model) applyVersion(pkgName, version string, targetProject *ParsedProje
 	if targetProject != nil {
 		projects = []*ParsedProject{targetProject}
 	}
-	type writeTarget struct {
-		filePath string
-	}
-	var toWrite []writeTarget
+	var toWrite []string
 	// Determine the on-disk source file so we know which .props (if any) to propagate.
 	var propsSource string
 	skippedLocked := 0
@@ -80,7 +77,7 @@ func (m *Model) applyVersion(pkgName, version string, targetProject *ParsedProje
 		if changed {
 			sourceFile := p.SourceFileForPackage(pkgName)
 			if sourceFile != "" {
-				toWrite = append(toWrite, writeTarget{filePath: sourceFile})
+				toWrite = append(toWrite, sourceFile)
 				if strings.HasSuffix(strings.ToLower(sourceFile), ".props") {
 					propsSource = sourceFile
 				}
@@ -121,14 +118,14 @@ func (m *Model) applyVersion(pkgName, version string, targetProject *ParsedProje
 	written := len(toWrite)
 	return func() bubble_tea.Msg {
 		seen := make(map[string]bool)
-		for _, wt := range toWrite {
-			if seen[wt.filePath] {
+		for _, fp := range toWrite {
+			if seen[fp] {
 				continue
 			}
-			seen[wt.filePath] = true
-			logDebug("writing %s to %s", pkgName, wt.filePath)
-			if err := UpdatePackageVersion(wt.filePath, pkgName, version); err != nil {
-				logWarn("write failed for %s: %v", wt.filePath, err)
+			seen[fp] = true
+			logDebug("writing %s to %s", pkgName, fp)
+			if err := UpdatePackageVersion(fp, pkgName, version); err != nil {
+				logWarn("write failed for %s: %v", fp, err)
 				return writeResultMsg{err: err}
 			}
 		}
@@ -171,20 +168,13 @@ func runDotnetRestore(projects []*ParsedProject) bubble_tea.Cmd {
 
 func (m *Model) removePackage(pkgName string) bubble_tea.Cmd {
 	targetProject := m.selectedProject() // nil = all projects
-	type writeTarget struct {
-		filePath string
-	}
-	var toWrite []writeTarget
+	var toWrite []string
 	var propsSource string
 
 	// Determine which projects to operate on.
 	projects := m.ctx.ParsedProjects
 	if targetProject != nil {
-		if m.isPropsProject(targetProject) {
-			projects = []*ParsedProject{targetProject}
-		} else {
-			projects = []*ParsedProject{targetProject}
-		}
+		projects = []*ParsedProject{targetProject}
 	}
 
 	for _, p := range projects {
@@ -193,7 +183,7 @@ func (m *Model) removePackage(pkgName string) bubble_tea.Cmd {
 				sourceFile := p.SourceFileForPackage(pkgName)
 				p.Packages.Remove(ref)
 				if sourceFile != "" {
-					toWrite = append(toWrite, writeTarget{filePath: sourceFile})
+					toWrite = append(toWrite, sourceFile)
 					if strings.HasSuffix(strings.ToLower(sourceFile), ".props") {
 						propsSource = sourceFile
 					}
@@ -251,14 +241,14 @@ func (m *Model) removePackage(pkgName string) bubble_tea.Cmd {
 	}
 	return func() bubble_tea.Msg {
 		seen := make(map[string]bool)
-		for _, wt := range toWrite {
-			if seen[wt.filePath] {
+		for _, fp := range toWrite {
+			if seen[fp] {
 				continue
 			}
-			seen[wt.filePath] = true
-			logDebug("RemovePackageReference: %s from %s", pkgName, wt.filePath)
-			if err := RemovePackageReference(wt.filePath, pkgName); err != nil {
-				logWarn("remove failed for %s: %v", wt.filePath, err)
+			seen[fp] = true
+			logDebug("RemovePackageReference: %s from %s", pkgName, fp)
+			if err := RemovePackageReference(fp, pkgName); err != nil {
+				logWarn("remove failed for %s: %v", fp, err)
 				return writeResultMsg{err: err}
 			}
 		}

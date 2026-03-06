@@ -160,13 +160,6 @@ func (m Model) Update(msg bubble_tea.Msg) (bubble_tea.Model, bubble_tea.Cmd) {
 		}
 		m.rebuildPackageRows()
 
-	case resultsReadyMsg: // fallback: bulk-load all results at once
-		m.ctx.Results = msg.results
-		m.ctx.LoadingDone = len(msg.results)
-		m.ctx.Loading = false
-		m.rebuildPackageRows()
-		m.refreshDetail()
-
 	case writeResultMsg:
 		if msg.err != nil {
 			cmds = append(cmds, m.setStatus("▲ Save failed: "+msg.err.Error(), true))

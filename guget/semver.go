@@ -141,7 +141,9 @@ func comparePreRelease(a, b string) int {
 func (v SemVer) IsPreRelease() bool { return v.PreRelease != "" }
 func (v SemVer) String() string {
 	if v.Build != "" {
-		return v.Raw[:len(v.Raw)-len(v.Build)-1]
+		if cut := len(v.Raw) - len(v.Build) - 1; cut > 0 && cut < len(v.Raw) {
+			return v.Raw[:cut]
+		}
 	}
 	return v.Raw
 }

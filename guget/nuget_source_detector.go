@@ -261,7 +261,11 @@ func userNugetConfigPath() string {
 		appdata := os.Getenv("APPDATA")
 		return filepath.Join(appdata, "NuGet", "NuGet.Config")
 	}
-	home, _ := os.UserHomeDir()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		logWarn("os.UserHomeDir(): %v", err)
+		return ""
+	}
 	return filepath.Join(home, ".nuget", "NuGet", "NuGet.Config")
 }
 

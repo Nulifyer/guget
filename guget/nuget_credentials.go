@@ -595,7 +595,7 @@ func invokeProviderV2(provider credentialProvider, sourceURL string, isRetry boo
 		if msg.RequestId == credReqId && msg.Type == "Response" {
 			var creds v2CredentialPayload
 			if err := json.Unmarshal(msg.Payload, &creds); err != nil {
-				return nil, fmt.Errorf("V2: parsing credential payload: %w: %w", err, errProviderNotApplicable)
+				return nil, fmt.Errorf("V2: parsing credential payload: %v: %w", err, errProviderNotApplicable)
 			}
 			if creds.ResponseCode == "NotFound" {
 				logTrace("invokeProviderV2: provider does not handle this source")
