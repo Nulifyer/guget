@@ -13,6 +13,7 @@ import (
 	bubbles_viewport "github.com/charmbracelet/bubbles/viewport"
 	bubble_tea "github.com/charmbracelet/bubbletea"
 	lipgloss "github.com/charmbracelet/lipgloss"
+	lipgloss_table "github.com/charmbracelet/lipgloss/table"
 )
 
 const (
@@ -168,6 +169,17 @@ type depTreeReadyMsg struct {
 	err     error
 }
 
+type releaseListReadyMsg struct {
+	releases []GitHubRelease
+	err      error
+}
+
+type releaseNotesReadyMsg struct {
+	body    string
+	htmlURL string
+	err     error
+}
+
 type depTreeOverlay struct {
 	active  bool
 	loading bool // true while dotnet list is running (T key)
@@ -175,6 +187,23 @@ type depTreeOverlay struct {
 	err     error
 	vp      bubbles_viewport.Model
 	title   string
+}
+
+type releaseNotesOverlay struct {
+	active     bool
+	loading    bool
+	focusRight bool             // false = release list, true = notes viewport
+	releases   []GitHubRelease  // list of release tags
+	cursor     int              // selected release index
+	notes      string           // rendered release notes body
+	notesURL   string           // link to the release on GitHub
+	err        error
+	vp         bubbles_viewport.Model
+	title      string
+	owner      string // GitHub owner
+	repo       string // GitHub repo name
+	// fallback: nuspec release notes (non-git or GitHub fetch failed)
+	nuspecNotes string
 }
 
 type projectItem struct {
@@ -361,6 +390,7 @@ type Model struct {
 	confirmUpdate confirmUpdate
 	locationPick  locationPicker
 	depTree       depTreeOverlay
+	releaseNotes  releaseNotesOverlay
 
 	sources       []NugetSource
 	sourceMapping *PackageSourceMapping
@@ -453,6 +483,9 @@ func (m Model) Update(msg bubble_tea.Msg) (bubble_tea.Model, bubble_tea.Cmd) {
 			if m.showHelp {
 				m.refreshHelpView()
 			}
+			if m.releaseNotes.active {
+				m.resizeReleaseNotesViewport()
+			}
 		}
 
 	case bubbles_spinner.TickMsg:
@@ -543,6 +576,34 @@ func (m Model) Update(msg bubble_tea.Msg) (bubble_tea.Model, bubble_tea.Cmd) {
 		m.logLines = append(m.logLines, msg.line)
 		m.updateLogView()
 
+	case releaseListReadyMsg:
+		m.releaseNotes.loading = false
+		if msg.err != nil {
+			m.releaseNotes.err = msg.err
+			m.releaseNotes.vp.SetContent(styleRed.Render("Error: " + msg.err.Error()))
+			break
+		}
+		m.releaseNotes.releases = msg.releases
+		if len(msg.releases) == 0 {
+			m.releaseNotes.vp.SetContent(styleMuted.Render("(no releases found)"))
+			break
+		}
+		m.releaseNotes.cursor = 0
+		// Auto-fetch notes for the first release
+		m.releaseNotes.loading = true
+		cmds = append(cmds, m.fetchReleaseNotesCmd(msg.releases[0]))
+
+	case releaseNotesReadyMsg:
+		m.releaseNotes.loading = false
+		if msg.err != nil {
+			m.releaseNotes.notes = ""
+			m.releaseNotes.vp.SetContent(styleRed.Render("Error: " + msg.err.Error()))
+			break
+		}
+		m.releaseNotes.notes = msg.body
+		m.releaseNotes.notesURL = msg.htmlURL
+		m.releaseNotes.vp.SetContent(m.buildReleaseNotesContent())
+
 	case depTreeReadyMsg:
 		m.depTree.loading = false
 		m.depTree.err = msg.err
@@ -554,6 +615,10 @@ func (m Model) Update(msg bubble_tea.Msg) (bubble_tea.Model, bubble_tea.Cmd) {
 	case bubble_tea.KeyMsg:
 		if m.depTree.active {
 			cmds = append(cmds, m.handleDepTreeKey(msg))
+			return m, bubble_tea.Batch(cmds...)
+		}
+		if m.releaseNotes.active {
+			cmds = append(cmds, m.handleReleaseNotesKey(msg))
 			return m, bubble_tea.Batch(cmds...)
 		}
 		if m.showSources {
@@ -637,8 +702,11 @@ func (m Model) Update(msg bubble_tea.Msg) (bubble_tea.Model, bubble_tea.Cmd) {
 				}
 			}
 		case focusDetail:
-			if keyMsg, ok := msg.(bubble_tea.KeyMsg); ok && keyMsg.String() == "v" {
-				m.openVersionPicker()
+			if keyMsg, ok := msg.(bubble_tea.KeyMsg); ok && (keyMsg.String() == "v" || keyMsg.String() == "n") {
+				// handled by handleKey above
+				if keyMsg.String() == "v" {
+					m.openVersionPicker()
+				}
 			} else {
 				var cmd bubble_tea.Cmd
 				m.detailView, cmd = m.detailView.Update(msg)
@@ -760,6 +828,11 @@ func (m *Model) handleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 	case "R":
 		if !m.restoring {
 			return m.restore(scopeAll)
+		}
+
+	case "n":
+		if m.focus == focusPackages || m.focus == focusDetail {
+			return m.openReleaseNotes()
 		}
 
 	case "t":
@@ -1997,6 +2070,285 @@ func (m *Model) handleDepTreeKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 	}
 }
 
+// --- Release Notes ---
+
+func (m *Model) openReleaseNotes() bubble_tea.Cmd {
+	if m.packageCursor >= len(m.packageRows) {
+		return nil
+	}
+	row := m.packageRows[m.packageCursor]
+	if row.info == nil {
+		return nil
+	}
+	m.statusLine = ""
+
+	_, rightW := m.releaseNotesPanelWidths()
+	_, overlayH := m.releaseNotesOverlaySize()
+	vpH := overlayH - 6 // padding(2) + title(1) + titleDivider(1) + colHeaders(1) + colDividers(1)
+	if vpH < 4 {
+		vpH = 4
+	}
+	vp := bubbles_viewport.New(rightW, vpH)
+
+	// Check for git repository URL (prefer RepositoryURL, fall back to ProjectURL)
+	repoURL := row.info.RepositoryURL
+	if repoURL == "" {
+		repoURL = row.info.ProjectURL
+	}
+	owner, repo := parseGitHubRepo(repoURL)
+
+	if owner != "" && repo != "" {
+		// GitHub repo — fetch release list
+		vp.SetContent(m.spinner.View() + " " + styleSubtle.Render("Loading releases…"))
+		m.releaseNotes = releaseNotesOverlay{
+			active:  true,
+			loading: true,
+			title:   row.info.ID + " — Release Notes",
+			vp:      vp,
+			owner:   owner,
+			repo:    repo,
+		}
+		return m.fetchReleaseListCmd(owner, repo)
+	}
+
+	// No GitHub repo — try nuspec release notes
+	vp.SetContent(m.spinner.View() + " " + styleSubtle.Render("Checking NuGet release notes…"))
+	m.releaseNotes = releaseNotesOverlay{
+		active:  true,
+		loading: true,
+		title:   row.info.ID + " — Release Notes",
+		vp:      vp,
+	}
+	pkgID := row.info.ID
+	version := row.info.LatestVersion
+	return func() bubble_tea.Msg {
+		notes := FetchNuspecReleaseNotes(pkgID, version)
+		if notes == "" {
+			return releaseNotesReadyMsg{err: fmt.Errorf("no release notes available")}
+		}
+		return releaseNotesReadyMsg{body: notes}
+	}
+}
+
+func (m *Model) fetchReleaseListCmd(owner, repo string) bubble_tea.Cmd {
+	return func() bubble_tea.Msg {
+		releases, err := FetchGitHubReleases(owner, repo, 20)
+		return releaseListReadyMsg{releases: releases, err: err}
+	}
+}
+
+func (m *Model) fetchReleaseNotesCmd(rel GitHubRelease) bubble_tea.Cmd {
+	return func() bubble_tea.Msg {
+		return releaseNotesReadyMsg{body: rel.Body, htmlURL: rel.HTMLURL}
+	}
+}
+
+func (m *Model) handleReleaseNotesKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
+	switch msg.String() {
+	case "[":
+		m.overlayWidthOffset -= 4
+		m.resizeReleaseNotesViewport()
+		return nil
+	case "]":
+		m.overlayWidthOffset += 4
+		m.resizeReleaseNotesViewport()
+		return nil
+	case "esc", "q":
+		m.overlayWidthOffset = 0
+		m.releaseNotes.active = false
+		m.statusLine = ""
+		return nil
+	case "tab", "shift+tab":
+		m.releaseNotes.focusRight = !m.releaseNotes.focusRight
+		return nil
+	case "up", "k":
+		if m.releaseNotes.focusRight {
+			// scroll notes viewport
+			var cmd bubble_tea.Cmd
+			m.releaseNotes.vp, cmd = m.releaseNotes.vp.Update(msg)
+			return cmd
+		}
+		// navigate release list
+		if len(m.releaseNotes.releases) > 0 && m.releaseNotes.cursor > 0 {
+			m.releaseNotes.cursor--
+			m.releaseNotes.loading = true
+			return m.fetchReleaseNotesCmd(m.releaseNotes.releases[m.releaseNotes.cursor])
+		}
+		return nil
+	case "down", "j":
+		if m.releaseNotes.focusRight {
+			var cmd bubble_tea.Cmd
+			m.releaseNotes.vp, cmd = m.releaseNotes.vp.Update(msg)
+			return cmd
+		}
+		if len(m.releaseNotes.releases) > 0 && m.releaseNotes.cursor < len(m.releaseNotes.releases)-1 {
+			m.releaseNotes.cursor++
+			m.releaseNotes.loading = true
+			return m.fetchReleaseNotesCmd(m.releaseNotes.releases[m.releaseNotes.cursor])
+		}
+		return nil
+	default:
+		// pass everything else to viewport (pgup/pgdn, home/end, etc.)
+		var cmd bubble_tea.Cmd
+		m.releaseNotes.vp, cmd = m.releaseNotes.vp.Update(msg)
+		return cmd
+	}
+}
+
+func (m Model) releaseNotesOverlaySize() (w, h int) {
+	w = clampW(m.width*85/100+m.overlayWidthOffset, 60, m.width-4)
+	h = m.overlayHeight() - 4
+	return
+}
+
+const releaseListWidth = 22 // width of the left release list panel
+
+func (m Model) buildReleaseNotesContent() string {
+	rn := m.releaseNotes
+	var s strings.Builder
+
+	if len(rn.releases) > 0 {
+		rel := rn.releases[rn.cursor]
+
+		// Title
+		title := rel.TagName
+		if rel.Name != "" && rel.Name != rel.TagName {
+			title = rel.Name + " (" + rel.TagName + ")"
+		}
+		s.WriteString(styleAccentBold.Render(title))
+
+		// Date
+		if rel.PublishedAt != "" {
+			if t, err := time.Parse(time.RFC3339, rel.PublishedAt); err == nil {
+				s.WriteString("  " + styleMuted.Render(t.Format("2006-01-02")))
+			}
+		}
+
+		// Link
+		if rn.notesURL != "" {
+			s.WriteString("  " + hyperlink(rn.notesURL, styleSubtle.Render("view on GitHub")))
+		}
+
+		s.WriteString("\n")
+		s.WriteString(styleBorder.Render(strings.Repeat("─", m.releaseNotes.vp.Width)) + "\n")
+	}
+
+	body := rn.notes
+	if body == "" {
+		body = styleMuted.Render("(no release notes)")
+	}
+	// Word-wrap the body to fit within the viewport width
+	if m.releaseNotes.vp.Width > 0 {
+		body = lipgloss.NewStyle().Width(m.releaseNotes.vp.Width).Render(body)
+	}
+	s.WriteString(body)
+	return s.String()
+}
+
+func (m *Model) releaseNotesPanelWidths() (listW, rightW int) {
+	overlayW, _ := m.releaseNotesOverlaySize()
+	innerW := overlayW - 6
+	listW = releaseListWidth
+	if listW > innerW/3 {
+		listW = innerW / 3
+	}
+	rightW = innerW - listW - 3 // 3 = column border(1) + right column padding(2)
+	if rightW < 20 {
+		rightW = 20
+	}
+	return
+}
+
+func (m *Model) resizeReleaseNotesViewport() {
+	_, rightW := m.releaseNotesPanelWidths()
+	_, overlayH := m.releaseNotesOverlaySize()
+	// bodyH = overlayH - 6 (padding(2) + title(1) + titleDivider(1) + tableHeader(1) + headerBorder(1))
+	vpH := overlayH - 6
+	if vpH < 4 {
+		vpH = 4
+	}
+	m.releaseNotes.vp.Width = rightW
+	m.releaseNotes.vp.Height = vpH
+	// Re-wrap content at new width
+	if !m.releaseNotes.loading {
+		m.releaseNotes.vp.SetContent(m.buildReleaseNotesContent())
+	}
+}
+
+func (m Model) renderReleaseNotesOverlay() string {
+	overlayW, overlayH := m.releaseNotesOverlaySize()
+	innerW := overlayW - 6
+	listW, _ := m.releaseNotesPanelWidths()
+
+	// bodyH = overlayH - padding(2) - title(1) - titleDivider(1) - tableHeader(1) - headerBorder(1)
+	bodyH := overlayH - 6
+
+	// --- Left panel: release version list ---
+	var leftLines []string
+	if m.releaseNotes.loading && len(m.releaseNotes.releases) == 0 {
+		leftLines = append(leftLines, m.spinner.View()+" "+styleSubtle.Render("Loading…"))
+	}
+	for i, rel := range m.releaseNotes.releases {
+		if i == m.releaseNotes.cursor {
+			leftLines = append(leftLines, styleAccent.Render("▶ "+rel.TagName))
+		} else {
+			leftLines = append(leftLines, styleMuted.Render("  "+rel.TagName))
+		}
+	}
+	leftCell := lipgloss.NewStyle().Height(bodyH).Render(strings.Join(leftLines, "\n"))
+
+	// --- Right panel: release notes content ---
+	var rightCell string
+	if m.releaseNotes.loading {
+		rightCell = lipgloss.NewStyle().Height(bodyH).Render(
+			m.spinner.View() + " " + styleSubtle.Render("Loading release notes…"))
+	} else if len(m.releaseNotes.releases) == 0 && m.releaseNotes.nuspecNotes != "" {
+		rightCell = lipgloss.NewStyle().Height(bodyH).Render(
+			styleText.Render(m.releaseNotes.nuspecNotes))
+	} else {
+		rightCell = m.releaseNotes.vp.View()
+	}
+
+	// --- Table layout ---
+	focusLeft := !m.releaseNotes.focusRight
+	t := lipgloss_table.New().
+		Width(innerW).
+		Headers("Releases", "Notes").
+		Row(leftCell, rightCell).
+		Border(lipgloss.NormalBorder()).
+		BorderStyle(lipgloss.NewStyle().Foreground(colorBorder)).
+		BorderTop(false).
+		BorderBottom(false).
+		BorderLeft(false).
+		BorderRight(false).
+		BorderColumn(true).
+		BorderHeader(true).
+		StyleFunc(func(row, col int) lipgloss.Style {
+			s := lipgloss.NewStyle().PaddingLeft(1).PaddingRight(1)
+			if col == 0 {
+				s = s.Width(listW)
+			}
+			if row == lipgloss_table.HeaderRow {
+				if (col == 0 && focusLeft) || (col == 1 && !focusLeft) {
+					return s.Foreground(colorAccent).Bold(true)
+				}
+				return s.Foreground(colorSubtle).Bold(true)
+			}
+			return s
+		})
+
+	// Wrap in overlay box with title
+	title := styleAccentBold.Render(m.releaseNotes.title)
+	titleDivider := styleBorder.Render(strings.Repeat("─", innerW))
+	content := lipgloss.JoinVertical(lipgloss.Left, title, titleDivider, t.Render())
+
+	box := styleOverlay.
+		Width(overlayW).
+		Render(content)
+
+	return lipgloss.Place(m.width, m.overlayHeight(), lipgloss.Center, lipgloss.Center, box)
+}
+
 func (m Model) renderConfirmOverlay() string {
 	w := clampW(48+m.overlayWidthOffset, 36, m.width-4)
 	lines := []string{
@@ -2337,6 +2689,9 @@ func (m Model) footerKeys() []struct{ k, v string } {
 	if m.depTree.active {
 		return []kv{{"↑↓", "scroll"}, {"esc", "close"}}
 	}
+	if m.releaseNotes.active {
+		return []kv{{"tab", "focus"}, {"↑↓", "nav/scroll"}, {"esc", "close"}}
+	}
 	if m.search.active {
 		return []kv{{"↑↓", "nav"}, {"enter", "select"}, {"esc", "close"}}
 	}
@@ -2384,6 +2739,7 @@ func (m Model) footerKeys() []struct{ k, v string } {
 				{"d", "del"},
 				{"o/O", "sort/dir"},
 				{"t/T", "deps"},
+				{"n", "notes"},
 				{"r/R", "restore"},
 				{"/", "add"},
 				{"?", "help"},
@@ -2398,6 +2754,7 @@ func (m Model) footerKeys() []struct{ k, v string } {
 			{"d", "del"},
 			{"o/O", "sort/dir"},
 			{"t/T", "deps"},
+			{"n", "notes"},
 			{"r/R", "restore/all"},
 			{"/", "add"},
 			{"?", "help"},
@@ -2409,6 +2766,7 @@ func (m Model) footerKeys() []struct{ k, v string } {
 			{"tab", "focus"},
 			{"↑↓", "scroll"},
 			{"v", "version"},
+			{"n", "notes"},
 			{"r/R", "restore/all"},
 			{"?", "help"},
 			{"esc/q", "quit"},
@@ -2560,6 +2918,8 @@ func (m Model) View() string {
 	switch {
 	case m.depTree.active:
 		overlay = m.renderDepTreeOverlay()
+	case m.releaseNotes.active:
+		overlay = m.renderReleaseNotesOverlay()
 	case m.search.active:
 		overlay = m.renderSearchOverlay()
 	case m.locationPick.active:
@@ -3204,6 +3564,7 @@ func (m *Model) refreshHelpView() {
 				{"v", "pick a specific version from the list"},
 				{"d", "delete selected package from project"},
 				{"t", "show declared dependency tree for package"},
+				{"n", "view release notes (GitHub or NuGet)"},
 				{"o", "cycle sort order"},
 				{"O", "change sort direction"},
 			},
@@ -3231,6 +3592,14 @@ func (m *Model) refreshHelpView() {
 			title: "Dependency tree  (t / T)",
 			rows: [][2]string{
 				{"↑ / ↓  or  j / k", "scroll content"},
+				{"esc", "close panel"},
+			},
+		},
+		{
+			title: "Release notes  (n)",
+			rows: [][2]string{
+				{"tab", "switch focus between releases and notes"},
+				{"↑ / ↓  or  j / k", "navigate releases (left) or scroll notes (right)"},
 				{"esc", "close panel"},
 			},
 		},

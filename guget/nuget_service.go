@@ -100,6 +100,8 @@ type PackageInfo struct {
 	Authors            Set[string]
 	Tags               Set[string]
 	ProjectURL         string // from catalog entry (e.g. GitHub repo)
+	RepositoryType     string // e.g. "git"
+	RepositoryURL      string // e.g. "https://github.com/owner/repo"
 	Versions           []PackageVersion // sorted newest → oldest
 	Deprecated         bool
 	DeprecationMessage string
@@ -941,14 +943,21 @@ func (s *NugetService) SearchExact(packageID string) (*PackageInfo, error) {
 		id = packageID
 	}
 
+	repoType, repoURL := "", ""
+	if meta.Repository != nil {
+		repoType = meta.Repository.Type
+		repoURL = meta.Repository.URL
+	}
 	pkg := &PackageInfo{
-		ID:            id,
-		LatestVersion: meta.Version,
-		Description:   meta.Description,
-		Authors:       authors,
-		Tags:          tags,
-		ProjectURL:    projectOrRepoURL(meta),
-		Versions:      versions,
+		ID:             id,
+		LatestVersion:  meta.Version,
+		Description:    meta.Description,
+		Authors:        authors,
+		Tags:           tags,
+		ProjectURL:     projectOrRepoURL(meta),
+		RepositoryType: repoType,
+		RepositoryURL:  repoURL,
+		Versions:       versions,
 	}
 	// For GitHub Packages, call the GitHub API to resolve the source repo.
 	if pkg.ProjectURL == "" {
@@ -1132,4 +1141,110 @@ func sortVersionsDesc(vs []PackageVersion) {
 			vs[j], vs[j-1] = vs[j-1], vs[j]
 		}
 	}
+}
+
+// --- Release Notes ---
+
+// GitHubRelease represents a single release from the GitHub Releases API.
+type GitHubRelease struct {
+	TagName     string `json:"tag_name"`
+	Name        string `json:"name"`
+	Body        string `json:"body"`
+	PublishedAt string `json:"published_at"`
+	HTMLURL     string `json:"html_url"`
+}
+
+// parseGitHubRepo extracts owner and repo from a GitHub URL.
+// Returns ("","") if the URL is not a recognised GitHub repository URL.
+func parseGitHubRepo(rawURL string) (owner, repo string) {
+	u, err := url.Parse(strings.TrimSuffix(rawURL, ".git"))
+	if err != nil || !strings.EqualFold(u.Host, "github.com") {
+		return "", ""
+	}
+	parts := strings.SplitN(strings.TrimPrefix(u.Path, "/"), "/", 3)
+	if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
+		return "", ""
+	}
+	return parts[0], parts[1]
+}
+
+// FetchGitHubReleases returns up to `limit` releases for the given GitHub repo.
+func FetchGitHubReleases(owner, repo string, limit int) ([]GitHubRelease, error) {
+	apiURL := fmt.Sprintf("https://api.github.com/repos/%s/%s/releases?per_page=%d", owner, repo, limit)
+	req, err := http.NewRequest("GET", apiURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/vnd.github.v3+json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("GitHub API returned %d", resp.StatusCode)
+	}
+	var releases []GitHubRelease
+	if err := json.NewDecoder(resp.Body).Decode(&releases); err != nil {
+		return nil, err
+	}
+	return releases, nil
+}
+
+// FetchGitHubReleaseByTag returns the release for a specific tag.
+// Tries the exact version string first, then with a "v" prefix.
+func FetchGitHubReleaseByTag(owner, repo, version string) (*GitHubRelease, error) {
+	for _, tag := range []string{version, "v" + version} {
+		apiURL := fmt.Sprintf("https://api.github.com/repos/%s/%s/releases/tags/%s", owner, repo, tag)
+		req, err := http.NewRequest("GET", apiURL, nil)
+		if err != nil {
+			continue
+		}
+		req.Header.Set("Accept", "application/vnd.github.v3+json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			continue
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			continue
+		}
+		var rel GitHubRelease
+		if err := json.NewDecoder(resp.Body).Decode(&rel); err != nil {
+			continue
+		}
+		return &rel, nil
+	}
+	return nil, fmt.Errorf("no release found for %s/%s tag %s", owner, repo, version)
+}
+
+// FetchNuspecReleaseNotes fetches the nuspec from the NuGet flat container
+// and extracts the <releaseNotes> element. Returns "" if not found.
+func FetchNuspecReleaseNotes(packageID, version string) string {
+	u := fmt.Sprintf("https://api.nuget.org/v3-flatcontainer/%s/%s/%s.nuspec",
+		strings.ToLower(packageID), version, strings.ToLower(packageID))
+	resp, err := http.DefaultClient.Get(u)
+	if err != nil || resp.StatusCode != http.StatusOK {
+		if resp != nil {
+			resp.Body.Close()
+		}
+		return ""
+	}
+	defer resp.Body.Close()
+	// Simple extraction — avoid pulling in encoding/xml for one element.
+	buf := make([]byte, 64*1024)
+	n, _ := resp.Body.Read(buf)
+	body := string(buf[:n])
+	const openTag = "<releaseNotes>"
+	const closeTag = "</releaseNotes>"
+	start := strings.Index(body, openTag)
+	if start < 0 {
+		return ""
+	}
+	start += len(openTag)
+	end := strings.Index(body[start:], closeTag)
+	if end < 0 {
+		return ""
+	}
+	return strings.TrimSpace(body[start : start+end])
 }

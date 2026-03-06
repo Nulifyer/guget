@@ -387,4 +387,8 @@ func enrichFromNugetOrg(info, nugetInfo *PackageInfo) {
 	if info.ProjectURL == "" {
 		info.ProjectURL = nugetInfo.ProjectURL
 	}
+	if info.RepositoryURL == "" {
+		info.RepositoryType = nugetInfo.RepositoryType
+		info.RepositoryURL = nugetInfo.RepositoryURL
+	}
 }
