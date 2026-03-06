@@ -4,11 +4,9 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/signal"
 	"path/filepath"
 	"strings"
 	"sync"
-	"syscall"
 
 	tea "charm.land/bubbletea/v2"
 )
@@ -284,15 +282,6 @@ func main() {
 	buf.mu.Lock()
 	buf.send = p.Send
 	buf.mu.Unlock()
-
-	// Restore terminal on SIGINT / SIGTERM so the alt-screen and cursor
-	// are always cleaned up even if the user kills the process externally.
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
-	go func() {
-		<-sigCh
-		p.Kill()
-	}()
 
 	// Fetch package metadata in parallel; send a packageReadyMsg to the TUI
 	// as each one resolves so the loading screen shows live progress.
