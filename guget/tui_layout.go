@@ -25,7 +25,7 @@ func (m Model) footerKeys() []struct{ k, v string } {
 	if m.picker.active {
 		return []kv{{"↑↓", "nav"}, {"u/U", "update/all"}, {"esc", "close"}}
 	}
-	if m.confirm.active {
+	if m.confirmRemove.active {
 		return []kv{{"enter/y", "confirm"}, {"esc", "cancel"}}
 	}
 	if m.confirmUpdate.active {

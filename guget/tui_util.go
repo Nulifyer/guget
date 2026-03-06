@@ -52,6 +52,16 @@ func clampW(w, minW, maxW int) int {
 	return w
 }
 
+// adjustOffset adds delta to *offset only if the effective width
+// (base + *offset + delta) stays within [minW, maxW].
+func adjustOffset(offset *int, delta, base, minW, maxW int) {
+	proposed := base + *offset + delta
+	if proposed < minW || proposed > maxW {
+		return
+	}
+	*offset += delta
+}
+
 func padRight(s string, width int) string {
 	visible := lipgloss.Width(s)
 	if visible >= width {

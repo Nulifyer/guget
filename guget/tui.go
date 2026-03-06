@@ -45,7 +45,7 @@ type Model struct {
 
 	picker        versionPicker
 	search        packageSearch
-	confirm       confirmRemove
+	confirmRemove confirmRemove
 	confirmUpdate confirmUpdate
 	locationPick  locationPicker
 	depTree       depTreeOverlay
@@ -277,35 +277,11 @@ func (m Model) Update(msg bubble_tea.Msg) (bubble_tea.Model, bubble_tea.Cmd) {
 			return m, bubble_tea.Batch(cmds...)
 		}
 		if m.showSources {
-			switch msg.String() {
-			case "[":
-				m.overlayWidthOffset -= 4
-			case "]":
-				m.overlayWidthOffset += 4
-			case "esc", "s", "q":
-				m.overlayWidthOffset = 0
-				m.showSources = false
-				m.ctx.StatusLine = ""
-			}
+			cmds = append(cmds, m.handleSourcesKey(msg))
 			return m, bubble_tea.Batch(cmds...)
 		}
 		if m.showHelp {
-			switch msg.String() {
-			case "[":
-				m.overlayWidthOffset -= 4
-				m.refreshHelpView()
-			case "]":
-				m.overlayWidthOffset += 4
-				m.refreshHelpView()
-			case "esc", "?", "q":
-				m.overlayWidthOffset = 0
-				m.showHelp = false
-				m.ctx.StatusLine = ""
-			default:
-				var cmd bubble_tea.Cmd
-				m.helpView, cmd = m.helpView.Update(msg)
-				cmds = append(cmds, cmd)
-			}
+			cmds = append(cmds, m.handleHelpKey(msg))
 			return m, bubble_tea.Batch(cmds...)
 		}
 		if m.search.active {
@@ -316,8 +292,8 @@ func (m Model) Update(msg bubble_tea.Msg) (bubble_tea.Model, bubble_tea.Cmd) {
 			cmds = append(cmds, m.handlePickerKey(msg))
 			return m, bubble_tea.Batch(cmds...)
 		}
-		if m.confirm.active {
-			cmds = append(cmds, m.handleConfirmKey(msg))
+		if m.confirmRemove.active {
+			cmds = append(cmds, m.handleConfirmRemoveKey(msg))
 			return m, bubble_tea.Batch(cmds...)
 		}
 		if m.confirmUpdate.active {
@@ -331,7 +307,7 @@ func (m Model) Update(msg bubble_tea.Msg) (bubble_tea.Model, bubble_tea.Cmd) {
 		cmds = append(cmds, m.handleKey(msg))
 	}
 
-	if !m.picker.active && !m.search.active && !m.confirm.active && !m.confirmUpdate.active && !m.locationPick.active {
+	if !m.picker.active && !m.search.active && !m.confirmRemove.active && !m.confirmUpdate.active && !m.locationPick.active {
 		switch m.focus {
 		case focusProjects:
 			if keyMsg, ok := msg.(bubble_tea.KeyMsg); ok {
@@ -518,7 +494,7 @@ func (m *Model) handleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 
 	case "d":
 		if m.focus == focusPackages && m.packageCursor < len(m.packageRows) {
-			m.confirm = confirmRemove{
+			m.confirmRemove = confirmRemove{
 				active:  true,
 				pkgName: m.packageRows[m.packageCursor].ref.Name,
 			}
@@ -558,31 +534,20 @@ func (m *Model) resizeFocused(delta int) {
 		minW    = 10
 	)
 	lw := m.layoutWidth()
-
+	// maxW for one side = total minus the other side's base+offset minus borders minus minW for mid panel.
 	switch m.focus {
 	case focusProjects:
-		m.leftWidthOffset += delta
+		maxW := lw - (50 + m.rightWidthOffset) - borders - minW
+		adjustOffset(&m.leftWidthOffset, delta, 30, minW, maxW)
 	case focusPackages:
-		m.rightWidthOffset -= delta
+		// Growing packages shrinks detail (right), so we shrink rightWidthOffset.
+		maxW := lw - (30 + m.leftWidthOffset) - borders - minW
+		adjustOffset(&m.rightWidthOffset, -delta, 50, minW, maxW)
 		m.refreshDetail()
 	case focusDetail:
-		m.rightWidthOffset += delta
+		maxW := lw - (30 + m.leftWidthOffset) - borders - minW
+		adjustOffset(&m.rightWidthOffset, delta, 50, minW, maxW)
 		m.refreshDetail()
-	}
-
-	left := 30 + m.leftWidthOffset
-	right := 50 + m.rightWidthOffset
-	mid := lw - left - right - borders
-
-	if left < minW || mid < minW || right < minW {
-		switch m.focus {
-		case focusProjects:
-			m.leftWidthOffset -= delta
-		case focusPackages:
-			m.rightWidthOffset += delta
-		case focusDetail:
-			m.rightWidthOffset -= delta
-		}
 	}
 }
 
@@ -621,8 +586,8 @@ func (m Model) View() bubble_tea.View {
 		overlay = m.renderLocationPickOverlay()
 	case m.picker.active:
 		overlay = m.renderPickerOverlay()
-	case m.confirm.active:
-		overlay = m.renderConfirmOverlay()
+	case m.confirmRemove.active:
+		overlay = m.renderConfirmRemoveOverlay()
 	case m.confirmUpdate.active:
 		overlay = m.renderConfirmUpdateOverlay()
 	case m.showSources:

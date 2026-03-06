@@ -3,8 +3,29 @@ package main
 import (
 	"strings"
 
+	bubble_tea "charm.land/bubbletea/v2"
 	lipgloss "charm.land/lipgloss/v2"
 )
+
+func (m *Model) handleHelpKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
+	switch msg.String() {
+	case "[":
+		adjustOffset(&m.overlayWidthOffset, -4, m.ctx.Width*60/100, 56, m.ctx.Width-4)
+		m.refreshHelpView()
+	case "]":
+		adjustOffset(&m.overlayWidthOffset, 4, m.ctx.Width*60/100, 56, m.ctx.Width-4)
+		m.refreshHelpView()
+	case "esc", "?", "q":
+		m.overlayWidthOffset = 0
+		m.showHelp = false
+		m.ctx.StatusLine = ""
+	default:
+		var cmd bubble_tea.Cmd
+		m.helpView, cmd = m.helpView.Update(msg)
+		return cmd
+	}
+	return nil
+}
 
 func (m *Model) refreshHelpView() {
 	type section struct {

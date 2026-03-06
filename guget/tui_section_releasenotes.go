@@ -108,11 +108,11 @@ func (m *Model) fetchReleaseNotesCmd(rel GitHubRelease) bubble_tea.Cmd {
 func (m *Model) handleReleaseNotesKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 	switch msg.String() {
 	case "[":
-		m.overlayWidthOffset -= 4
+		adjustOffset(&m.overlayWidthOffset, -4, m.ctx.Width, 30, m.ctx.Width-4)
 		m.resizeReleaseNotesViewport()
 		return nil
 	case "]":
-		m.overlayWidthOffset += 4
+		adjustOffset(&m.overlayWidthOffset, 4, m.ctx.Width, 30, m.ctx.Width-4)
 		m.resizeReleaseNotesViewport()
 		return nil
 	case "esc", "q":

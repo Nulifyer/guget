@@ -7,22 +7,22 @@ import (
 	lipgloss "charm.land/lipgloss/v2"
 )
 
-func (m *Model) handleConfirmKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
+func (m *Model) handleConfirmRemoveKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 	switch msg.String() {
 	case "[":
-		m.overlayWidthOffset -= 4
+		adjustOffset(&m.overlayWidthOffset, -4, m.ctx.Width, 30, m.ctx.Width-4)
 		return nil
 	case "]":
-		m.overlayWidthOffset += 4
+		adjustOffset(&m.overlayWidthOffset, 4, m.ctx.Width, 30, m.ctx.Width-4)
 		return nil
 	case "esc", "n", "q":
 		m.overlayWidthOffset = 0
-		m.confirm.active = false
+		m.confirmRemove.active = false
 		m.ctx.StatusLine = ""
 	case "enter", "y":
 		m.overlayWidthOffset = 0
-		m.confirm.active = false
-		return m.removePackage(m.confirm.pkgName)
+		m.confirmRemove.active = false
+		return m.removePackage(m.confirmRemove.pkgName)
 	}
 	return nil
 }
@@ -30,10 +30,10 @@ func (m *Model) handleConfirmKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 func (m *Model) handleConfirmUpdateKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 	switch msg.String() {
 	case "[":
-		m.overlayWidthOffset -= 4
+		adjustOffset(&m.overlayWidthOffset, -4, m.ctx.Width, 30, m.ctx.Width-4)
 		return nil
 	case "]":
-		m.overlayWidthOffset += 4
+		adjustOffset(&m.overlayWidthOffset, 4, m.ctx.Width, 30, m.ctx.Width-4)
 		return nil
 	case "esc", "n", "q":
 		m.overlayWidthOffset = 0
@@ -67,11 +67,11 @@ func (m *Model) applyOrConfirmUpdate(pkgName, newVersion string, project *Parsed
 	return m.applyVersion(pkgName, newVersion, project)
 }
 
-func (m Model) renderConfirmOverlay() string {
+func (m Model) renderConfirmRemoveOverlay() string {
 	w := clampW(48+m.overlayWidthOffset, 36, m.ctx.Width-4)
 	lines := []string{
 		styleRedBold.Render("Remove package?"),
-		styleSubtle.Render(m.confirm.pkgName),
+		styleSubtle.Render(m.confirmRemove.pkgName),
 	}
 	box := styleOverlayDanger.
 		Width(w).

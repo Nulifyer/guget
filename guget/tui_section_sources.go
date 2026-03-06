@@ -3,8 +3,23 @@ package main
 import (
 	"strings"
 
+	bubble_tea "charm.land/bubbletea/v2"
 	lipgloss "charm.land/lipgloss/v2"
 )
+
+func (m *Model) handleSourcesKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
+	switch msg.String() {
+	case "[":
+		adjustOffset(&m.overlayWidthOffset, -4, 90, 40, m.ctx.Width-4)
+	case "]":
+		adjustOffset(&m.overlayWidthOffset, 4, 90, 40, m.ctx.Width-4)
+	case "esc", "s", "q":
+		m.overlayWidthOffset = 0
+		m.showSources = false
+		m.ctx.StatusLine = ""
+	}
+	return nil
+}
 
 func (m Model) renderSourcesOverlay() string {
 	w := clampW(90+m.overlayWidthOffset, 40, m.ctx.Width-4)
