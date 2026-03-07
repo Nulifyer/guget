@@ -153,6 +153,21 @@ type releaseNotesReadyMsg struct {
 	err     error
 }
 
+// nuspecVersionListReadyMsg signals that the list of versions for the NuSpec
+// tab is available (sourced from PackageInfo.Versions or a fresh fetch).
+type nuspecVersionListReadyMsg struct {
+	versions []string // version strings, newest first
+	svc      *NugetService
+	err      error
+}
+
+// nuspecVersionNotesReadyMsg delivers the <releaseNotes> for a single version.
+type nuspecVersionNotesReadyMsg struct {
+	version string
+	notes   string
+	err     error
+}
+
 // --- Panel state types ---
 
 type projectPanel struct {
@@ -190,21 +205,42 @@ type depTreeOverlay struct {
 	title       string
 }
 
+type releaseNotesTab int
+
+const (
+	tabGitHub  releaseNotesTab = 0
+	tabNuSpec  releaseNotesTab = 1
+)
+
 type releaseNotesOverlay struct {
 	sectionBase // basePct=85, minWidth=60, maxMargin=4
-	loading     bool
-	focusRight  bool             // false = release list, true = notes viewport
-	releases    []GitHubRelease  // list of release tags
-	cursor      int              // selected release index
-	notes       string           // rendered release notes body
-	notesURL    string           // link to the release on GitHub
-	err         error
+	focusRight  bool // false = left list, true = notes viewport
 	vp          bubbles_viewport.Model
 	title       string
-	owner       string // GitHub owner
-	repo        string // GitHub repo name
-	// fallback: nuspec release notes (non-git or GitHub fetch failed)
-	nuspecNotes string
+	activeTab   releaseNotesTab
+
+	// GitHub tab state
+	ghLoading  bool
+	ghReleases []GitHubRelease
+	ghCursor   int
+	ghNotes    string   // body of selected release
+	ghNotesURL string   // link to the release on GitHub
+	ghErr      error
+	ghOwner    string
+	ghRepo     string
+
+	// NuSpec tab state
+	nsLoading  bool
+	nsVersions []string        // version strings, newest first
+	nsCursor   int
+	nsNotes    string          // <releaseNotes> for selected version
+	nsErr      error
+	nsSvc      *NugetService   // service to fetch nuspec notes from
+	nsPkgID    string          // package ID for nuspec fetches
+
+	// Derived state: which tabs are available (set after fetches complete)
+	ghAvailable bool
+	nsAvailable bool
 }
 
 type sourcesOverlay struct {

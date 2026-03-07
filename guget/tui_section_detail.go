@@ -323,7 +323,7 @@ func (m *App) renderDetailVersionList(row packageRow, w int) string {
 	if len(displayVersions) > limit {
 		hidden := len(displayVersions) - limit - len(pinnedAfter)
 		if hidden > 0 {
-			s.WriteString(styleMuted.Render(fmt.Sprintf("  … and %d more", hidden)) + "\n")
+			s.WriteString(styleMuted.Render(fmt.Sprintf("  ... and %d more", hidden)) + "\n")
 		}
 		for _, pv := range pinnedAfter {
 			renderVRow(pv)

@@ -230,12 +230,12 @@ func (s *packageSearch) Render() string {
 	case s.fetchingVersion:
 		lines = append(lines,
 			s.app.ctx.Spinner.View()+" "+
-				styleAccent.Render("Fetching package info…"))
+				styleAccent.Render("Fetching package info..."))
 
 	case s.loading:
 		lines = append(lines,
 			s.app.ctx.Spinner.View()+" "+
-				styleSubtle.Render("Searching…"))
+				styleSubtle.Render("Searching..."))
 
 	case s.err != nil:
 		lines = append(lines,
@@ -247,7 +247,7 @@ func (s *packageSearch) Render() string {
 
 	case len(s.results) == 0:
 		lines = append(lines,
-			styleMuted.Render("Type to search NuGet…"))
+			styleMuted.Render("Type to search NuGet..."))
 
 	default:
 		installedVer := make(map[string]SemVer)

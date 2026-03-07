@@ -100,9 +100,9 @@ type PackageInfo struct {
 	Description        string
 	Authors            Set[string]
 	Tags               Set[string]
-	ProjectURL         string // from catalog entry (e.g. GitHub repo)
-	RepositoryType     string // e.g. "git"
-	RepositoryURL      string // e.g. "https://github.com/owner/repo"
+	ProjectURL         string           // from catalog entry (e.g. GitHub repo)
+	RepositoryType     string           // e.g. "git"
+	RepositoryURL      string           // e.g. "https://github.com/owner/repo"
 	Versions           []PackageVersion // sorted newest → oldest
 	Deprecated         bool
 	DeprecationMessage string
@@ -324,11 +324,11 @@ type NugetService struct {
 	sourceURL      string
 	sourceName     string
 	client         *http.Client
-	searchBase     string // resolved from service index
-	regBase        string // RegistrationsBaseUrl
-	flatBase       string // PackageBaseAddress (flat container for .nupkg/.nuspec)
-	detailTemplate string // PackageDetailsUriTemplate (e.g. "https://…/packages/{id}/{version}")
-	adoSearchBase  string // Azure DevOps REST API base (faster alternative to SearchQueryService)
+	searchBase     string   // resolved from service index
+	regBase        string   // RegistrationsBaseUrl
+	flatBase       string   // PackageBaseAddress (flat container for .nupkg/.nuspec)
+	detailTemplate string   // PackageDetailsUriTemplate (e.g. "https://.../packages/{id}/{version}")
+	adoSearchBase  string   // Azure DevOps REST API base (faster alternative to SearchQueryService)
 	adoUpstreams   []string // public NuGet upstream source URLs discovered from ADO feed config
 }
 
@@ -397,8 +397,8 @@ func (a *adoFeedInfo) feedsBaseURL() string {
 // parseADOFeedURL extracts org, project, and feed name from an Azure DevOps
 // Artifacts feed URL. It recognises two host forms:
 //
-//	https://pkgs.dev.azure.com/{org}[/{project}]/_packaging/{feed}/…
-//	https://{org}.pkgs.visualstudio.com[/{project}]/_packaging/{feed}/…
+//	https://pkgs.dev.azure.com/{org}[/{project}]/_packaging/{feed}/...
+//	https://{org}.pkgs.visualstudio.com[/{project}]/_packaging/{feed}/...
 //
 // Returns nil if the URL is not an ADO Artifacts feed.
 func parseADOFeedURL(sourceURL string) *adoFeedInfo {
@@ -413,13 +413,13 @@ func parseADOFeedURL(sourceURL string) *adoFeedInfo {
 
 	switch {
 	case host == "pkgs.dev.azure.com":
-		// Path: /{org}[/{project}]/_packaging/{feed}/…
+		// Path: /{org}[/{project}]/_packaging/{feed}/...
 		pathSegments = strings.Split(strings.Trim(u.Path, "/"), "/")
 		if len(pathSegments) < 1 {
 			return nil
 		}
 		org = pathSegments[0]
-		pathSegments = pathSegments[1:] // remaining: [{project}/]_packaging/{feed}/…
+		pathSegments = pathSegments[1:] // remaining: [{project}/]_packaging/{feed}/...
 
 	case strings.HasSuffix(host, ".pkgs.visualstudio.com"):
 		// Host: {org}.pkgs.visualstudio.com
@@ -985,7 +985,6 @@ func (s *NugetService) SearchExact(packageID string) (*PackageInfo, error) {
 	return pkg, nil
 }
 
-
 // LatestStable returns the newest non-pre-release version.
 func (p *PackageInfo) LatestStable() *PackageVersion {
 	for i := range p.Versions {
@@ -1106,7 +1105,7 @@ func (s *NugetService) getJSON(u string, dst any) error {
 	if isTransientHTTP(resp.StatusCode) {
 		resp.Body.Close()
 		jitter := 500 + rand.Intn(1000)
-		logWarn("[%s] GET %s → %d, retrying in %dms…", s.sourceName, u, resp.StatusCode, jitter)
+		logWarn("[%s] GET %s → %d, retrying in %dms...", s.sourceName, u, resp.StatusCode, jitter)
 		time.Sleep(time.Duration(jitter) * time.Millisecond)
 		resp, err = s.client.Get(u)
 		if err != nil {

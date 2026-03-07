@@ -171,7 +171,7 @@ func (s *depTreeOverlay) buildContent() string {
 		return styleRed.Render("Error: " + s.err.Error())
 	}
 	if s.loading {
-		return "Loading…"
+		return "Loading..."
 	}
 	return s.content
 }
@@ -403,7 +403,7 @@ func (s *depTreeOverlay) Render() string {
 	if s.loading {
 		lines = append(lines,
 			s.app.ctx.Spinner.View()+" "+
-				styleSubtle.Render("Loading dependency tree…"),
+				styleSubtle.Render("Loading dependency tree..."),
 		)
 		// pad to fill viewport height
 		vpH := overlayH - 8

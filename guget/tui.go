@@ -88,7 +88,7 @@ func NewApp(parsedProjects []*ParsedProject, propsProjects []*ParsedProject, nug
 	lv := bubbles_viewport.New(bubbles_viewport.WithWidth(80), bubbles_viewport.WithHeight(logPanelLines))
 
 	ti := bubbles_textinpute.New()
-	ti.Placeholder = "Type a package name…"
+	ti.Placeholder = "Type a package name..."
 	ti.CharLimit = 100
 	ti.SetWidth(44)
 
@@ -256,36 +256,50 @@ func (m *App) Update(msg bubble_tea.Msg) (bubble_tea.Model, bubble_tea.Cmd) {
 		m.updateLogView()
 
 	case releaseListReadyMsg:
-		m.releaseNotes.loading = false
+		m.releaseNotes.ghLoading = false
 		if msg.owner != "" {
-			m.releaseNotes.owner = msg.owner
-			m.releaseNotes.repo = msg.repo
+			m.releaseNotes.ghOwner = msg.owner
+			m.releaseNotes.ghRepo = msg.repo
 		}
 		if msg.err != nil {
-			m.releaseNotes.err = msg.err
-			m.releaseNotes.vp.SetContent(styleRed.Render("Error: " + msg.err.Error()))
+			m.releaseNotes.ghErr = msg.err
+			// Auto-switch to NuSpec if GitHub failed and NuSpec is available.
+			if m.releaseNotes.nsAvailable || len(m.releaseNotes.nsVersions) > 0 {
+				m.releaseNotes.activeTab = tabNuSpec
+			}
+			m.releaseNotes.updateViewportContent()
 			break
 		}
-		m.releaseNotes.releases = msg.releases
+		m.releaseNotes.ghReleases = msg.releases
+		m.releaseNotes.ghAvailable = len(msg.releases) > 0
 		if len(msg.releases) == 0 {
-			m.releaseNotes.vp.SetContent(styleMuted.Render("(no releases found)"))
+			if m.releaseNotes.nsAvailable || len(m.releaseNotes.nsVersions) > 0 {
+				m.releaseNotes.activeTab = tabNuSpec
+			}
+			m.releaseNotes.updateViewportContent()
 			break
 		}
-		m.releaseNotes.cursor = 0
-		// Auto-fetch notes for the first release
-		m.releaseNotes.loading = true
+		m.releaseNotes.ghCursor = 0
+		m.releaseNotes.ghLoading = true
 		cmds = append(cmds, m.releaseNotes.fetchReleaseNotesCmd(msg.releases[0]))
 
 	case releaseNotesReadyMsg:
-		m.releaseNotes.loading = false
+		m.releaseNotes.ghLoading = false
 		if msg.err != nil {
-			m.releaseNotes.notes = ""
-			m.releaseNotes.vp.SetContent(styleRed.Render("Error: " + msg.err.Error()))
-			break
+			m.releaseNotes.ghNotes = ""
+		} else {
+			m.releaseNotes.ghNotes = msg.body
+			m.releaseNotes.ghNotesURL = msg.htmlURL
 		}
-		m.releaseNotes.notes = msg.body
-		m.releaseNotes.notesURL = msg.htmlURL
-		m.releaseNotes.vp.SetContent(m.releaseNotes.buildContent())
+		m.releaseNotes.updateViewportContent()
+
+	case nuspecVersionNotesReadyMsg:
+		m.releaseNotes.nsLoading = false
+		if msg.notes != "" {
+			m.releaseNotes.nsAvailable = true
+		}
+		m.releaseNotes.nsNotes = msg.notes
+		m.releaseNotes.updateViewportContent()
 
 	case depTreeReadyMsg:
 		m.depTree.loading = false
