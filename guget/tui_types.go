@@ -208,7 +208,7 @@ type depTreeOverlay struct {
 type releaseNotesTab int
 
 const (
-	tabGitHub  releaseNotesTab = 0
+	tabReleases releaseNotesTab = 0
 	tabNuSpec  releaseNotesTab = 1
 )
 

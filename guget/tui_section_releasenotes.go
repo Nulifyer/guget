@@ -97,7 +97,7 @@ func (m *App) openReleaseNotes() bubble_tea.Cmd {
 				releases, err := FetchGitHubReleases(nuspecOwner, nuspecRepoName, 20)
 				return releaseListReadyMsg{releases: releases, err: err, owner: nuspecOwner, repo: nuspecRepoName}
 			}
-			return releaseListReadyMsg{err: fmt.Errorf("no GitHub repository found")}
+			return releaseListReadyMsg{err: fmt.Errorf("no repository found")}
 		})
 	}
 
@@ -108,7 +108,7 @@ func (m *App) openReleaseNotes() bubble_tea.Cmd {
 
 	// Default to GitHub tab if we're fetching it, otherwise NuSpec.
 	if rn.ghLoading {
-		rn.activeTab = tabGitHub
+		rn.activeTab = tabReleases
 	} else {
 		rn.activeTab = tabNuSpec
 	}
@@ -161,7 +161,7 @@ func (s *releaseNotesOverlay) HandleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 		return nil
 	case "1":
 		if s.ghAvailable || s.ghLoading || len(s.ghReleases) > 0 {
-			s.activeTab = tabGitHub
+			s.activeTab = tabReleases
 			s.updateViewportContent()
 		}
 		return nil
@@ -197,7 +197,7 @@ func (s *releaseNotesOverlay) HandleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 
 func (s *releaseNotesOverlay) moveCursor(delta int) bubble_tea.Cmd {
 	switch s.activeTab {
-	case tabGitHub:
+	case tabReleases:
 		next := s.ghCursor + delta
 		if next < 0 || next >= len(s.ghReleases) {
 			return nil
@@ -223,7 +223,7 @@ func (s *releaseNotesOverlay) moveCursor(delta int) bubble_tea.Cmd {
 
 func (s *releaseNotesOverlay) isLoading() bool {
 	switch s.activeTab {
-	case tabGitHub:
+	case tabReleases:
 		return s.ghLoading
 	case tabNuSpec:
 		return s.nsLoading
@@ -271,7 +271,7 @@ func (s *releaseNotesOverlay) updateViewportContent() {
 
 func (s *releaseNotesOverlay) buildContent() string {
 	switch s.activeTab {
-	case tabGitHub:
+	case tabReleases:
 		return s.buildGitHubContent()
 	case tabNuSpec:
 		return s.buildNuSpecContent()
@@ -347,8 +347,8 @@ func (s *releaseNotesOverlay) buildNuSpecContent() string {
 
 func (s *releaseNotesOverlay) tabLabel(tab releaseNotesTab) string {
 	switch tab {
-	case tabGitHub:
-		label := "GitHub"
+	case tabReleases:
+		label := "Releases"
 		if s.ghLoading && len(s.ghReleases) == 0 {
 			return label + " " + s.app.ctx.Spinner.View()
 		}
@@ -386,9 +386,9 @@ func (s *releaseNotesOverlay) Render() string {
 	title := styleAccentBold.Render(s.title)
 
 	// ── Tab bar ──
-	ghLabel := s.tabLabel(tabGitHub)
+	ghLabel := s.tabLabel(tabReleases)
 	nsLabel := s.tabLabel(tabNuSpec)
-	if s.activeTab == tabGitHub {
+	if s.activeTab == tabReleases {
 		ghLabel = styleMuted.Render("[1] ") + styleAccentBold.Render(ghLabel)
 		nsLabel = styleMuted.Render("[2] " + nsLabel)
 	} else {
@@ -401,7 +401,7 @@ func (s *releaseNotesOverlay) Render() string {
 
 	// ── Column headers ──
 	var leftHdr, rightHdr string
-	if s.activeTab == tabGitHub {
+	if s.activeTab == tabReleases {
 		leftHdr = "Releases"
 	} else {
 		leftHdr = "Versions"
@@ -426,7 +426,7 @@ func (s *releaseNotesOverlay) Render() string {
 	loading := s.isLoading()
 
 	switch s.activeTab {
-	case tabGitHub:
+	case tabReleases:
 		if s.ghLoading && len(s.ghReleases) == 0 {
 			allLeft = append(allLeft, " "+s.app.ctx.Spinner.View()+" "+styleSubtle.Render("Loading..."))
 		}
@@ -454,7 +454,7 @@ func (s *releaseNotesOverlay) Render() string {
 
 	// Scroll window: keep cursor visible
 	cursor := 0
-	if s.activeTab == tabGitHub {
+	if s.activeTab == tabReleases {
 		cursor = s.ghCursor
 	} else {
 		cursor = s.nsCursor
