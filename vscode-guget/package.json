@@ -51,7 +51,8 @@
   "icon": "icon.png",
   "activationEvents": [
     "workspaceContains:**/*.csproj",
-    "workspaceContains:**/*.fsproj"
+    "workspaceContains:**/*.fsproj",
+    "workspaceContains:**/*.vbproj"
   ],
   "main": "./dist/extension.js",
   "contributes": {
@@ -87,14 +88,14 @@
       "explorer/context": [
         {
           "command": "guget.manageProject",
-          "when": "resourceExtname =~ /^\\.(csproj|fsproj)$/",
+          "when": "resourceExtname =~ /^\\.(csproj|fsproj|vbproj)$/",
           "group": "navigation"
         }
       ],
       "editor/title": [
         {
           "command": "guget.manageProject",
-          "when": "resourceExtname =~ /^\\.(csproj|fsproj)$/",
+          "when": "resourceExtname =~ /^\\.(csproj|fsproj|vbproj)$/",
           "group": "navigation"
         }
       ]

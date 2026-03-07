@@ -122,12 +122,22 @@ func (m *App) addPackageToLocation(pkgName, version string, project *ParsedProje
 			if p == project {
 				continue
 			}
-			for _, at := range p.AddTargets {
-				if at.FilePath == target.FilePath {
-					p.Packages.Add(PackageReference{Name: pkgName, Version: ParseSemVer(version)})
-					p.PackageSources[strings.ToLower(pkgName)] = target.FilePath
-					break
+			matched := false
+			// Props projects parsed via ParsePropsAsProject have no AddTargets
+			// but their FilePath is the props file itself.
+			if p.FilePath == target.FilePath {
+				matched = true
+			} else {
+				for _, at := range p.AddTargets {
+					if at.FilePath == target.FilePath {
+						matched = true
+						break
+					}
 				}
+			}
+			if matched {
+				p.Packages.Add(PackageReference{Name: pkgName, Version: ParseSemVer(version)})
+				p.PackageSources[strings.ToLower(pkgName)] = target.FilePath
 			}
 		}
 	}

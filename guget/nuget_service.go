@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/rand"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -587,7 +588,7 @@ func NewNugetService(source NugetSource) (*NugetService, error) {
 	svc := &NugetService{
 		sourceURL:  source.URL,
 		sourceName: source.Name,
-		client:     &http.Client{Transport: newAuthTransport(source)},
+		client:     &http.Client{Transport: newAuthTransport(source), Timeout: 15 * time.Second},
 	}
 	if err := svc.resolveEndpoints(); err != nil {
 		return nil, err
@@ -1079,6 +1080,19 @@ func (e *httpStatusError) Error() string {
 	return fmt.Sprintf("HTTP %d for %s", e.Code, e.URL)
 }
 
+// isTransientHTTP returns true for HTTP status codes that are worth retrying.
+func isTransientHTTP(code int) bool {
+	switch code {
+	case http.StatusTooManyRequests,
+		http.StatusInternalServerError,
+		http.StatusBadGateway,
+		http.StatusServiceUnavailable,
+		http.StatusGatewayTimeout:
+		return true
+	}
+	return false
+}
+
 func (s *NugetService) getJSON(u string, dst any) error {
 	logTrace("[%s] GET %s", s.sourceName, u)
 	start := time.Now()
@@ -1088,8 +1102,20 @@ func (s *NugetService) getJSON(u string, dst any) error {
 		logTrace("[%s] GET %s failed after %s: %v", s.sourceName, u, elapsed, err)
 		return err
 	}
+	// Retry once on transient HTTP errors.
+	if isTransientHTTP(resp.StatusCode) {
+		resp.Body.Close()
+		jitter := 500 + rand.Intn(1000)
+		logWarn("[%s] GET %s → %d, retrying in %dms…", s.sourceName, u, resp.StatusCode, jitter)
+		time.Sleep(time.Duration(jitter) * time.Millisecond)
+		resp, err = s.client.Get(u)
+		if err != nil {
+			logWarn("[%s] GET %s retry failed: %v", s.sourceName, u, err)
+			return err
+		}
+	}
 	defer resp.Body.Close()
-	logTrace("[%s] GET %s → %d (%s)", s.sourceName, u, resp.StatusCode, elapsed)
+	logTrace("[%s] GET %s → %d (%s)", s.sourceName, u, resp.StatusCode, time.Since(start))
 	if resp.StatusCode != http.StatusOK {
 		return &httpStatusError{Code: resp.StatusCode, URL: u}
 	}

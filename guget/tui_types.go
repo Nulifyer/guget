@@ -371,3 +371,17 @@ type locationPicker struct {
 	cursor        int
 	targetProject *ParsedProject
 }
+
+type projectPickItem struct {
+	project   *ParsedProject
+	selected  bool
+	installed bool // already has this package
+}
+
+type projectPicker struct {
+	sectionBase
+	pkgName string
+	version     string
+	items       []projectPickItem
+	cursor      int
+}

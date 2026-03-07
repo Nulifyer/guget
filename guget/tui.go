@@ -41,6 +41,7 @@ type App struct {
 	confirmRemove confirmRemove
 	confirmUpdate confirmUpdate
 	locationPick  locationPicker
+	projectPick   projectPicker
 	depTree       depTreeOverlay
 	releaseNotes  releaseNotesOverlay
 	sources       sourcesOverlay
@@ -54,9 +55,18 @@ type App struct {
 func (m *App) overlays() []Overlay {
 	return []Overlay{
 		&m.depTree, &m.releaseNotes, &m.sources, &m.help,
-		&m.search, &m.picker, &m.locationPick,
+		&m.search, &m.picker, &m.locationPick, &m.projectPick,
 		&m.confirmRemove, &m.confirmUpdate,
 	}
+}
+
+func (m *App) anyOverlayActive() bool {
+	for _, o := range m.overlays() {
+		if o.IsActive() {
+			return true
+		}
+	}
+	return false
 }
 
 func NewApp(parsedProjects []*ParsedProject, propsProjects []*ParsedProject, nugetServices []*NugetService, sources []NugetSource, sourceMapping *PackageSourceMapping, initialLogLines []string, loadingTotal int, flags BuiltFlags) *App {
@@ -223,15 +233,23 @@ func (m *App) Update(msg bubble_tea.Msg) (bubble_tea.Model, bubble_tea.Cmd) {
 			m.search.err = msg.err
 			break
 		}
-		proj := m.selectedProject()
-		if proj == nil {
-			break
-		}
 		m.search.fetchedInfo = msg.info
 		m.search.fetchedSource = msg.source
 		m.search.closeOverlay()
 		m.search.input.Blur()
-		m.picker = newVersionPicker(m, msg.info.ID, msg.info.Versions, proj.TargetFrameworks, proj, true)
+		proj := m.selectedProject()
+		if proj != nil {
+			m.picker = newVersionPicker(m, msg.info.ID, msg.info.Versions, proj.TargetFrameworks, proj, true)
+		} else {
+			// "All Projects" — collect union of all target frameworks.
+			allTFMs := NewSet[TargetFramework]()
+			for _, p := range m.ctx.ParsedProjects {
+				for fw := range p.TargetFrameworks {
+					allTFMs.Add(fw)
+				}
+			}
+			m.picker = newVersionPicker(m, msg.info.ID, msg.info.Versions, allTFMs, nil, true)
+		}
 
 	case logLineMsg:
 		m.ctx.LogLines = append(m.ctx.LogLines, msg.line)
@@ -291,7 +309,7 @@ func (m *App) Update(msg bubble_tea.Msg) (bubble_tea.Model, bubble_tea.Cmd) {
 		}
 	}
 
-	if !m.picker.active && !m.search.active && !m.confirmRemove.active && !m.confirmUpdate.active && !m.locationPick.active {
+	if !m.anyOverlayActive() {
 		switch m.focus {
 		case focusProjects:
 			if keyMsg, ok := msg.(bubble_tea.KeyMsg); ok {
@@ -483,9 +501,6 @@ func (m *App) handleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 		}
 
 	case "/":
-		if m.selectedProject() == nil {
-			return m.setStatus("▲ Select project", true)
-		}
 		return m.openSearch()
 
 	case "[":

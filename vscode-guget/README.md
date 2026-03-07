@@ -18,7 +18,7 @@ Manage NuGet packages across .NET projects with an interactive TUI, right inside
 
 | | Feature | Description |
 |:-:|---------|-------------|
-| 📁 | **Browse projects** | Scans recursively for `.csproj` / `.fsproj` files, with support for Central Package Management (`Directory.Build.props`) and imported `.props` files |
+| 📁 | **Browse projects** | Scans recursively for `.csproj` / `.fsproj` / `.vbproj` files, with support for Central Package Management (`Directory.Build.props`) and imported `.props` files |
 | 🚀 | **Live version status** | Fetches latest versions from NuGet v3 API |
 | 🛡️ | **Vulnerability & deprecation tracking** | Surfaces CVE advisories and deprecated status per package version, with severity-coloured indicators. Packages from private/Azure feeds are automatically enriched with vulnerability data from nuget.org |
 | ⬆️ | **Update packages** | Bump to the latest compatible or latest stable version |
@@ -58,17 +58,17 @@ Manage NuGet packages across .NET projects with an interactive TUI, right inside
 
 **Command palette:**
 
-1. Open a folder containing `.csproj` or `.fsproj` files
+1. Open a folder containing `.csproj`, `.fsproj`, or `.vbproj` files
 2. Open the command palette (`Ctrl+Shift+P` / `Cmd+Shift+P`)
 3. Run **"Guget: Manage NuGet Packages"**
 
 **Explorer context menu:**
 
-Right-click any `.csproj` or `.fsproj` file in the explorer and select **"Guget: Manage NuGet Packages"** to open guget scoped to that project's directory.
+Right-click any `.csproj`, `.fsproj`, or `.vbproj` file in the explorer and select **"Guget: Manage NuGet Packages"** to open guget scoped to that project's directory.
 
 **Editor title button:**
 
-When viewing a `.csproj` or `.fsproj` file, click the guget icon in the editor title bar.
+When viewing a `.csproj`, `.fsproj`, or `.vbproj` file, click the guget icon in the editor title bar.
 
 **Status bar:**
 

@@ -19,8 +19,8 @@ export async function activate(context: vscode.ExtensionContext) {
   }
   context.subscriptions.push(statusBarItem);
 
-  // Watch for .csproj/.fsproj additions and deletions to update context dynamically
-  const watcher = vscode.workspace.createFileSystemWatcher("**/*.{csproj,fsproj}");
+  // Watch for .csproj/.fsproj/.vbproj additions and deletions to update context dynamically
+  const watcher = vscode.workspace.createFileSystemWatcher("**/*.{csproj,fsproj,vbproj}");
   watcher.onDidCreate(() => updateDotnetContext(true));
   watcher.onDidDelete(async () => {
     const still = await checkForDotnetProjects();
@@ -58,7 +58,7 @@ export function deactivate() {}
 // ─────────────────────────────────────────────
 
 async function checkForDotnetProjects(): Promise<boolean> {
-  const files = await vscode.workspace.findFiles("**/*.{csproj,fsproj}", "**/node_modules/**", 1);
+  const files = await vscode.workspace.findFiles("**/*.{csproj,fsproj,vbproj}", "**/node_modules/**", 1);
   return files.length > 0;
 }
 

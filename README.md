@@ -14,7 +14,7 @@ A terminal UI for managing NuGet packages across .NET projects.
 
 ## Overview
 
-`guget` lets you browse, update, and add NuGet packages across all `.csproj` and `.fsproj` files in a directory — without leaving the terminal. It fetches live version data from your configured NuGet sources and shows you at a glance what's out of date.
+`guget` lets you browse, update, and add NuGet packages across all `.csproj`, `.fsproj`, and `.vbproj` files in a directory — without leaving the terminal. It fetches live version data from your configured NuGet sources and shows you at a glance what's out of date.
 
 <div align="center">
 
@@ -28,7 +28,7 @@ A terminal UI for managing NuGet packages across .NET projects.
 
 | | Feature | Description |
 |:-:|---------|-------------|
-| 📁 | **Browse projects** | Scans recursively for `.csproj` / `.fsproj` files, with support for Central Package Management (`Directory.Build.props`) and imported `.props` files |
+| 📁 | **Browse projects** | Scans recursively for `.csproj` / `.fsproj` / `.vbproj` files, with support for Central Package Management (`Directory.Build.props`) and imported `.props` files |
 | 🚀 | **Live version status** | Fetches latest versions from NuGet v3 API |
 | 🛡️ | **Vulnerability & deprecation tracking** | Surfaces CVE advisories and deprecated status per package version, with severity-coloured indicators in the list, detail panel, and version picker. Packages from private/Azure feeds are automatically enriched with vulnerability data from nuget.org |
 | ⬆️ | **Update packages** | Bump to the latest compatible or latest stable version |
@@ -230,7 +230,7 @@ guget -o available:desc
 
 ## How It Works
 
-1. On startup, `guget` walks the target directory and parses every `.csproj` / `.fsproj` it finds (skipping `bin`, `obj`, `node_modules`, `.git`, etc.).
+1. On startup, `guget` walks the target directory and parses every `.csproj` / `.fsproj` / `.vbproj` it finds (skipping `bin`, `obj`, `node_modules`, `.git`, etc.).
 2. A background goroutine queries your configured NuGet sources for the latest version data for each package.
 3. The UI updates as results arrive — no waiting for a full scan before you can start navigating.
 4. When you update a package, `guget` rewrites the relevant project file(s) in place.

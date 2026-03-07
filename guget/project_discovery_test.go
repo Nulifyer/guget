@@ -16,6 +16,7 @@ func TestFindProjectFiles_MixedFormats(t *testing.T) {
 
 	hasCsproj := false
 	hasFsproj := false
+	hasVbproj := false
 	for _, f := range files {
 		ext := strings.ToLower(filepath.Ext(f))
 		if ext == ".csproj" {
@@ -24,12 +25,18 @@ func TestFindProjectFiles_MixedFormats(t *testing.T) {
 		if ext == ".fsproj" {
 			hasFsproj = true
 		}
+		if ext == ".vbproj" {
+			hasVbproj = true
+		}
 	}
 	if !hasCsproj {
 		t.Fatal("expected at least one .csproj file")
 	}
 	if !hasFsproj {
 		t.Fatal("expected at least one .fsproj file")
+	}
+	if !hasVbproj {
+		t.Fatal("expected at least one .vbproj file")
 	}
 }
 
@@ -88,14 +95,14 @@ func TestFindProjectFiles_ExpectedCount(t *testing.T) {
 	}
 
 	// test-dotnet contains: ProjectA, ProjectB, ProjectC (fsproj), ProjectD,
-	// ProjectE, ProjectF, ProjectG, CPMProject, CPMProject.Lib, CPMProject.Worker
-	// = 9 .csproj + 1 .fsproj = 10 project files
-	if len(files) != 10 {
+	// ProjectE, ProjectF, ProjectG, CPMProject, CPMProject.Lib, CPMProject.Worker,
+	// VBProject (vbproj) = 9 .csproj + 1 .fsproj + 1 .vbproj = 11 project files
+	if len(files) != 11 {
 		names := make([]string, len(files))
 		for i, f := range files {
 			names[i] = filepath.Base(f)
 		}
-		t.Fatalf("expected 10 project files, got %d: %v", len(files), names)
+		t.Fatalf("expected 11 project files, got %d: %v", len(files), names)
 	}
 }
 

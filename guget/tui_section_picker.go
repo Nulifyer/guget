@@ -38,12 +38,22 @@ func (s *versionPicker) HandleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 	case "enter":
 		if v := s.selectedVersion(); v != nil {
 			s.closeOverlay()
-			if s.addMode && s.targetProject != nil {
-				return s.app.openLocationPickerOrAdd(s.pkgName, v.SemVer.String(), s.targetProject)
+			if s.addMode {
+				return s.routeAddVersion(v.SemVer.String())
 			}
 			return s.app.applyOrConfirmUpdate(s.pkgName, v.SemVer.String(), s.targetProject)
 		}
 	}
+	return nil
+}
+
+// routeAddVersion handles the add-mode flow after a version is selected:
+// single project goes to location picker, "All Projects" goes to project picker.
+func (s *versionPicker) routeAddVersion(version string) bubble_tea.Cmd {
+	if s.targetProject != nil {
+		return s.app.openLocationPickerOrAdd(s.pkgName, version, s.targetProject)
+	}
+	s.app.openProjectPicker(s.pkgName, version)
 	return nil
 }
 
@@ -53,8 +63,8 @@ func (s *versionPicker) applyPickerVersion(scope actionScope) bubble_tea.Cmd {
 		return nil
 	}
 	s.closeOverlay()
-	if s.addMode && s.targetProject != nil {
-		return s.app.openLocationPickerOrAdd(s.pkgName, v.SemVer.String(), s.targetProject)
+	if s.addMode {
+		return s.routeAddVersion(v.SemVer.String())
 	}
 	var project *ParsedProject
 	if scope == scopeSelected {

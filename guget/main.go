@@ -215,7 +215,7 @@ func main() {
 	}
 
 	if len(parsedProjects) == 0 {
-		logWarn("No .csproj or .fsproj files found in: %s", fullProjectPath)
+		logWarn("No .csproj, .fsproj, or .vbproj files found in: %s", fullProjectPath)
 		os.Exit(1)
 	}
 

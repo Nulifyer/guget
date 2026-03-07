@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-// FindProjectFiles walks rootDir and returns all .csproj and .fsproj paths,
+// FindProjectFiles walks rootDir and returns all .csproj, .fsproj, and .vbproj paths,
 // skipping common build-output and metadata directories.
 func FindProjectFiles(rootDir string) ([]string, error) {
 	ignoreDirs := []string{
@@ -40,7 +40,7 @@ func FindProjectFiles(rootDir string) ([]string, error) {
 		}
 
 		ext := strings.ToLower(filepath.Ext(d.Name()))
-		if ext == ".csproj" || ext == ".fsproj" {
+		if ext == ".csproj" || ext == ".fsproj" || ext == ".vbproj" {
 			projects = append(projects, path)
 		}
 		return nil
