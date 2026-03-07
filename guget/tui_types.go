@@ -373,9 +373,12 @@ type locationPicker struct {
 }
 
 type projectPickItem struct {
-	project   *ParsedProject
-	selected  bool
-	installed bool // already has this package
+	project        *ParsedProject
+	selected       bool
+	installed      bool   // already has this exact version
+	currentVersion string // non-empty if package exists at a different version
+	downgrade      bool   // true when currentVersion is newer than the target version
+	incompatible   bool   // true when the package version doesn't support the project's TFMs
 }
 
 type projectPicker struct {

@@ -8,35 +8,42 @@ import (
 )
 
 func (m *App) openProjectPicker(pkgName, version string) {
-	items := make([]projectPickItem, 0, len(m.ctx.ParsedProjects))
-	for _, p := range m.ctx.ParsedProjects {
-		installed := false
-		for ref := range p.Packages {
-			if strings.EqualFold(ref.Name, pkgName) {
-				installed = true
+	allProjects := make([]*ParsedProject, 0, len(m.ctx.ParsedProjects)+len(m.ctx.PropsProjects))
+	allProjects = append(allProjects, m.ctx.ParsedProjects...)
+	allProjects = append(allProjects, m.ctx.PropsProjects...)
+
+	targetVer := ParseSemVer(version)
+
+	// Find the PackageVersion for framework compatibility checks.
+	var pkgVer *PackageVersion
+	if m.search.fetchedInfo != nil {
+		for i := range m.search.fetchedInfo.Versions {
+			if m.search.fetchedInfo.Versions[i].SemVer.String() == version {
+				pkgVer = &m.search.fetchedInfo.Versions[i]
 				break
 			}
 		}
-		items = append(items, projectPickItem{
-			project:   p,
-			selected:  false,
-			installed: installed,
-		})
 	}
-	// Also include props projects that have packages.
-	for _, p := range m.ctx.PropsProjects {
-		installed := false
+
+	items := make([]projectPickItem, 0, len(allProjects))
+	for _, p := range allProjects {
+		item := projectPickItem{project: p}
 		for ref := range p.Packages {
 			if strings.EqualFold(ref.Name, pkgName) {
-				installed = true
+				if ref.Version.String() == targetVer.String() {
+					item.installed = true
+				} else {
+					item.currentVersion = ref.Version.String()
+					item.downgrade = ref.Version.IsNewerThan(targetVer)
+				}
 				break
 			}
 		}
-		items = append(items, projectPickItem{
-			project:   p,
-			selected:  false,
-			installed: installed,
-		})
+		// Check framework compatibility (props projects have no TFMs — skip them).
+		if pkgVer != nil && p.TargetFrameworks.Len() > 0 {
+			item.incompatible = !versionCompatible(*pkgVer, p.TargetFrameworks)
+		}
+		items = append(items, item)
 	}
 	// baseWidth=80, minWidth=60, maxMargin=4
 	m.projectPick = projectPicker{
@@ -66,20 +73,20 @@ func (s *projectPicker) HandleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 	case "down", "j":
 		s.moveCursor(1)
 	case "space":
-		if s.cursor < len(s.items) && !s.items[s.cursor].installed {
+		if s.cursor < len(s.items) && s.items[s.cursor].selectable() {
 			s.items[s.cursor].selected = !s.items[s.cursor].selected
 		}
 	case "a":
-		// Toggle all: if any non-installed are unselected, select all; otherwise deselect all.
+		// Toggle all: if any selectable are unselected, select all; otherwise deselect all.
 		anyUnselected := false
 		for _, it := range s.items {
-			if !it.installed && !it.selected {
+			if it.selectable() && !it.selected {
 				anyUnselected = true
 				break
 			}
 		}
 		for i := range s.items {
-			if !s.items[i].installed {
+			if s.items[i].selectable() {
 				s.items[i].selected = anyUnselected
 			}
 		}
@@ -87,6 +94,10 @@ func (s *projectPicker) HandleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 		return s.confirmSelection()
 	}
 	return nil
+}
+
+func (it projectPickItem) selectable() bool {
+	return !it.installed && !it.incompatible
 }
 
 func (s *projectPicker) moveCursor(delta int) {
@@ -99,7 +110,7 @@ func (s *projectPicker) moveCursor(delta int) {
 func (s *projectPicker) selectedCount() int {
 	n := 0
 	for _, it := range s.items {
-		if it.selected && !it.installed {
+		if it.selected && it.selectable() {
 			n++
 		}
 	}
@@ -109,7 +120,7 @@ func (s *projectPicker) selectedCount() int {
 func (s *projectPicker) confirmSelection() bubble_tea.Cmd {
 	selected := make([]*ParsedProject, 0)
 	for _, it := range s.items {
-		if it.selected && !it.installed {
+		if it.selected && it.selectable() {
 			selected = append(selected, it.project)
 		}
 	}
@@ -182,11 +193,28 @@ func (s *projectPicker) Render() string {
 		it := s.items[i]
 		selected := i == s.cursor
 
+		// Status icon matches package panel conventions:
+		// ✓ (green)  = already has this exact version
+		// ↑ (yellow) = has an older version, will be upgraded
+		// ↓ (red)    = has a newer version, will be downgraded
+		// ✗ (red)    = incompatible target framework
+		// ○ (muted)  = doesn't have this package
 		var check string
 		nameStyle := styleText
-		if it.installed {
+		if it.incompatible {
+			check = styleRed.Render("✗ ")
+			nameStyle = styleMuted
+		} else if it.installed {
 			check = styleGreen.Render("✓ ")
 			nameStyle = styleMuted
+		} else if it.currentVersion != "" {
+			if it.selected {
+				check = styleAccent.Render("◉ ")
+			} else if it.downgrade {
+				check = styleRed.Render("↓ ")
+			} else {
+				check = styleYellow.Render("↑ ")
+			}
 		} else if it.selected {
 			check = styleAccent.Render("◉ ")
 		} else {
@@ -196,7 +224,7 @@ func (s *projectPicker) Render() string {
 		cursor := "  "
 		if selected {
 			cursor = styleAccent.Render("▶ ")
-			if !it.installed {
+			if it.selectable() {
 				nameStyle = styleAccentBold
 			}
 		}
@@ -204,14 +232,16 @@ func (s *projectPicker) Render() string {
 		// innerW-10 accounts for: cursor (2) + check (2) + suffix padding (6)
 		name := truncate(it.project.FileName, innerW-10)
 		suffix := ""
-		if it.installed {
-			// Show installed version.
-			for ref := range it.project.Packages {
-				if strings.EqualFold(ref.Name, s.pkgName) {
-					suffix = styleMuted.Render(" " + ref.Version.String())
-					break
-				}
+		if it.incompatible {
+			suffix = styleRed.Render(" incompatible")
+		} else if it.installed {
+			suffix = styleMuted.Render(" " + s.version)
+		} else if it.currentVersion != "" {
+			verStyle := styleYellow
+			if it.downgrade {
+				verStyle = styleRed
 			}
+			suffix = verStyle.Render(" " + it.currentVersion + " → " + s.version)
 		}
 
 		lines = append(lines, cursor+check+nameStyle.Render(name)+suffix)
