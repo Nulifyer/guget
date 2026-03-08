@@ -446,8 +446,8 @@ func (s *releaseNotesOverlay) Render() string {
 		leftHdr = lipgloss.NewStyle().Foreground(colorSubtle).Bold(true).Render(leftHdr)
 		rightHdr = styleAccentBold.Render(rightHdr)
 	}
-	headerLine := padRight(leftHdr, listW) + div + padRight(rightHdr, rightW)
-	headerDivider := styleBorder.Render(strings.Repeat("─", listW) + "┼" + strings.Repeat("─", rightW))
+	headerLine := padRight(leftHdr, listW) + div + padRight(rightHdr, rightW+2)
+	headerDivider := styleBorder.Render(strings.Repeat("─", listW) + "┼" + strings.Repeat("─", rightW+2))
 
 	// ── Left panel ──
 	maxTagW := listW - 3 // prefix "▶ " (2) + left margin (1)
