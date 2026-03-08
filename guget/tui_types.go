@@ -141,10 +141,12 @@ type depTreeReadyMsg struct {
 }
 
 type releaseListReadyMsg struct {
-	releases []GitHubRelease
-	err      error
-	owner    string // set when repo was discovered late (e.g. from nuspec)
-	repo     string
+	releases     []GitHubRelease
+	err          error
+	owner        string // set when repo was discovered late (e.g. from nuspec)
+	repo         string
+	nuspecNotes  string // piggy-backed nuspec release notes (avoids a second fetch)
+	nuspecVer    string // version the nuspec notes belong to
 }
 
 type releaseNotesReadyMsg struct {
@@ -230,13 +232,14 @@ type releaseNotesOverlay struct {
 	ghRepo     string
 
 	// NuSpec tab state
-	nsLoading  bool
-	nsVersions []string        // version strings, newest first
-	nsCursor   int
-	nsNotes    string          // <releaseNotes> for selected version
-	nsErr      error
-	nsSvc      *NugetService   // service to fetch nuspec notes from
-	nsPkgID    string          // package ID for nuspec fetches
+	nsLoading    bool
+	nsVersions   []string          // version strings, newest first
+	nsCursor     int
+	nsNotes      string            // <releaseNotes> for selected version
+	nsErr        error
+	nsSvc        *NugetService     // service to fetch nuspec notes from
+	nsPkgID      string            // package ID for nuspec fetches
+	nsNotesCache map[string]string // version → cached release notes (avoids re-fetching)
 
 	// Derived state: which tabs are available (set after fetches complete)
 	ghAvailable bool

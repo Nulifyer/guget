@@ -82,6 +82,7 @@ func BuildFlags(flags map[string]IParsedFlag) BuiltFlags {
 // initCLI registers CLI flags, parses os.Args, and returns the resolved flag values.
 // Named initCLI (not Init) to avoid confusion with App.Init() in the same package.
 func initCLI() BuiltFlags {
+	rebuildStyles()
 	logSetLevel(LogLevelWarn)
 	// Allow LOG_LEVEL env var to override the pre-parse default; --verbose will
 	// override it again after flags are parsed below.
@@ -160,11 +161,6 @@ func initCLI() BuiltFlags {
 	logSetLevel(logParseLevel(builtFlags.Verbosity))
 	logSetColor(!builtFlags.NoColor)
 
-	if builtFlags.Version {
-		fmt.Printf("guget %s\n", version)
-		os.Exit(0)
-	}
-
 	return builtFlags
 }
 
@@ -177,6 +173,11 @@ type nugetResult struct {
 func main() {
 	builtFlags := initCLI()
 	initTheme(builtFlags.Theme, builtFlags.NoColor)
+
+	if builtFlags.Version {
+		fmt.Printf("guget %s\n", version)
+		os.Exit(0)
+	}
 
 	// Capture all startup logs for the TUI log panel.
 	buf := &logBuffer{}

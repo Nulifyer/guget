@@ -8,6 +8,48 @@ import (
 	lipgloss "charm.land/lipgloss/v2"
 )
 
+var (
+	// colors
+	colorBorder color.Color
+	colorMuted  color.Color
+	colorText   color.Color
+	colorSubtle color.Color
+	colorAccent color.Color
+	colorGreen  color.Color
+	colorYellow color.Color
+	colorRed    color.Color
+	colorPurple color.Color
+	colorCyan   color.Color
+)
+
+var (
+	// text styles
+	styleMuted      lipgloss.Style
+	styleSubtle     lipgloss.Style
+	styleSubtleBold lipgloss.Style
+	styleText       lipgloss.Style
+	styleTextBold   lipgloss.Style
+	styleAccent     lipgloss.Style
+	styleAccentBold lipgloss.Style
+	styleGreen      lipgloss.Style
+	styleYellow     lipgloss.Style
+	styleYellowBold lipgloss.Style
+	styleRed        lipgloss.Style
+	styleRedBold    lipgloss.Style
+	stylePurple     lipgloss.Style
+	styleCyan       lipgloss.Style
+	styleBorder     lipgloss.Style
+
+	// Layout styles
+	styleHeaderTitle   lipgloss.Style
+	styleHeaderBar     lipgloss.Style
+	styleFooterBar     lipgloss.Style
+	styleOverlay       lipgloss.Style
+	styleOverlayDanger lipgloss.Style
+	stylePanel         lipgloss.Style
+	stylePanelNoPad    lipgloss.Style
+)
+
 type Theme struct {
 	Border color.Color
 	Muted  color.Color

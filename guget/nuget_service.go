@@ -330,6 +330,10 @@ type NugetService struct {
 	detailTemplate string   // PackageDetailsUriTemplate (e.g. "https://.../packages/{id}/{version}")
 	adoSearchBase  string   // Azure DevOps REST API base (faster alternative to SearchQueryService)
 	adoUpstreams   []string // public NuGet upstream source URLs discovered from ADO feed config
+
+	// upstreamSearchBases caches the resolved SearchQueryService URL for each
+	// upstream source index, avoiding re-fetching the service index on every search.
+	upstreamSearchBases sync.Map // map[serviceIndexURL]string
 }
 
 func (s *NugetService) SourceName() string { return s.sourceName }
@@ -554,7 +558,7 @@ func (s *NugetService) fetchGitHubPackage(owner, packageName string) *ghPackageR
 		}
 		req.Header.Set("Authorization", "Bearer "+token)
 		req.Header.Set("Accept", "application/vnd.github+json")
-		resp, err := http.DefaultTransport.RoundTrip(req)
+		resp, err := githubClient.Do(req)
 		if err != nil || resp.StatusCode != http.StatusOK {
 			if resp != nil {
 				resp.Body.Close()
@@ -710,7 +714,7 @@ func (s *NugetService) searchADO(query string, take int) ([]SearchResult, error)
 	// 2. Search each public upstream source directly.
 	for _, upstream := range s.adoUpstreams {
 		go func(loc string) {
-			results, err := searchUpstream(s.client, loc, query, take)
+			results, err := s.searchUpstream(loc, query, take)
 			ch <- searchResult{results, err, loc}
 		}(upstream)
 	}
@@ -779,28 +783,66 @@ func (s *NugetService) searchADOLocal(query string, take int) ([]SearchResult, e
 	return results, nil
 }
 
-// searchUpstream resolves a NuGet v3 service index and searches its
-// SearchQueryService endpoint directly. This is used to search public
-// upstream sources (e.g. nuget.org) in parallel with the ADO REST API.
-func searchUpstream(client *http.Client, serviceIndexURL, query string, take int) ([]SearchResult, error) {
+// searchUpstream searches a public upstream NuGet source directly.
+// The SearchQueryService URL for each upstream is resolved once and cached
+// on the NugetService so subsequent searches skip the service index fetch.
+func (s *NugetService) searchUpstream(serviceIndexURL, query string, take int) ([]SearchResult, error) {
 	logDebug("[upstream] searching %s for %q", serviceIndexURL, query)
 
-	// Resolve the service index to find SearchQueryService.
-	req, err := http.NewRequest("GET", serviceIndexURL, nil)
+	searchBase, err := s.resolveUpstreamSearchBase(serviceIndexURL)
 	if err != nil {
 		return nil, err
 	}
-	resp, err := client.Do(req)
+
+	// Search the upstream.
+	params := url.Values{}
+	params.Set("q", query)
+	params.Set("take", strconv.Itoa(take))
+	params.Set("prerelease", "false")
+	params.Set("semVerLevel", "2.0.0")
+
+	req, err := http.NewRequest("GET", searchBase+"?"+params.Encode(), nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := s.client.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, &httpStatusError{Code: resp.StatusCode, URL: serviceIndexURL}
+		return nil, &httpStatusError{Code: resp.StatusCode, URL: searchBase}
+	}
+	var searchResp searchResponse
+	if err := json.NewDecoder(resp.Body).Decode(&searchResp); err != nil {
+		return nil, fmt.Errorf("decoding search response: %w", err)
+	}
+	logDebug("[upstream] %s returned %d results", serviceIndexURL, len(searchResp.Data))
+	return searchResp.Data, nil
+}
+
+// resolveUpstreamSearchBase returns the cached SearchQueryService URL for the
+// given upstream service index, fetching and caching it on first call.
+func (s *NugetService) resolveUpstreamSearchBase(serviceIndexURL string) (string, error) {
+	if v, ok := s.upstreamSearchBases.Load(serviceIndexURL); ok {
+		return v.(string), nil
+	}
+
+	req, err := http.NewRequest("GET", serviceIndexURL, nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", &httpStatusError{Code: resp.StatusCode, URL: serviceIndexURL}
 	}
 	var idx serviceIndex
 	if err := json.NewDecoder(resp.Body).Decode(&idx); err != nil {
-		return nil, fmt.Errorf("decoding service index: %w", err)
+		return "", fmt.Errorf("decoding service index: %w", err)
 	}
 
 	var searchBase string
@@ -814,34 +856,12 @@ func searchUpstream(client *http.Client, serviceIndexURL, query string, take int
 		}
 	}
 	if searchBase == "" {
-		return nil, fmt.Errorf("SearchQueryService not found in %s", serviceIndexURL)
+		return "", fmt.Errorf("SearchQueryService not found in %s", serviceIndexURL)
 	}
 
-	// Search the upstream.
-	params := url.Values{}
-	params.Set("q", query)
-	params.Set("take", strconv.Itoa(take))
-	params.Set("prerelease", "false")
-	params.Set("semVerLevel", "2.0.0")
-
-	req2, err := http.NewRequest("GET", searchBase+"?"+params.Encode(), nil)
-	if err != nil {
-		return nil, err
-	}
-	resp2, err := client.Do(req2)
-	if err != nil {
-		return nil, err
-	}
-	defer resp2.Body.Close()
-	if resp2.StatusCode != http.StatusOK {
-		return nil, &httpStatusError{Code: resp2.StatusCode, URL: searchBase}
-	}
-	var searchResp searchResponse
-	if err := json.NewDecoder(resp2.Body).Decode(&searchResp); err != nil {
-		return nil, fmt.Errorf("decoding search response: %w", err)
-	}
-	logDebug("[upstream] %s returned %d results", serviceIndexURL, len(searchResp.Data))
-	return searchResp.Data, nil
+	s.upstreamSearchBases.Store(serviceIndexURL, searchBase)
+	logDebug("[upstream] cached search base for %s → %s", serviceIndexURL, searchBase)
+	return searchBase, nil
 }
 
 // SearchExact looks up a package by its exact ID using the registration index
@@ -1196,6 +1216,9 @@ func parseGitHubRepo(rawURL string) (owner, repo string) {
 	return parts[0], parts[1]
 }
 
+// githubClient is a shared HTTP client for GitHub API calls with a timeout.
+var githubClient = &http.Client{Timeout: 15 * time.Second}
+
 // FetchGitHubReleases returns up to `limit` releases for the given GitHub repo.
 func FetchGitHubReleases(owner, repo string, limit int) ([]GitHubRelease, error) {
 	apiURL := fmt.Sprintf("https://api.github.com/repos/%s/%s/releases?per_page=%d", owner, repo, limit)
@@ -1206,7 +1229,7 @@ func FetchGitHubReleases(owner, repo string, limit int) ([]GitHubRelease, error)
 		return nil, err
 	}
 	req.Header.Set("Accept", "application/vnd.github.v3+json")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := githubClient.Do(req)
 	if err != nil {
 		logTrace("FetchGitHubReleases: fetch error: %v", err)
 		return nil, err
@@ -1237,7 +1260,7 @@ func FetchGitHubReleaseByTag(owner, repo, version string) (*GitHubRelease, error
 			continue
 		}
 		req.Header.Set("Accept", "application/vnd.github.v3+json")
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := githubClient.Do(req)
 		if err != nil {
 			logTrace("FetchGitHubReleaseByTag: fetch error for tag %s: %v", tag, err)
 			continue
@@ -1259,14 +1282,13 @@ func FetchGitHubReleaseByTag(owner, repo, version string) (*GitHubRelease, error
 	return nil, fmt.Errorf("no release found for %s/%s tag %s", owner, repo, version)
 }
 
-// FetchNuspecReleaseNotes fetches the nuspec from the NuGet flat container
-// and extracts the <releaseNotes> element. Returns "" if not found.
-// fetchNuspec fetches the .nuspec from the given flat container base URL.
-func fetchNuspec(flatBase, packageID, version string) string {
+// fetchNuspec fetches the .nuspec from the given flat container base URL
+// using the service's authenticated HTTP client.
+func (s *NugetService) fetchNuspec(flatBase, packageID, version string) string {
 	lower := strings.ToLower(packageID)
 	u := fmt.Sprintf("%s/%s/%s/%s.nuspec", flatBase, lower, version, lower)
 	logTrace("fetchNuspec: GET %s", u)
-	resp, err := http.DefaultClient.Get(u)
+	resp, err := s.client.Get(u)
 	if err != nil {
 		return ""
 	}
@@ -1308,50 +1330,34 @@ func extractRepoURL(body string) string {
 	return tag[urlStart : urlStart+urlEnd]
 }
 
-// FetchNuspecRepoURL fetches the .nuspec and extracts <repository url="...">.
-// The registration API often omits the repository field even when the nuspec has it.
-func (s *NugetService) FetchNuspecRepoURL(packageID, version string) string {
+// FetchNuspec fetches the .nuspec XML body for a package version.
+// Returns "" if the flat container is unavailable or the fetch fails.
+func (s *NugetService) FetchNuspec(packageID, version string) string {
 	if s.flatBase == "" {
-		logTrace("FetchNuspecRepoURL: [%s] no PackageBaseAddress available", s.sourceName)
+		logTrace("FetchNuspec: [%s] no PackageBaseAddress available", s.sourceName)
 		return ""
 	}
-	body := fetchNuspec(s.flatBase, packageID, version)
-	if body == "" {
-		return ""
-	}
+	return s.fetchNuspec(s.flatBase, packageID, version)
+}
+
+// ExtractNuspecRepoURL extracts <repository url="..."> from nuspec XML.
+func ExtractNuspecRepoURL(body string) string {
 	repoURL := extractRepoURL(body)
-	if repoURL != "" {
-		logTrace("FetchNuspecRepoURL: %s/%s found repository url=%q", packageID, version, repoURL)
-	} else {
-		logTrace("FetchNuspecRepoURL: %s/%s no <repository> tag found", packageID, version)
-	}
 	return repoURL
 }
 
-// FetchNuspecReleaseNotes fetches the nuspec and extracts inline <releaseNotes>.
-func (s *NugetService) FetchNuspecReleaseNotes(packageID, version string) string {
-	if s.flatBase == "" {
-		logTrace("FetchNuspecReleaseNotes: [%s] no PackageBaseAddress available", s.sourceName)
-		return ""
-	}
-	body := fetchNuspec(s.flatBase, packageID, version)
-	if body == "" {
-		return ""
-	}
+// ExtractNuspecReleaseNotes extracts inline <releaseNotes> from nuspec XML.
+func ExtractNuspecReleaseNotes(body string) string {
 	const openTag = "<releaseNotes>"
 	const closeTag = "</releaseNotes>"
 	start := strings.Index(body, openTag)
 	if start < 0 {
-		logTrace("FetchNuspecReleaseNotes: %s/%s no <releaseNotes> tag found", packageID, version)
 		return ""
 	}
 	start += len(openTag)
 	end := strings.Index(body[start:], closeTag)
 	if end < 0 {
-		logTrace("FetchNuspecReleaseNotes: %s/%s unclosed <releaseNotes> tag", packageID, version)
 		return ""
 	}
-	notes := strings.TrimSpace(body[start : start+end])
-	logTrace("FetchNuspecReleaseNotes: %s/%s found %d chars of release notes", packageID, version, len(notes))
-	return notes
+	return strings.TrimSpace(body[start : start+end])
 }

@@ -261,6 +261,18 @@ func (m *App) Update(msg bubble_tea.Msg) (bubble_tea.Model, bubble_tea.Cmd) {
 			m.releaseNotes.ghOwner = msg.owner
 			m.releaseNotes.ghRepo = msg.repo
 		}
+		// Apply piggy-backed nuspec release notes if present.
+		if msg.nuspecVer != "" {
+			m.releaseNotes.nsLoading = false
+			if msg.nuspecNotes != "" {
+				m.releaseNotes.nsAvailable = true
+			}
+			m.releaseNotes.nsNotes = msg.nuspecNotes
+			if m.releaseNotes.nsNotesCache == nil {
+				m.releaseNotes.nsNotesCache = make(map[string]string)
+			}
+			m.releaseNotes.nsNotesCache[msg.nuspecVer] = msg.nuspecNotes
+		}
 		if msg.err != nil {
 			m.releaseNotes.ghErr = msg.err
 			// Auto-switch to NuSpec if GitHub failed and NuSpec is available.
@@ -299,6 +311,10 @@ func (m *App) Update(msg bubble_tea.Msg) (bubble_tea.Model, bubble_tea.Cmd) {
 			m.releaseNotes.nsAvailable = true
 		}
 		m.releaseNotes.nsNotes = msg.notes
+		if m.releaseNotes.nsNotesCache == nil {
+			m.releaseNotes.nsNotesCache = make(map[string]string)
+		}
+		m.releaseNotes.nsNotesCache[msg.version] = msg.notes
 		m.releaseNotes.updateViewportContent()
 
 	case depTreeReadyMsg:
@@ -581,10 +597,11 @@ func (m *App) View() bubble_tea.View {
 	}
 
 	if m.ctx.Loading {
+		w := len(fmt.Sprintf("%d", m.ctx.LoadingTotal))
 		v.SetContent(lipgloss.Place(m.ctx.Width, m.ctx.Height,
 			lipgloss.Center, lipgloss.Center,
 			styleAccent.Render(
-				fmt.Sprintf("%s Loading packages... (%d/%d)", m.ctx.Spinner.View(), m.ctx.LoadingDone, m.ctx.LoadingTotal),
+				fmt.Sprintf("%s Loading packages... (%*d/%d)", m.ctx.Spinner.View(), w, m.ctx.LoadingDone, m.ctx.LoadingTotal),
 			),
 		))
 		return v
