@@ -460,26 +460,26 @@ func (s *releaseNotesOverlay) Render() string {
 	switch s.activeTab {
 	case tabReleases:
 		if s.ghLoading && len(s.ghReleases) == 0 {
-			allLeft = append(allLeft, " "+s.app.ctx.Spinner.View()+" "+styleSubtle.Render("Loading..."))
+			allLeft = append(allLeft, s.app.ctx.Spinner.View()+" "+styleSubtle.Render("Loading..."))
 		}
 		for i, rel := range s.ghReleases {
 			tag := truncate(rel.TagName, maxTagW)
 			if i == s.ghCursor {
-				allLeft = append(allLeft, styleAccent.Render(" ▶ "+tag))
+				allLeft = append(allLeft, styleAccent.Render("▶ "+tag))
 			} else {
-				allLeft = append(allLeft, styleMuted.Render("   "+tag))
+				allLeft = append(allLeft, styleMuted.Render("  "+tag))
 			}
 		}
 	case tabNuSpec:
 		if s.nsLoading && len(s.nsVersions) == 0 {
-			allLeft = append(allLeft, " "+s.app.ctx.Spinner.View()+" "+styleSubtle.Render("Loading..."))
+			allLeft = append(allLeft, s.app.ctx.Spinner.View()+" "+styleSubtle.Render("Loading..."))
 		}
 		for i, ver := range s.nsVersions {
 			tag := truncate(ver, maxTagW)
 			if i == s.nsCursor {
-				allLeft = append(allLeft, styleAccent.Render(" ▶ "+tag))
+				allLeft = append(allLeft, styleAccent.Render("▶ "+tag))
 			} else {
-				allLeft = append(allLeft, styleMuted.Render("   "+tag))
+				allLeft = append(allLeft, styleMuted.Render("  "+tag))
 			}
 		}
 	}
