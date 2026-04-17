@@ -96,8 +96,22 @@ func parseSortMode(name string) packageSortMode {
 // packageReadyMsg is sent by the background loader for each package as its
 // NuGet metadata resolves, enabling progressive UI updates.
 type packageReadyMsg struct {
-	name   string
-	result nugetResult
+	generation int
+	name       string
+	result     nugetResult
+}
+
+type reloadRequestedMsg struct {
+	reason    string
+	paths     []string
+	automatic bool
+}
+
+type workspaceReloadedMsg struct {
+	generation int
+	snapshot   *workspaceSnapshot
+	request    reloadRequestedMsg
+	err        error
 }
 
 type writeResultMsg struct {
@@ -141,12 +155,12 @@ type depTreeReadyMsg struct {
 }
 
 type releaseListReadyMsg struct {
-	releases     []GitHubRelease
-	err          error
-	owner        string // set when repo was discovered late (e.g. from nuspec)
-	repo         string
-	nuspecNotes  string // piggy-backed nuspec release notes (avoids a second fetch)
-	nuspecVer    string // version the nuspec notes belong to
+	releases    []GitHubRelease
+	err         error
+	owner       string // set when repo was discovered late (e.g. from nuspec)
+	repo        string
+	nuspecNotes string // piggy-backed nuspec release notes (avoids a second fetch)
+	nuspecVer   string // version the nuspec notes belong to
 }
 
 type releaseNotesReadyMsg struct {
@@ -199,7 +213,7 @@ type logPanel struct {
 // --- Overlay state types ---
 
 type depTreeOverlay struct {
-	sectionBase // basePct=80, minWidth=40, maxMargin=4
+	sectionBase      // basePct=80, minWidth=40, maxMargin=4
 	loading     bool // true while dotnet list is running (T key)
 	content     string
 	err         error
@@ -211,11 +225,11 @@ type releaseNotesTab int
 
 const (
 	tabReleases releaseNotesTab = 0
-	tabNuSpec  releaseNotesTab = 1
+	tabNuSpec   releaseNotesTab = 1
 )
 
 type releaseNotesOverlay struct {
-	sectionBase // basePct=85, minWidth=60, maxMargin=4
+	sectionBase      // basePct=85, minWidth=60, maxMargin=4
 	focusRight  bool // false = left list, true = notes viewport
 	vp          bubbles_viewport.Model
 	title       string
@@ -225,17 +239,17 @@ type releaseNotesOverlay struct {
 	ghLoading  bool
 	ghReleases []GitHubRelease
 	ghCursor   int
-	ghNotes    string   // body of selected release
-	ghNotesURL string   // link to the release on GitHub
+	ghNotes    string // body of selected release
+	ghNotesURL string // link to the release on GitHub
 	ghErr      error
 	ghOwner    string
 	ghRepo     string
 
 	// NuSpec tab state
 	nsLoading    bool
-	nsVersions   []string          // version strings, newest first
+	nsVersions   []string // version strings, newest first
 	nsCursor     int
-	nsNotes      string            // <releaseNotes> for selected version
+	nsNotes      string // <releaseNotes> for selected version
 	nsErr        error
 	nsSvc        *NugetService     // service to fetch nuspec notes from
 	nsPkgID      string            // package ID for nuspec fetches
@@ -289,6 +303,7 @@ type packageRow struct {
 	info             *PackageInfo
 	source           string
 	err              error
+	loading          bool
 	latestCompatible *PackageVersion
 	latestStable     *PackageVersion
 	diverged         bool
@@ -308,6 +323,9 @@ func (r packageRow) effectiveVersion() SemVer {
 }
 
 func (r packageRow) statusIcon() string {
+	if r.loading {
+		return "."
+	}
 	if r.vulnerable {
 		return "▲"
 	}
@@ -333,6 +351,9 @@ func (r packageRow) statusIcon() string {
 }
 
 func (r packageRow) statusStyle() lipgloss.Style {
+	if r.loading {
+		return styleAccent
+	}
 	if r.vulnerable {
 		return styleRed
 	}
@@ -392,14 +413,14 @@ type packageSearch struct {
 
 type confirmRemove struct {
 	sectionBase // baseWidth=48, minWidth=36, maxMargin=4
-	pkgName string
+	pkgName     string
 }
 
 type confirmUpdate struct {
 	sectionBase // baseWidth=52, minWidth=40, maxMargin=4
-	pkgName    string
-	newVersion string
-	project    *ParsedProject
+	pkgName     string
+	newVersion  string
+	project     *ParsedProject
 }
 
 type locationPicker struct {
@@ -423,7 +444,7 @@ type projectPickItem struct {
 type projectPicker struct {
 	sectionBase
 	pkgName string
-	version     string
-	items       []projectPickItem
-	cursor      int
+	version string
+	items   []projectPickItem
+	cursor  int
 }

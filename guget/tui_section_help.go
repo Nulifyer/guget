@@ -61,6 +61,7 @@ func (s *helpOverlay) refreshView() {
 		{
 			title: "Project actions",
 			rows: [][2]string{
+				{"ctrl+r", "reload projects from disk"},
 				{"r", "run dotnet restore (selected project)"},
 				{"R", "run dotnet restore (all projects)"},
 				{"T", "show full transitive dependency tree"},

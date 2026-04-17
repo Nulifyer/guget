@@ -20,11 +20,13 @@ type AppContext struct {
 	SourceMapping  *PackageSourceMapping
 
 	// Loading state
-	Loading      bool
-	LoadingDone  int
-	LoadingTotal int
-	Spinner      bubbles_spinner.Model
-	Restoring    bool
+	Loading         bool
+	LoadingDone     int
+	LoadingTotal    int
+	PendingPackages Set[string]
+	Spinner         bubbles_spinner.Model
+	Restoring       bool
+	Reloading       bool
 
 	// Status bar
 	StatusLine  string

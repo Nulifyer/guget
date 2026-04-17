@@ -282,6 +282,7 @@ func (m *App) rebuildPackageRows() {
 				info:     res.pkg,
 				source:   res.source,
 				err:      res.err,
+				loading:  m.ctx.PendingPackages.Contains(name),
 				diverged: oldest != newest,
 				oldest:   oldest,
 			}
@@ -310,6 +311,7 @@ func (m *App) rebuildPackageRows() {
 				info:    res.pkg,
 				source:  res.source,
 				err:     res.err,
+				loading: m.ctx.PendingPackages.Contains(ref.Name),
 			}
 			if res.pkg != nil {
 				row.latestCompatible = res.pkg.LatestStableForFramework(sel.TargetFrameworks)

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"strings"
 
 	lipgloss "charm.land/lipgloss/v2"
@@ -22,6 +23,7 @@ func (m *App) footerKeys() []kv {
 		return []kv{
 			{"tab/↑↓", "nav"},
 			{"enter", "packages"},
+			{"^r", "reload"},
 			{"r/R", "restore/all"},
 			{"T", "deps"},
 			{"/", "add"},
@@ -40,6 +42,7 @@ func (m *App) footerKeys() []kv {
 				{"o/O", "sort/dir"},
 				{"t/T", "deps"},
 				{"n", "notes"},
+				{"^r", "reload"},
 				{"r/R", "restore"},
 				{"/", "add"},
 				{"?", "help"},
@@ -55,6 +58,7 @@ func (m *App) footerKeys() []kv {
 			{"o/O", "sort/dir"},
 			{"t/T", "deps"},
 			{"n", "notes"},
+			{"^r", "reload"},
 			{"r/R", "restore/all"},
 			{"/", "add"},
 			{"?", "help"},
@@ -67,6 +71,7 @@ func (m *App) footerKeys() []kv {
 			{"↑↓", "scroll"},
 			{"v", "version"},
 			{"n", "notes"},
+			{"^r", "reload"},
 			{"r/R", "restore/all"},
 			{"?", "help"},
 			{"esc/q", "quit"},
@@ -88,7 +93,7 @@ func (m *App) footerKeys() []kv {
 func (m *App) footerLines() int {
 	keys := m.footerKeys()
 	w := m.layoutWidth() - 4
-	lines, curW  := 1, 0
+	lines, curW := 1, 0
 	for _, pair := range keys {
 		ew := lipgloss.Width(pair.k) + 1 + lipgloss.Width(pair.v)
 		needed := ew
@@ -243,6 +248,14 @@ func (m *App) renderFooter() string {
 	statusStr := ""
 	if m.ctx.Restoring {
 		statusStr = m.ctx.Spinner.View() + styleAccent.Render(" restoring...")
+	} else if m.ctx.Reloading {
+		if m.ctx.LoadingTotal > 0 {
+			statusStr = m.ctx.Spinner.View() + styleAccent.Render(
+				fmt.Sprintf(" reloading... (%d/%d)", m.ctx.LoadingDone, m.ctx.LoadingTotal),
+			)
+		} else {
+			statusStr = m.ctx.Spinner.View() + styleAccent.Render(" reloading...")
+		}
 	} else if m.ctx.StatusLine != "" {
 		s := styleGreen
 		if m.ctx.StatusIsErr {

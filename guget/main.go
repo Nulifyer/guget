@@ -199,84 +199,12 @@ func main() {
 	}
 	logInfo("Starting guget with project directory: %s", fullProjectPath)
 
-	// find + parse projects
-	projectFiles, err := FindProjectFiles(fullProjectPath)
+	snapshot, err := loadWorkspace(fullProjectPath)
 	if err != nil {
-		logFatal("Error finding projects: %v", err)
-	}
-	logInfo("Found %d project(s)", len(projectFiles))
-
-	var parsedProjects []*ParsedProject
-	for _, file := range projectFiles {
-		project, err := ParseCsproj(file)
-		if err != nil {
-			logFatal("Error parsing project %s: %v", file, err)
-		}
-		parsedProjects = append(parsedProjects, project)
+		logFatal("Error loading workspace: %v", err)
 	}
 
-	if len(parsedProjects) == 0 {
-		logWarn("No .csproj, .fsproj, or .vbproj files found in: %s", fullProjectPath)
-		os.Exit(1)
-	}
-
-	// Collect unique .props files referenced by any project.
-	propsSet := make(map[string]bool)
-	for _, p := range parsedProjects {
-		for _, source := range p.PackageSources {
-			if strings.HasSuffix(strings.ToLower(source), ".props") {
-				absSource, err := filepath.Abs(source)
-				if err == nil {
-					propsSet[absSource] = true
-				}
-			}
-		}
-	}
-	var propsProjects []*ParsedProject
-	for propsPath := range propsSet {
-		pp, err := ParsePropsAsProject(propsPath)
-		if err != nil {
-			logWarn("Failed to parse props file %s as project: %v", propsPath, err)
-			continue
-		}
-		if pp.Packages.Len() > 0 {
-			propsProjects = append(propsProjects, pp)
-		}
-	}
-	logInfo("Found %d .props file(s) with packages", len(propsProjects))
-
-	// detect nuget sources
-	detected := DetectSources(fullProjectPath)
-	sources := detected.Sources
-	sourceMapping := detected.Mapping
-	logInfo("Detected %d NuGet source(s)", len(sources))
-	if sourceMapping.IsConfigured() {
-		logInfo("Package source mapping configured with %d source(s)", len(sourceMapping.Entries))
-	}
-
-	var nugetServices []*NugetService
-	for _, src := range sources {
-		svc, err := NewNugetService(src)
-		if err != nil {
-			logWarn("Failed to initialise NuGet source [%s]: %v", src.Name, err)
-			continue
-		}
-		nugetServices = append(nugetServices, svc)
-	}
-	if len(nugetServices) == 0 {
-		logFatal("No reachable NuGet sources found")
-	}
-	DeduplicateADOUpstreams(nugetServices)
-
-	// Count distinct packages so the TUI can track loading progress.
-	distinctPackages := NewSet[string]()
-	for _, project := range parsedProjects {
-		for pkg := range project.Packages {
-			distinctPackages.Add(pkg.Name)
-		}
-	}
-
-	m := NewApp(parsedProjects, propsProjects, nugetServices, sources, sourceMapping, buf.Lines(), distinctPackages.Len(), builtFlags)
+	m := NewApp(fullProjectPath, snapshot, buf.Lines(), builtFlags)
 
 	p := tea.NewProgram(m)
 
@@ -284,67 +212,10 @@ func main() {
 	buf.mu.Lock()
 	buf.send = p.Send
 	buf.mu.Unlock()
-
-	// Fetch package metadata in parallel; send a packageReadyMsg to the TUI
-	// as each one resolves so the loading screen shows live progress.
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				p.Kill()
-				panic(r)
-			}
-		}()
-		// Always have a nuget.org service available for supplementary lookups,
-		// even if the user's nuget.config doesn't include nuget.org as a source.
-		var nugetOrgSvc *NugetService
-		for _, svc := range nugetServices {
-			if strings.EqualFold(svc.SourceName(), "nuget.org") {
-				nugetOrgSvc = svc
-				break
-			}
-		}
-		if nugetOrgSvc == nil {
-			svc, err := NewNugetService(NugetSource{Name: "nuget.org", URL: defaultNugetSource})
-			if err == nil {
-				nugetOrgSvc = svc
-			}
-		}
-
-		var wg sync.WaitGroup
-		for name := range distinctPackages {
-			wg.Add(1)
-			go func(name string) {
-				defer wg.Done()
-				var info *PackageInfo
-				var sourceName string
-				var lastErr error
-				eligibleServices := FilterServices(nugetServices, sourceMapping, name)
-				for _, svc := range eligibleServices {
-					info, lastErr = svc.SearchExact(name)
-					if lastErr == nil {
-						sourceName = svc.SourceName()
-						break
-					}
-					logDebug("Source [%s] failed for %s: %v", svc.SourceName(), name, lastErr)
-				}
-
-				// Enrich from nuget.org when the winning source is a private feed.
-				// Merges vulnerabilities, downloads, verification, and ProjectURL.
-				if info != nil && !strings.EqualFold(sourceName, "nuget.org") && nugetOrgSvc != nil {
-					if nugetInfo, err := nugetOrgSvc.SearchExact(name); err == nil {
-						info.NugetOrgURL = "https://www.nuget.org/packages/" + nugetInfo.ID
-						enrichFromNugetOrg(info, nugetInfo)
-					}
-				}
-
-				p.Send(packageReadyMsg{
-					name:   name,
-					result: nugetResult{pkg: info, source: sourceName, err: lastErr},
-				})
-			}(name)
-		}
-		wg.Wait()
-	}()
+	m.SetSender(p.Send)
+	m.startInitialLoad()
+	stopWatcher := watchWorkspaceFiles(fullProjectPath, p.Send)
+	defer stopWatcher()
 
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "TUI error: %v\n", err)

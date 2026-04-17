@@ -6,26 +6,26 @@ import (
 	"strings"
 )
 
+var ignoredProjectDirs = map[string]struct{}{
+	"node_modules": {}, "bower_components": {}, "dist": {}, "build": {}, ".next": {},
+	"bin": {}, "obj": {}, "packages": {}, ".nuget": {},
+	".git": {}, ".hg": {}, ".svn": {}, ".gitlab": {}, ".github": {},
+	".vs": {}, ".idea": {}, ".vscode": {},
+	".venv": {}, "venv": {}, "env": {},
+	".gradle": {}, "target": {},
+	".cache": {}, "tmp": {}, "temp": {}, "vendor": {}, "coverage": {},
+	"wwwroot": {}, "public": {}, "www": {},
+	"out": {},
+}
+
+func shouldSkipProjectDir(name string) bool {
+	_, ok := ignoredProjectDirs[strings.ToLower(name)]
+	return ok
+}
+
 // FindProjectFiles walks rootDir and returns all .csproj, .fsproj, and .vbproj paths,
 // skipping common build-output and metadata directories.
 func FindProjectFiles(rootDir string) ([]string, error) {
-	ignoreDirs := []string{
-		"node_modules", "bower_components", "dist", "build", ".next",
-		"bin", "obj", "packages", ".nuget",
-		".git", ".hg", ".svn", ".gitlab", ".github",
-		".vs", ".idea", ".vscode",
-		".venv", "venv", "env",
-		".gradle", "target",
-		".cache", "tmp", "temp", "vendor", "coverage",
-		"wwwroot", "public", "www",
-		"out",
-	}
-
-	ignore := make(map[string]struct{}, len(ignoreDirs))
-	for _, d := range ignoreDirs {
-		ignore[strings.ToLower(d)] = struct{}{}
-	}
-
 	var projects []string
 	err := filepath.WalkDir(rootDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -33,7 +33,7 @@ func FindProjectFiles(rootDir string) ([]string, error) {
 		}
 
 		if d.IsDir() {
-			if _, ok := ignore[strings.ToLower(d.Name())]; ok {
+			if shouldSkipProjectDir(d.Name()) {
 				return filepath.SkipDir
 			}
 			return nil

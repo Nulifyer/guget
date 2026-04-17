@@ -29,6 +29,9 @@ func (m *App) layoutWidth() int {
 type App struct {
 	ctx *AppContext
 
+	projectDir string
+	send       func(bubble_tea.Msg)
+
 	focus focusPanel
 
 	projects projectPanel
@@ -46,6 +49,12 @@ type App struct {
 	releaseNotes  releaseNotesOverlay
 	sources       sourcesOverlay
 	help          helpOverlay
+
+	workspaceGeneration int
+	sourceSignature     string
+	activeReload        reloadRequestedMsg
+	pendingReload       reloadRequestedMsg
+	hasPendingReload    bool
 
 	resizeDebounceID int
 }
@@ -69,20 +78,12 @@ func (m *App) anyOverlayActive() bool {
 	return false
 }
 
-func NewApp(parsedProjects []*ParsedProject, propsProjects []*ParsedProject, nugetServices []*NugetService, sources []NugetSource, sourceMapping *PackageSourceMapping, initialLogLines []string, loadingTotal int, flags BuiltFlags) *App {
+func NewApp(projectDir string, snapshot *workspaceSnapshot, initialLogLines []string, flags BuiltFlags) *App {
 	sp := bubbles_spinner.New()
 	sp.Spinner = bubbles_spinner.Dot
 	sp.Style = styleAccent
 
-	projItems := []projectItem{
-		{name: "All Projects", project: nil},
-	}
-	for _, p := range parsedProjects {
-		projItems = append(projItems, projectItem{name: p.FileName, project: p})
-	}
-	for _, p := range propsProjects {
-		projItems = append(projItems, projectItem{name: p.FileName, project: p})
-	}
+	projItems := buildProjectItems(snapshot.ParsedProjects, snapshot.PropsProjects)
 
 	dv := bubbles_viewport.New(bubbles_viewport.WithWidth(40), bubbles_viewport.WithHeight(20))
 	lv := bubbles_viewport.New(bubbles_viewport.WithWidth(80), bubbles_viewport.WithHeight(logPanelLines))
@@ -95,20 +96,21 @@ func NewApp(parsedProjects []*ParsedProject, propsProjects []*ParsedProject, nug
 	sortMode, sortDir := parseSortFlag(flags.SortBy)
 
 	ctx := &AppContext{
-		ParsedProjects: parsedProjects,
-		PropsProjects:  propsProjects,
-		NugetServices:  nugetServices,
-		Sources:        sources,
-		SourceMapping:  sourceMapping,
-		Loading:        loadingTotal > 0,
-		LoadingTotal:   loadingTotal,
-		Spinner:        sp,
-		Results:        make(map[string]nugetResult, loadingTotal),
-		LogLines:       initialLogLines,
+		ParsedProjects:  snapshot.ParsedProjects,
+		PropsProjects:   snapshot.PropsProjects,
+		NugetServices:   snapshot.NugetServices,
+		Sources:         snapshot.Sources,
+		SourceMapping:   snapshot.SourceMapping,
+		PendingPackages: NewSet[string](),
+		Spinner:         sp,
+		Results:         make(map[string]nugetResult),
+		LogLines:        initialLogLines,
 	}
 
 	m := &App{
-		ctx: ctx,
+		ctx:             ctx,
+		projectDir:      projectDir,
+		sourceSignature: workspaceSourceSignature(snapshot.Sources, snapshot.SourceMapping),
 		projects: projectPanel{
 			sectionBase: sectionBase{baseWidth: 30, minWidth: 10},
 			items:       projItems,
@@ -181,13 +183,32 @@ func (m *App) Update(msg bubble_tea.Msg) (bubble_tea.Model, bubble_tea.Cmd) {
 		cmds = append(cmds, cmd)
 
 	case packageReadyMsg:
+		if msg.generation != m.workspaceGeneration {
+			break
+		}
 		m.ctx.Results[msg.name] = msg.result
-		m.ctx.LoadingDone++
-		if m.ctx.LoadingDone >= m.ctx.LoadingTotal {
-			m.ctx.Loading = false
-			m.refreshDetail()
+		if m.ctx.PendingPackages != nil {
+			m.ctx.PendingPackages.Remove(msg.name)
+		}
+		if m.ctx.LoadingTotal > 0 {
+			m.ctx.LoadingDone++
+			if m.ctx.LoadingDone >= m.ctx.LoadingTotal {
+				m.ctx.Loading = false
+				if m.ctx.Reloading {
+					m.finishReloadSuccess()
+				} else {
+					m.maybeStartQueuedReload()
+				}
+			}
 		}
 		m.rebuildPackageRows()
+		m.refreshDetail()
+
+	case reloadRequestedMsg:
+		m.requestReload(msg)
+
+	case workspaceReloadedMsg:
+		m.handleWorkspaceReloaded(msg)
 
 	case writeResultMsg:
 		if msg.err != nil {
@@ -491,6 +512,9 @@ func (m *App) handleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 		if !m.ctx.Restoring {
 			return m.restore(scopeAll)
 		}
+
+	case "ctrl+r":
+		m.requestReload(reloadRequestedMsg{reason: "manual reload"})
 
 	case "n":
 		if m.focus == focusPackages || m.focus == focusDetail {

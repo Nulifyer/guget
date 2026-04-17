@@ -54,6 +54,9 @@ func (m *App) renderDetail(row packageRow) string {
 	if row.err != nil {
 		return styleRed.Render("Error: " + row.err.Error())
 	}
+	if row.loading {
+		return m.ctx.Spinner.View() + " " + styleAccent.Render("Loading package data...")
+	}
 	if row.info == nil {
 		return "No data"
 	}

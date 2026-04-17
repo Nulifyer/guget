@@ -179,6 +179,7 @@ guget -o available:desc
 
 | Key | Action |
 |-----|--------|
+| `Ctrl+R` | Reload projects from disk |
 | `r` | Run `dotnet restore` (selected project) |
 | `R` | Run `dotnet restore` (all projects) |
 | `T` | Show full transitive dependency tree |
@@ -221,6 +222,7 @@ guget -o available:desc
 |------|---------|
 | `▲` | Installed version has known **CVE vulnerabilities** |
 | `✗` | Error fetching version info |
+| `.` | Package metadata is still loading |
 | `↑` | Newer **compatible** version available |
 | `⬆` | Newer **stable** version available (beyond compatible) |
 | `~` | Package is **deprecated** in the registry |
@@ -232,8 +234,10 @@ guget -o available:desc
 
 1. On startup, `guget` walks the target directory and parses every `.csproj` / `.fsproj` / `.vbproj` it finds (skipping `bin`, `obj`, `node_modules`, `.git`, etc.).
 2. A background goroutine queries your configured NuGet sources for the latest version data for each package.
-3. The UI updates as results arrive — no waiting for a full scan before you can start navigating.
-4. When you update a package, `guget` rewrites the relevant project file(s) in place.
+3. A background watcher polls project files, `.props`, and `nuget.config`, then reloads the workspace when those files change on disk.
+4. You can force the same rescan manually at any time with `g`.
+5. The UI updates as results arrive — no waiting for a full scan before you can start navigating.
+6. When you update a package, `guget` rewrites the relevant project file(s) in place.
 
 
 
