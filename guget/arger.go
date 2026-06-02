@@ -68,9 +68,13 @@ func (f Flag[T]) GetExpectedValues() []any {
 func (f Flag[T]) parse(value string) (IParsedFlag, error) {
 	var v T
 	if f.Parser == nil {
-		_, err := fmt.Sscan(value, &v)
-		if err != nil {
-			flagError(f, "could not parse value %s: %v", value, err)
+		if stringValue, ok := any(&v).(*string); ok {
+			*stringValue = value
+		} else {
+			_, err := fmt.Sscan(value, &v)
+			if err != nil {
+				flagError(f, "could not parse value %s: %v", value, err)
+			}
 		}
 	} else {
 		var err error
@@ -222,14 +226,11 @@ func ParseFlags() (map[string]IParsedFlag, []string) {
 		positionalValues []string
 		lastFlag         IFlag
 		extraArgs        []string
-		lastPos          = 0
 	)
 
 	for pos, arg := range args {
 		if arg == "--" {
-			if lastPos+2 <= len(args) {
-				extraArgs = append(extraArgs, args[lastPos+2:]...)
-			}
+			extraArgs = append(extraArgs, args[pos+1:]...)
 			break
 		} else if arg == "--help" || arg == "-h" {
 			PrintUsage()
@@ -261,7 +262,6 @@ func ParseFlags() (map[string]IParsedFlag, []string) {
 		} else {
 			positionalValues = append(positionalValues, arg)
 		}
-		lastPos = pos
 	}
 
 	if lastFlag != nil {

@@ -79,17 +79,7 @@ func BuildFlags(flags map[string]IParsedFlag) BuiltFlags {
 	}
 }
 
-// initCLI registers CLI flags, parses os.Args, and returns the resolved flag values.
-// Named initCLI (not Init) to avoid confusion with App.Init() in the same package.
-func initCLI() BuiltFlags {
-	rebuildStyles()
-	logSetLevel(LogLevelWarn)
-	// Allow LOG_LEVEL env var to override the pre-parse default; --verbose will
-	// override it again after flags are parsed below.
-	if envLogLevel := os.Getenv("LOG_LEVEL"); envLogLevel != "" {
-		logSetLevel(logParseLevel(envLogLevel))
-	}
-
+func registerCLIFlags() {
 	RegisterFlag(Flag[bool]{
 		Name:        Flag_Version,
 		Aliases:     []string{"-V", "--version"},
@@ -154,7 +144,20 @@ func initCLI() BuiltFlags {
 			}
 		},
 	})
+}
 
+// initCLI registers CLI flags, parses os.Args, and returns the resolved flag values.
+// Named initCLI (not Init) to avoid confusion with App.Init() in the same package.
+func initCLI() BuiltFlags {
+	rebuildStyles()
+	logSetLevel(LogLevelWarn)
+	// Allow LOG_LEVEL env var to override the pre-parse default; --verbose will
+	// override it again after flags are parsed below.
+	if envLogLevel := os.Getenv("LOG_LEVEL"); envLogLevel != "" {
+		logSetLevel(logParseLevel(envLogLevel))
+	}
+
+	registerCLIFlags()
 	parsedFlags, _ := ParseFlags()
 	builtFlags := BuildFlags(parsedFlags)
 
