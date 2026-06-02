@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-
 )
 
 const defaultNugetSource = "https://api.nuget.org/v3/index.json"
@@ -14,7 +13,7 @@ const defaultNugetSource = "https://api.nuget.org/v3/index.json"
 type nugetConfig struct {
 	XMLName              xml.Name                 `xml:"configuration"`
 	PackageSources       []packageSource          `xml:"packageSources>add"`
-	PackageSourcesClear  []struct{}               `xml:"packageSources>clear"`       // <clear /> stops inheritance
+	PackageSourcesClear  []struct{}               `xml:"packageSources>clear"` // <clear /> stops inheritance
 	DisabledSources      []packageSource          `xml:"disabledPackageSources>add"`
 	DisabledSourcesClear []struct{}               `xml:"disabledPackageSources>clear"`
 	SourceMapping        *packageSourceMappingXML `xml:"packageSourceMapping"`
@@ -42,7 +41,7 @@ type DetectedConfig struct {
 // for a single config file's <packageSourceMapping> section.
 type parsedMappingResult struct {
 	entries map[string][]string // source key → lowercase patterns
-	cleared bool               // <clear/> inside <packageSourceMapping>
+	cleared bool                // <clear/> inside <packageSourceMapping>
 }
 
 // DetectSources walks from projectDir up to root collecting NuGet sources and

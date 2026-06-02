@@ -6,9 +6,9 @@ import (
 
 func TestParseSemVer_Standard(t *testing.T) {
 	tests := []struct {
-		input              string
+		input               string
 		major, minor, patch int
-		pre                string
+		pre                 string
 	}{
 		// basic 3-part
 		{"1.2.3", 1, 2, 3, ""},
@@ -123,7 +123,7 @@ func TestIsPreRelease(t *testing.T) {
 		{"1.0.0-beta.1", true},
 		{"1.0.0-rc.1", true},
 		{"1.0.0-preview.3", true},
-		{"1.0.0+build", false}, // build metadata is NOT pre-release per SemVer 2.0.0
+		{"1.0.0+build", false},      // build metadata is NOT pre-release per SemVer 2.0.0
 		{"1.0.0-alpha+build", true}, // pre-release with build metadata is still pre-release
 	}
 	for _, tt := range tests {
@@ -269,9 +269,9 @@ func TestIsNewerThan_FourPartVersions(t *testing.T) {
 
 func TestParseSemVer_NuGetRealWorld(t *testing.T) {
 	tests := []struct {
-		input              string
+		input               string
 		major, minor, patch int
-		pre                string
+		pre                 string
 	}{
 		// Common NuGet packages
 		{"8.0.0", 8, 0, 0, ""},

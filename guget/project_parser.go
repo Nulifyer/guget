@@ -140,10 +140,10 @@ func isExactLock(s string) bool {
 type AddTargetKind int
 
 const (
-	AddTargetProject      AddTargetKind = iota // .csproj/.fsproj
-	AddTargetBuildProps                        // Directory.Build.props
-	AddTargetCPM                               // Directory.Packages.props (CPM)
-	AddTargetImportedProps                     // Explicitly imported .props
+	AddTargetProject       AddTargetKind = iota // .csproj/.fsproj
+	AddTargetBuildProps                         // Directory.Build.props
+	AddTargetCPM                                // Directory.Packages.props (CPM)
+	AddTargetImportedProps                      // Explicitly imported .props
 )
 
 type AddTarget struct {
@@ -569,6 +569,7 @@ func ParsePropsAsProject(filePath string) (*ParsedProject, error) {
 }
 
 var versionAttrRe = regexp.MustCompile(`(Version\s*=\s*")[^"]*(")`)
+
 // RemovePackageReference removes a <PackageReference> line for pkgName from a
 // .csproj/.fsproj file without altering any other formatting.
 func RemovePackageReference(filePath, pkgName string) error {
@@ -596,7 +597,6 @@ func RemovePackageReference(filePath, pkgName string) error {
 
 	return writeFileRetry(filePath, []byte(strings.Join(out, "\n")), 0644)
 }
-
 
 // UpdatePackageVersion rewrites the Version attribute for a specific
 // PackageReference in a .csproj/.fsproj file without altering any other
