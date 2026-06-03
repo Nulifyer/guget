@@ -14,7 +14,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -37,7 +37,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -55,7 +55,7 @@ jobs:
 
       - name: Set up Node
         if: steps.changes.outputs.changed == 'true'
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 20
 
@@ -66,11 +66,24 @@ jobs:
           cd vscode-guget
           npm pkg set version="$VERSION"
 
-      - name: Install and build
+      - name: Install dependencies
         if: steps.changes.outputs.changed == 'true'
         run: |
           cd vscode-guget
           npm ci
+
+      - name: Verify Marketplace PAT
+        if: steps.changes.outputs.changed == 'true'
+        run: |
+          cd vscode-guget
+          npx @vscode/vsce verify-pat nulifyer -p "$VSCE_PAT"
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+
+      - name: Build extension
+        if: steps.changes.outputs.changed == 'true'
+        run: |
+          cd vscode-guget
           npm run build
 
       - name: Publish to Marketplace
