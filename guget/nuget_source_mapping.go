@@ -1,6 +1,9 @@
 package main
 
-import "strings"
+import (
+	"sort"
+	"strings"
+)
 
 type packageSourceMappingXML struct {
 	Sources []mappedSourceXML `xml:"packageSource"`
@@ -28,16 +31,43 @@ func (m *PackageSourceMapping) SourcesForPackage(packageID string) []string {
 	if !m.IsConfigured() {
 		return nil
 	}
+	bestSpecificity := -1
 	var matched []string
 	for sourceKey, patterns := range m.Entries {
+		sourceSpecificity := -1
 		for _, p := range patterns {
-			if matchPattern(packageID, p) {
-				matched = append(matched, sourceKey)
-				break
+			if specificity := patternSpecificity(packageID, p); specificity > sourceSpecificity {
+				sourceSpecificity = specificity
 			}
 		}
+		switch {
+		case sourceSpecificity < 0:
+		case sourceSpecificity > bestSpecificity:
+			bestSpecificity = sourceSpecificity
+			matched = []string{sourceKey}
+		case sourceSpecificity == bestSpecificity:
+			matched = append(matched, sourceKey)
+		}
 	}
+	sort.Strings(matched)
 	return matched
+}
+
+// patternSpecificity applies NuGet's strongest-pattern rule. Exact package IDs
+// outrank prefixes, longer prefixes outrank shorter prefixes, and "*" is the
+// least specific match. A negative result means no match.
+func patternSpecificity(packageID, pattern string) int {
+	if !matchPattern(packageID, pattern) {
+		return -1
+	}
+	pattern = strings.ToLower(pattern)
+	if pattern == "*" {
+		return 0
+	}
+	if strings.HasSuffix(pattern, ".*") {
+		return len(pattern) - 1
+	}
+	return 1_000_000 + len(pattern)
 }
 
 // matchPattern: "*" matches all, "Prefix.*" matches prefix, otherwise exact. Case-insensitive.
@@ -55,16 +85,17 @@ func matchPattern(packageID, pattern string) bool {
 	return id == pat
 }
 
-// FilterServices returns services allowed for packageID by the mapping.
-// Falls back to all services if mapping is unconfigured or filtering yields nothing.
+// FilterServices returns services allowed for packageID by the mapping. When a
+// mapping is configured, no match or an unavailable mapped source is an empty
+// result: silently broadening to other feeds would violate the trust boundary.
 func FilterServices(services []*NugetService, mapping *PackageSourceMapping, packageID string) []*NugetService {
 	if !mapping.IsConfigured() {
 		return services
 	}
 	allowed := mapping.SourcesForPackage(packageID)
 	if len(allowed) == 0 {
-		logDebug("Package %q matches no source mapping patterns; trying all sources", packageID)
-		return services
+		logWarn("Package %q matches no package source mapping pattern", packageID)
+		return nil
 	}
 	allowedSet := NewSet[string]()
 	for _, k := range allowed {
@@ -77,8 +108,7 @@ func FilterServices(services []*NugetService, mapping *PackageSourceMapping, pac
 		}
 	}
 	if len(filtered) == 0 {
-		logDebug("Package %q mapped to sources %v but none are available; trying all sources", packageID, allowed)
-		return services
+		logWarn("Package %q maps to sources %v but none are available", packageID, allowed)
 	}
 	return filtered
 }

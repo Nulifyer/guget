@@ -7,6 +7,7 @@ import (
 
 	bubble_tea "charm.land/bubbletea/v2"
 	lipgloss "charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
 func timeAgo(t time.Time) string {
@@ -152,43 +153,14 @@ func padRight(s string, width int) string {
 }
 
 func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
 	if n <= 3 {
-		return s[:n]
+		return ansi.Truncate(s, n, "")
 	}
-	return s[:n-3] + "..."
+	return ansi.Truncate(s, n, "...")
 }
 
 func truncateStyled(s string, n int) string {
-	if lipgloss.Width(s) <= n {
-		return s
-	}
-	var visible int
-	var result strings.Builder
-	inEsc := false
-	for _, r := range s {
-		if r == '\x1b' {
-			inEsc = true
-			result.WriteRune(r)
-			continue
-		}
-		if inEsc {
-			result.WriteRune(r)
-			if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') {
-				inEsc = false
-			}
-			continue
-		}
-		if visible >= n {
-			break
-		}
-		result.WriteRune(r)
-		visible++
-	}
-	result.WriteString("\x1b[0m")
-	return result.String()
+	return ansi.Truncate(s, n, "")
 }
 
 // hyperlinkEnabled controls whether OSC 8 escape codes are emitted.

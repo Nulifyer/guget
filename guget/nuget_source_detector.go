@@ -66,6 +66,9 @@ func DetectSources(projectDir string) DetectedConfig {
 	// (Windows) don't parse the same file twice.
 	seenConfigs := NewSet[string]()
 	addConfig := func(path string) bool {
+		if info, err := os.Stat(path); err != nil || info.IsDir() {
+			return false
+		}
 		resolved, err := filepath.Abs(path)
 		if err == nil {
 			resolved = strings.ToLower(resolved)
@@ -175,19 +178,26 @@ func sourcesFromNugetConfig(path string) ([]NugetSource, bool, *parsedMappingRes
 			logTrace("sourcesFromNugetConfig: [%s] skipped (disabled)", ps.Key)
 			continue
 		}
-		// Only include http/https sources (skip local folder paths)
+		// Keep local/UNC sources visible for restore provenance even though the
+		// metadata browser currently supports only HTTP(S) V3 service indexes.
 		if strings.HasPrefix(ps.Value, "http://") || strings.HasPrefix(ps.Value, "https://") {
 			s := NugetSource{Name: ps.Key, URL: ps.Value}
 			if c, ok := creds[normalizeCredentialKey(ps.Key)]; ok {
 				s.Username = c.Username
 				s.Password = c.Password
+				logRegisterSecret(c.Password)
 				logTrace("sourcesFromNugetConfig: [%s] credentials matched (username=%q, password=%d chars)", ps.Key, c.Username, len(c.Password))
 			} else {
 				logTrace("sourcesFromNugetConfig: [%s] no credentials found (lookup key=%q)", ps.Key, normalizeCredentialKey(ps.Key))
 			}
 			sources = append(sources, s)
-		} else {
-			logTrace("sourcesFromNugetConfig: [%s] skipped (not http/https: %q)", ps.Key, ps.Value)
+		} else if strings.TrimSpace(ps.Value) != "" {
+			value := os.ExpandEnv(ps.Value)
+			if !filepath.IsAbs(value) && !strings.HasPrefix(value, `\\`) {
+				value = filepath.Join(filepath.Dir(path), value)
+			}
+			sources = append(sources, NugetSource{Name: ps.Key, URL: filepath.Clean(value)})
+			logTrace("sourcesFromNugetConfig: [%s] included as restore-only source", ps.Key)
 		}
 	}
 
@@ -244,11 +254,12 @@ func sourcesFromBuildProps(path string) []NugetSource {
 		}
 		for _, raw := range strings.Split(pg.RestoreSources, ";") {
 			raw = strings.TrimSpace(raw)
-			if strings.HasPrefix(raw, "http://") || strings.HasPrefix(raw, "https://") {
-				sources = append(sources, NugetSource{
-					Name: raw,
-					URL:  raw,
-				})
+			if raw != "" {
+				value := raw
+				if !strings.HasPrefix(value, "http://") && !strings.HasPrefix(value, "https://") && !filepath.IsAbs(value) {
+					value = filepath.Join(filepath.Dir(path), value)
+				}
+				sources = append(sources, NugetSource{Name: raw, URL: filepath.Clean(value)})
 			}
 		}
 	}

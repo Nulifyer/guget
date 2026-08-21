@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"fmt"
+	"io/fs"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -17,9 +19,44 @@ type workspaceSnapshot struct {
 	Sources        []NugetSource
 	SourceMapping  *PackageSourceMapping
 	NugetServices  []*NugetService
+	Unsupported    []unsupportedPackageArtifact
+}
+
+type unsupportedPackageArtifact struct {
+	Path   string
+	Reason string
 }
 
 func loadWorkspace(projectDir string) (*workspaceSnapshot, error) {
+	return loadWorkspaceContext(context.Background(), projectDir)
+}
+
+func loadWorkspaceContext(ctx context.Context, projectDir string) (*workspaceSnapshot, error) {
+	snapshot, err := scanWorkspace(projectDir)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, src := range snapshot.Sources {
+		svc, err := NewNugetServiceContext(ctx, src)
+		if err != nil {
+			logWarn("Failed to initialise NuGet source [%s]: %v", src.Name, err)
+			continue
+		}
+		snapshot.NugetServices = append(snapshot.NugetServices, svc)
+	}
+	if len(snapshot.NugetServices) == 0 {
+		return nil, fmt.Errorf("no reachable NuGet sources found")
+	}
+	DeduplicateADOUpstreams(snapshot.NugetServices)
+
+	return snapshot, nil
+}
+
+// scanWorkspace reads project and NuGet configuration without contacting any
+// package source. Headless inspection commands use this path so listing local
+// package declarations never depends on network availability.
+func scanWorkspace(projectDir string) (*workspaceSnapshot, error) {
 	fullProjectPath, err := filepath.Abs(projectDir)
 	if err != nil {
 		return nil, fmt.Errorf("getting absolute project directory: %w", err)
@@ -49,6 +86,10 @@ func loadWorkspace(projectDir string) (*workspaceSnapshot, error) {
 
 	propsProjects := collectPropsProjects(parsedProjects)
 	logInfo("Found %d .props file(s) with packages", len(propsProjects))
+	unsupported := findUnsupportedPackageArtifacts(fullProjectPath)
+	for _, artifact := range unsupported {
+		logWarn("Read-only package artifact %s: %s", artifact.Path, artifact.Reason)
+	}
 
 	detected := DetectSources(fullProjectPath)
 	sources := detected.Sources
@@ -58,28 +99,38 @@ func loadWorkspace(projectDir string) (*workspaceSnapshot, error) {
 		logInfo("Package source mapping configured with %d source(s)", len(sourceMapping.Entries))
 	}
 
-	var nugetServices []*NugetService
-	for _, src := range sources {
-		svc, err := NewNugetService(src)
-		if err != nil {
-			logWarn("Failed to initialise NuGet source [%s]: %v", src.Name, err)
-			continue
-		}
-		nugetServices = append(nugetServices, svc)
-	}
-	if len(nugetServices) == 0 {
-		return nil, fmt.Errorf("no reachable NuGet sources found")
-	}
-	DeduplicateADOUpstreams(nugetServices)
-
 	return &workspaceSnapshot{
 		ProjectDir:     fullProjectPath,
 		ParsedProjects: parsedProjects,
 		PropsProjects:  propsProjects,
 		Sources:        sources,
 		SourceMapping:  sourceMapping,
-		NugetServices:  nugetServices,
+		Unsupported:    unsupported,
 	}, nil
+}
+
+func findUnsupportedPackageArtifacts(root string) []unsupportedPackageArtifact {
+	var artifacts []unsupportedPackageArtifact
+	_ = filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if entry.IsDir() {
+			if path != root && shouldSkipProjectDir(entry.Name()) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		switch {
+		case strings.EqualFold(entry.Name(), "packages.config"):
+			artifacts = append(artifacts, unsupportedPackageArtifact{Path: path, Reason: "packages.config mutation is not supported"})
+		case strings.EqualFold(entry.Name(), "dotnet-tools.json") && strings.EqualFold(filepath.Base(filepath.Dir(path)), ".config"):
+			artifacts = append(artifacts, unsupportedPackageArtifact{Path: path, Reason: ".NET tool manifests are outside project package management"})
+		}
+		return nil
+	})
+	sort.Slice(artifacts, func(i, j int) bool { return artifacts[i].Path < artifacts[j].Path })
+	return artifacts
 }
 
 func collectPropsProjects(parsedProjects []*ParsedProject) []*ParsedProject {
@@ -196,46 +247,61 @@ func fetchPackageMetadataAsync(send func(tea.Msg), generation int, nugetServices
 				break
 			}
 		}
-		if nugetOrgSvc == nil {
-			svc, err := NewNugetService(NugetSource{Name: "nuget.org", URL: defaultNugetSource})
-			if err == nil {
-				nugetOrgSvc = svc
-			}
+		workerCount := 8
+		if len(packageNames) < workerCount {
+			workerCount = len(packageNames)
 		}
-
+		jobs := make(chan string)
 		var wg sync.WaitGroup
-		for _, name := range packageNames {
+		for range workerCount {
 			wg.Add(1)
-			go func(name string) {
+			go func() {
 				defer wg.Done()
-
-				var info *PackageInfo
-				var sourceName string
-				var lastErr error
-				eligibleServices := FilterServices(nugetServices, sourceMapping, name)
-				for _, svc := range eligibleServices {
-					info, lastErr = svc.SearchExact(name)
-					if lastErr == nil {
-						sourceName = svc.SourceName()
-						break
+				for name := range jobs {
+					var info *PackageInfo
+					var sourceName string
+					var lastErr error
+					eligibleServices := FilterServices(nugetServices, sourceMapping, name)
+					if len(eligibleServices) == 0 {
+						lastErr = fmt.Errorf("package source mapping allows no available source for %q", name)
 					}
-					logDebug("Source [%s] failed for %s: %v", svc.SourceName(), name, lastErr)
-				}
-
-				if info != nil && !strings.EqualFold(sourceName, "nuget.org") && nugetOrgSvc != nil {
-					if nugetInfo, err := nugetOrgSvc.SearchExact(name); err == nil {
-						info.NugetOrgURL = "https://www.nuget.org/packages/" + nugetInfo.ID
-						enrichFromNugetOrg(info, nugetInfo)
+					for _, svc := range eligibleServices {
+						info, lastErr = svc.SearchExact(name)
+						if lastErr == nil {
+							sourceName = svc.SourceName()
+							break
+						}
+						logDebug("Source [%s] failed for %s: %v", svc.SourceName(), name, lastErr)
 					}
-				}
 
-				send(packageReadyMsg{
-					generation: generation,
-					name:       name,
-					result:     nugetResult{pkg: info, source: sourceName, err: lastErr},
-				})
-			}(name)
+					if info != nil && !strings.EqualFold(sourceName, "nuget.org") && nugetOrgSvc != nil && serviceIncluded(eligibleServices, nugetOrgSvc) {
+						if nugetInfo, err := nugetOrgSvc.SearchExact(name); err == nil {
+							info.NugetOrgURL = "https://www.nuget.org/packages/" + nugetInfo.ID
+							enrichFromNugetOrg(info, nugetInfo)
+						}
+					}
+
+					send(packageReadyMsg{
+						generation: generation,
+						name:       name,
+						result:     nugetResult{pkg: info, source: sourceName, err: lastErr},
+					})
+				}
+			}()
 		}
+		for _, name := range packageNames {
+			jobs <- name
+		}
+		close(jobs)
 		wg.Wait()
 	}()
+}
+
+func serviceIncluded(services []*NugetService, target *NugetService) bool {
+	for _, service := range services {
+		if service == target {
+			return true
+		}
+	}
+	return false
 }

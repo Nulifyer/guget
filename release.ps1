@@ -73,24 +73,29 @@ $Dirty = git status --porcelain 2>&1
 if ($Dirty) {
     Warn "Uncommitted changes in working tree:"
     $Dirty | ForEach-Object { Dim "  $_" }
-    Write-Host ""
+    Fail "Commit or stash changes before releasing"
 } else {
     Ok "Working tree is clean"
 }
 
+Write-Host "  → Running Go verification..." -ForegroundColor Cyan
+Push-Location guget
+try {
+    go mod verify
+    if ($LASTEXITCODE -ne 0) { Fail "go mod verify failed" }
+    go vet ./...
+    if ($LASTEXITCODE -ne 0) { Fail "go vet failed" }
+    go test ./...
+    if ($LASTEXITCODE -ne 0) { Fail "go test failed" }
+}
+finally {
+    Pop-Location
+}
+Ok "Go verification passed"
+
 $null = git rev-parse $Tag 2>&1
-$OverwriteTag = $false
 if ($LASTEXITCODE -eq 0) {
-    Warn "Tag $Tag already exists"
-    Write-Host "  Overwrite it? (deletes local + remote tag) [y/N] " -NoNewline -ForegroundColor Yellow
-    $Overwrite = Read-Host
-    if ($Overwrite -notmatch '^[yY]$') {
-        Write-Host ""
-        Warn "Aborted."
-        Write-Host ""
-        exit 0
-    }
-    $OverwriteTag = $true
+    Fail "Tag $Tag already exists"
 } else {
     Ok "Tag $Tag is available"
 }
@@ -163,13 +168,6 @@ if ($Confirm -notmatch '^[yY]$') {
 # ── Execute ───────────────────────────────────────────────────────────────────
 Hdr "Releasing $Tag"
 Write-Host ""
-
-if ($OverwriteTag) {
-    Write-Host "  → Deleting existing tag $Tag..." -ForegroundColor Cyan
-    git tag -d $Tag
-    git push origin --delete $Tag 2>$null
-    Ok "Old tag removed"
-}
 
 Write-Host "  → Creating tag $Tag..." -ForegroundColor Cyan
 git tag -a $Tag -m "Release $Tag"

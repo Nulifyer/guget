@@ -9,7 +9,7 @@
 [![GitHub Release](https://img.shields.io/github/v/release/nulifyer/guget?logo=github&color=brightgreen)](https://github.com/nulifyer/guget/releases)
 [![VS Code Extension](https://img.shields.io/visual-studio-marketplace/v/nulifyer.guget?label=VS%20Code&logo=visualstudiocode)](https://marketplace.visualstudio.com/items?itemName=nulifyer.guget)
 
-A terminal UI for managing NuGet packages across .NET projects.
+A terminal UI and scriptable CLI for managing NuGet packages across .NET projects.
 </div>
 
 ## Overview
@@ -44,6 +44,7 @@ A terminal UI for managing NuGet packages across .NET projects.
 | 📜 | **Log panel** | Real-time internal logs, toggleable with `l` |
 | 🔌 | **Sources panel** | View configured NuGet sources, toggleable with `s` |
 | ❓ | **Help overlay** | Full keybinding reference, press `?` |
+| ⌨️ | **Headless CLI** | Inspect, plan, edit, and restore packages from scripts without starting the TUI |
 
 
 
@@ -147,6 +148,35 @@ guget -t dracula
 guget -o available:desc
 ```
 
+### Headless commands
+
+Supplying a command runs Guget without initializing Bubble Tea. Read commands
+support `table`, `tsv`, `json`, and `jsonl`; redirected output defaults to TSV.
+Diagnostics stay on stderr, and `--output` replaces its destination atomically.
+
+```bash
+# Declared, evaluated, and restore-resolved package state
+guget list --project ./src --format json
+guget show Newtonsoft.Json --project ./src
+
+# NuGet sources, source mappings, and restore-only local feeds
+guget sources --project ./src
+
+# Preview and then apply the same transactional edit plan
+guget update Newtonsoft.Json --version 13.0.4 --file App/App.csproj --dry-run
+guget update Newtonsoft.Json --version 13.0.4 --file App/App.csproj --restore
+
+# Workspace scope is always explicit
+guget remove Old.Package --project ./src --all --dry-run
+guget restore --project ./src --all
+```
+
+Run `guget help` or `guget help update` for command usage. Mutation commands
+require repeatable `--file` targets or an explicit `--all`; `add` always requires
+at least one `--file`. A dry run performs the same ownership checks and planning
+path as an apply. See [CLI design](docs/cli-design.md) for JSON and exit-code
+contracts.
+
 
 
 ## Keybindings
@@ -235,9 +265,10 @@ guget -o available:desc
 1. On startup, `guget` walks the target directory and parses every `.csproj` / `.fsproj` / `.vbproj` it finds (skipping `bin`, `obj`, `node_modules`, `.git`, etc.).
 2. A background goroutine queries your configured NuGet sources for the latest version data for each package.
 3. A background watcher polls project files, `.props`, and `nuget.config`, then reloads the workspace when those files change on disk.
-4. You can force the same rescan manually at any time with `g`.
+4. You can force the same rescan manually at any time with `Ctrl+R`.
 5. The UI updates as results arrive — no waiting for a full scan before you can start navigating.
-6. When you update a package, `guget` rewrites the relevant project file(s) in place.
+6. Mutations are planned against file hashes, written with same-directory atomic
+   replacement, and rolled back best-effort if a multi-file operation fails.
 
 
 

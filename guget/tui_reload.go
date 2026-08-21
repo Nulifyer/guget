@@ -56,7 +56,7 @@ func (m *App) requestReload(req reloadRequestedMsg) {
 	}
 
 	go func() {
-		snapshot, err := loadWorkspace(m.projectDir)
+		snapshot, err := loadWorkspaceContext(m.lifecycle, m.projectDir)
 		m.send(workspaceReloadedMsg{
 			generation: generation,
 			snapshot:   snapshot,

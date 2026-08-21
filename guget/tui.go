@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -27,7 +28,8 @@ func (m *App) layoutWidth() int {
 }
 
 type App struct {
-	ctx *AppContext
+	ctx       *AppContext
+	lifecycle context.Context
 
 	projectDir string
 	send       func(bubble_tea.Msg)
@@ -109,6 +111,7 @@ func NewApp(projectDir string, snapshot *workspaceSnapshot, initialLogLines []st
 
 	m := &App{
 		ctx:             ctx,
+		lifecycle:       context.Background(),
 		projectDir:      projectDir,
 		sourceSignature: workspaceSourceSignature(snapshot.Sources, snapshot.SourceMapping),
 		projects: projectPanel{
@@ -221,6 +224,9 @@ func (m *App) Update(msg bubble_tea.Msg) (bubble_tea.Model, bubble_tea.Cmd) {
 				status = fmt.Sprintf("🔒 %d skipped (version locked)", msg.skipped)
 			}
 			cmds = append(cmds, m.setStatus(status, false))
+			if msg.reload {
+				m.requestReload(reloadRequestedMsg{reason: "package files changed"})
+			}
 		}
 
 	case restoreResultMsg:

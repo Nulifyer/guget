@@ -8,7 +8,7 @@ set -euo pipefail
 # ── ANSI helpers ──────────────────────────────────────────────────────────────
 BOLD='\033[1m'; DIM='\033[2m'; RESET='\033[0m'
 RED='\033[31m'; GREEN='\033[32m'; YELLOW='\033[33m'
-CYAN='\033[36m'; MAGENTA='\033[35m'; WHITE='\033[97m'
+CYAN='\033[36m'; MAGENTA='\033[35m'
 
 sep()  { echo -e "${DIM}  ────────────────────────────────────────────────────${RESET}"; }
 ok()   { echo -e "  ${GREEN}✓${RESET}  $*"; }
@@ -32,7 +32,7 @@ if [[ -z "$VERSION" ]]; then
         done <<< "$RECENT_TAGS"
         echo ""
     fi
-    printf "  Enter version ${DIM}(e.g. 1.2.3 or v1.2.3)${RESET}: "
+    printf '  Enter version %b(e.g. 1.2.3 or v1.2.3)%b: ' "$DIM" "$RESET"
     read -r VERSION
 fi
 
@@ -55,22 +55,18 @@ DIRTY=$(git status --porcelain 2>/dev/null || true)
 if [[ -n "$DIRTY" ]]; then
     warn "Uncommitted changes in working tree:"
     echo "$DIRTY" | while IFS= read -r line; do dim "  $line"; done
-    echo ""
+    fail "Commit or stash changes before releasing"
 else
     ok "Working tree is clean"
 fi
 
+echo -e "  ${CYAN}→${RESET}  Running Go verification..."
+( cd guget && go mod verify && go vet ./... && go test ./... )
+ok "Go verification passed"
+
 if git rev-parse "$TAG" >/dev/null 2>&1; then
-    warn "Tag ${BOLD}$TAG${RESET} already exists"
-    printf "  ${YELLOW}Overwrite it? (deletes local + remote tag) [y/N]${RESET} "
-    read -r OVERWRITE
-    if [[ ! "$OVERWRITE" =~ ^[yY]$ ]]; then
-        echo -e "\n  ${YELLOW}Aborted.${RESET}\n"
-        exit 0
-    fi
-    OVERWRITE_TAG=true
+    fail "Tag $TAG already exists"
 else
-    OVERWRITE_TAG=false
     ok "Tag $TAG is available"
 fi
 
@@ -88,12 +84,12 @@ fi
 
 echo ""
 sep
-git -c color.ui=always log ${RANGE:-} --no-decorate \
+git -c color.ui=always log "${RANGE:-HEAD}" --no-decorate \
     --pretty=tformat:"    %C(cyan)%h%C(reset)  %s  %C(brightblack)(%an, %ar)%C(reset)" \
     | head -20
 sep
 
-COUNT=$(git rev-list --count ${RANGE:-HEAD} 2>/dev/null || echo "?")
+COUNT=$(git rev-list --count "${RANGE:-HEAD}" 2>/dev/null || echo "?")
 if [[ -z "$RANGE" && "$COUNT" -gt 20 ]]; then COUNT="20 (of $COUNT total)"; fi
 dim "$COUNT commit(s) included in this release"
 
@@ -111,7 +107,7 @@ echo ""
 sep
 
 # ── Confirm ───────────────────────────────────────────────────────────────────
-printf "\n  ${BOLD}Proceed with release ${GREEN}$TAG${RESET}${BOLD}? [y/N]${RESET} "
+printf '\n  %bProceed with release %b%s%b%b? [y/N]%b ' "$BOLD" "$GREEN" "$TAG" "$RESET" "$BOLD" "$RESET"
 read -r CONFIRM
 if [[ ! "$CONFIRM" =~ ^[yY]$ ]]; then
     echo -e "\n  ${YELLOW}Aborted.${RESET}\n"
@@ -121,13 +117,6 @@ fi
 # ── Execute ───────────────────────────────────────────────────────────────────
 hdr "Releasing $TAG"
 echo ""
-
-if [[ "$OVERWRITE_TAG" == true ]]; then
-    echo -e "  ${CYAN}→${RESET}  Deleting existing tag ${BOLD}$TAG${RESET}..."
-    git tag -d "$TAG"
-    git push origin --delete "$TAG" 2>/dev/null || true
-    ok "Old tag removed"
-fi
 
 echo -e "  ${CYAN}→${RESET}  Creating tag ${BOLD}$TAG${RESET}..."
 git tag -a "$TAG" -m "Release $TAG"

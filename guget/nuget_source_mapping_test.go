@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -86,9 +87,9 @@ func TestSourcesForPackage(t *testing.T) {
 	}
 
 	assertSources("Newtonsoft.Json", []string{"nuget.org"})
-	assertSources("Redacted.Lib", []string{"custom_github", "nuget.org"})
-	assertSources("MyCompany.Core", []string{"internal_feed", "nuget.org"})
-	assertSources("MyCompany.Utils", []string{"internal_feed", "nuget.org"})
+	assertSources("Redacted.Lib", []string{"custom_github"})
+	assertSources("MyCompany.Core", []string{"internal_feed"})
+	assertSources("MyCompany.Utils", []string{"internal_feed"})
 }
 
 func TestSourcesForPackage_NotConfigured(t *testing.T) {
@@ -125,11 +126,11 @@ func TestSourcesForPackage_OverlappingPatterns(t *testing.T) {
 		}
 	}
 
-	assert("Microsoft.Extensions.Logging", []string{"dotnet-public", "dotnet9", "nuget.org"})
-	assert("Microsoft.CodeAnalysis", []string{"dotnet-public", "nuget.org"})
+	assert("Microsoft.Extensions.Logging", []string{"dotnet9"})
+	assert("Microsoft.CodeAnalysis", []string{"dotnet-public"})
 	assert("Newtonsoft.Json", []string{"nuget.org"})
-	assert("System.Text.Json", []string{"dotnet-public", "nuget.org"})
-	assert("microsoft.extensions.logging", []string{"dotnet-public", "dotnet9", "nuget.org"})
+	assert("System.Text.Json", []string{"dotnet-public"})
+	assert("microsoft.extensions.logging", []string{"dotnet9"})
 }
 
 func TestPackageSourceMappingXMLParsing(t *testing.T) {
@@ -233,6 +234,26 @@ func TestPackageSourceMappingXML_Empty(t *testing.T) {
 	}
 }
 
+func TestSourcesFromNugetConfigIncludesRelativeLocalSourceAsRestoreOnly(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "NuGet.Config")
+	data := []byte(`<configuration><packageSources><clear/><add key="local" value="./packages"/></packageSources></configuration>`)
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sources, cleared, _ := sourcesFromNugetConfig(path)
+	if !cleared || len(sources) != 1 {
+		t.Fatalf("cleared = %v, sources = %#v", cleared, sources)
+	}
+	want := filepath.Join(dir, "packages")
+	if sources[0].URL != want {
+		t.Fatalf("URL = %q, want %q", sources[0].URL, want)
+	}
+	if _, err := NewNugetService(sources[0]); err == nil || !strings.Contains(err.Error(), "restore-only") {
+		t.Fatalf("expected restore-only error, got %v", err)
+	}
+}
+
 func TestDetectSources_WithMapping(t *testing.T) {
 	td := testDataDir(t)
 	detected := DetectSources(td)
@@ -295,10 +316,20 @@ func TestDetectSources_MappingFiltersByPattern(t *testing.T) {
 	}
 
 	assertMappedSources("Serilog", []string{"nuget.org"})
-	assertMappedSources("Microsoft.Extensions.Logging", []string{"dotnet-public", "dotnet9", "nuget.org"})
-	assertMappedSources("System.Text.Json", []string{"dotnet-public", "nuget.org"})
-	assertMappedSources("Microsoft.CodeAnalysis", []string{"dotnet-public", "nuget.org"})
-	assertMappedSources("Guget.TestPackage", []string{"github-nulifyer", "nuget.org"})
+	assertMappedSources("Microsoft.Extensions.Logging", []string{"dotnet9"})
+	assertMappedSources("System.Text.Json", []string{"dotnet-public"})
+	assertMappedSources("Microsoft.CodeAnalysis", []string{"dotnet-public"})
+	assertMappedSources("Guget.TestPackage", []string{"github-nulifyer"})
+}
+
+func TestSourcesForPackage_UnmatchedMappingDoesNotBroaden(t *testing.T) {
+	mapping := &PackageSourceMapping{Entries: map[string][]string{"private": {"Company.*"}}}
+	if got := mapping.SourcesForPackage("Newtonsoft.Json"); len(got) != 0 {
+		t.Fatalf("unmatched package was mapped to %v", got)
+	}
+	if got := FilterServices(nil, mapping, "Newtonsoft.Json"); len(got) != 0 {
+		t.Fatalf("unmatched package received services %v", got)
+	}
 }
 
 func TestPackageSourceMappingXML_Unmarshal(t *testing.T) {

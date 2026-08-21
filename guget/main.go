@@ -1,9 +1,11 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -12,6 +14,10 @@ import (
 )
 
 var version = "dev"
+
+func versionString() string {
+	return "guget " + version
+}
 
 type logBuffer struct {
 	mu    sync.Mutex
@@ -174,11 +180,32 @@ type nugetResult struct {
 }
 
 func main() {
+	if len(os.Args) > 1 {
+		first := os.Args[1]
+		if first == "--version" || first == "-V" {
+			os.Exit(int(dispatchCLI(context.Background(), []string{"version"}, os.Stdin, os.Stdout, os.Stderr)))
+		}
+		if !strings.HasPrefix(first, "-") && !isCLIVerb(first) {
+			if info, err := os.Stat(first); err == nil && info.IsDir() {
+				os.Args = append([]string{os.Args[0], "--project", first}, os.Args[2:]...)
+			} else {
+				os.Exit(int(dispatchCLI(context.Background(), os.Args[1:], os.Stdin, os.Stdout, os.Stderr)))
+			}
+		}
+		if isCLIVerb(first) {
+			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+			defer cancel()
+			os.Exit(int(dispatchCLI(ctx, os.Args[1:], os.Stdin, os.Stdout, os.Stderr)))
+		}
+	}
+	tuiCtx, stopTUI := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stopTUI()
+
 	builtFlags := initCLI()
 	initTheme(builtFlags.Theme, builtFlags.NoColor)
 
 	if builtFlags.Version {
-		fmt.Printf("guget %s\n", version)
+		fmt.Println(versionString())
 		os.Exit(0)
 	}
 
@@ -202,14 +229,15 @@ func main() {
 	}
 	logInfo("Starting guget with project directory: %s", fullProjectPath)
 
-	snapshot, err := loadWorkspace(fullProjectPath)
+	snapshot, err := loadWorkspaceContext(tuiCtx, fullProjectPath)
 	if err != nil {
 		logFatal("Error loading workspace: %v", err)
 	}
 
 	m := NewApp(fullProjectPath, snapshot, buf.Lines(), builtFlags)
+	m.lifecycle = tuiCtx
 
-	p := tea.NewProgram(m)
+	p := tea.NewProgram(m, tea.WithContext(tuiCtx))
 
 	// Wire up live log forwarding to the TUI now that the program exists.
 	buf.mu.Lock()

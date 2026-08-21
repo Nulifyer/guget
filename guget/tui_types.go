@@ -118,6 +118,7 @@ type writeResultMsg struct {
 	err     error
 	written int // number of files written (0 = unknown / not an applyVersion call)
 	skipped int // number of locked refs skipped during scope=all update
+	reload  bool
 }
 
 type restoreResultMsg struct {

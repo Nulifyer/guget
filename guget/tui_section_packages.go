@@ -11,8 +11,8 @@ func currentVersionText(row packageRow) string {
 	if row.diverged {
 		return row.oldest.String() + "–" + row.ref.Version.String()
 	}
-	if row.ref.Locked {
-		return "[" + row.ref.Version.String() + "]"
+	if row.ref.Requested != "" {
+		return row.ref.Requested
 	}
 	return row.ref.Version.String()
 }
@@ -75,7 +75,7 @@ func (m *App) renderPackagePanel(w int) string {
 	)
 
 	// Compute column widths from actual data.
-	colCurrent := len("Current")
+	colCurrent := len("Requested")
 	colAvail := len("Available")
 	colSource := len("Source")
 	for _, row := range m.packages.rows {
@@ -116,7 +116,7 @@ func (m *App) renderPackagePanel(w int) string {
 	}
 	pkgHeader := "Package (by " + m.packages.sortMode.label() + " " + sortArrow + ")"
 	header := "  " + padRight(hStyle.Render(pkgHeader), nameW) +
-		padRight(hStyle.Render("Current"), colCurrent)
+		padRight(hStyle.Render("Requested"), colCurrent)
 	if showAvail {
 		header += padRight(hStyle.Render("Available"), colAvail)
 	}
@@ -159,14 +159,10 @@ func (m *App) renderPackagePanel(w int) string {
 		if row.diverged {
 			low := styleSubtle.Render(row.oldest.String())
 			sep := styleMuted.Render("–")
-			high := styleYellow.Render(row.ref.Version.String())
+			high := styleYellow.Render(currentVersionText(row))
 			current = padRight(low+sep+high, colCurrent)
-		} else if row.ref.Locked {
-			verText := styleYellow.Render("[") + styleSubtle.Render(row.ref.Version.String()) + styleYellow.Render("]")
-			current = padRight(verText, colCurrent)
 		} else {
-			current = padRight(
-				styleSubtle.Render(row.ref.Version.String()), colCurrent)
+			current = padRight(styleSubtle.Render(currentVersionText(row)), colCurrent)
 		}
 
 		line := ""

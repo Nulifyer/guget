@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	lipgloss "charm.land/lipgloss/v2"
@@ -29,6 +31,35 @@ var (
 	logOutWriter    io.Writer // nil = os.Stdout / os.Stderr per-level
 	logErrWriter    io.Writer // nil = os.Stderr
 )
+
+var (
+	logSecretsMu      sync.RWMutex
+	logSecrets        = make(map[string]struct{})
+	urlUserInfo       = regexp.MustCompile(`(?i)(https?://)[^/@\s]+@`)
+	sensitiveKV       = regexp.MustCompile(`(?i)(password|passwd|token|api[_-]?key|sig)=([^&\s]+)`)
+	authorizationLine = regexp.MustCompile(`(?i)(authorization\s*[:=]\s*)[^\r\n]+`)
+)
+
+func logRegisterSecret(secret string) {
+	if len(secret) < 4 {
+		return
+	}
+	logSecretsMu.Lock()
+	logSecrets[secret] = struct{}{}
+	logSecretsMu.Unlock()
+}
+
+func redactLogMessage(message string) string {
+	message = urlUserInfo.ReplaceAllString(message, `${1}[REDACTED]@`)
+	message = sensitiveKV.ReplaceAllString(message, `${1}=[REDACTED]`)
+	message = authorizationLine.ReplaceAllString(message, `${1}[REDACTED]`)
+	logSecretsMu.RLock()
+	for secret := range logSecrets {
+		message = strings.ReplaceAll(message, secret, "[REDACTED]")
+	}
+	logSecretsMu.RUnlock()
+	return message
+}
 
 // Log-level styles — default to auto-dark colors at init, rebuilt by rebuildStyles().
 var (
@@ -109,7 +140,7 @@ func logTimestamp() string {
 func logTrace(format string, v ...interface{}) {
 	if logLevel >= LogLevelTrace {
 		ts := logTimestamp()
-		msg := fmt.Sprintf(format, v...)
+		msg := redactLogMessage(fmt.Sprintf(format, v...))
 		if logUseColor() {
 			fmt.Fprintf(logStdOut(), "%s %s %s\n", logStyleTrace.Render("[TRACE]"), logStyleTrace.Render(ts), msg)
 		} else {
@@ -121,7 +152,7 @@ func logTrace(format string, v ...interface{}) {
 func logDebug(format string, v ...interface{}) {
 	if logLevel >= LogLevelDebug {
 		ts := logTimestamp()
-		msg := fmt.Sprintf(format, v...)
+		msg := redactLogMessage(fmt.Sprintf(format, v...))
 		if logUseColor() {
 			fmt.Fprintf(logStdOut(), "%s %s %s\n", logStyleDebug.Render("[DEBUG]"), logStyleDebug.Render(ts), msg)
 		} else {
@@ -133,7 +164,7 @@ func logDebug(format string, v ...interface{}) {
 func logInfo(format string, v ...interface{}) {
 	if logLevel >= LogLevelInfo {
 		ts := logTimestamp()
-		msg := fmt.Sprintf(format, v...)
+		msg := redactLogMessage(fmt.Sprintf(format, v...))
 		if logUseColor() {
 			fmt.Fprintf(logStdOut(), "%s %s %s\n", logStyleInfo.Render("[INFO]"), logStyleInfo.Render(ts), msg)
 		} else {
@@ -145,7 +176,7 @@ func logInfo(format string, v ...interface{}) {
 func logWarn(format string, v ...interface{}) {
 	if logLevel >= LogLevelWarn {
 		ts := logTimestamp()
-		msg := fmt.Sprintf(format, v...)
+		msg := redactLogMessage(fmt.Sprintf(format, v...))
 		if logUseColor() {
 			fmt.Fprintf(logStdErr(), "%s %s %s\n", logStyleWarn.Render("[WARN]"), logStyleWarn.Render(ts), msg)
 		} else {
@@ -157,7 +188,7 @@ func logWarn(format string, v ...interface{}) {
 func logError(format string, v ...interface{}) {
 	if logLevel >= LogLevelError {
 		ts := logTimestamp()
-		msg := fmt.Sprintf(format, v...)
+		msg := redactLogMessage(fmt.Sprintf(format, v...))
 		if logUseColor() {
 			fmt.Fprintf(logStdErr(), "%s %s %s\n", logStyleError.Render("[ERROR]"), logStyleError.Render(ts), msg)
 		} else {
@@ -169,7 +200,7 @@ func logError(format string, v ...interface{}) {
 // logFatal always prints to stderr and exits, regardless of the current log level.
 func logFatal(format string, v ...interface{}) {
 	ts := logTimestamp()
-	msg := fmt.Sprintf(format, v...)
+	msg := redactLogMessage(fmt.Sprintf(format, v...))
 	if logUseColor() {
 		fmt.Fprintf(logStdErr(), "%s %s %s\n", logStyleFatal.Render("[FATAL]"), logStyleFatal.Render(ts), msg)
 	} else {

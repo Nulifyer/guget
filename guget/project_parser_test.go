@@ -528,6 +528,21 @@ func TestParseCsproj_ExactVersionLock(t *testing.T) {
 	}
 }
 
+func TestUpdatePackageVersionPreservesExactLock(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "App.csproj")
+	if err := os.WriteFile(path, []byte(`<Project><ItemGroup><PackageReference Include="Example.Core" Version="[1.0.0]" /></ItemGroup></Project>`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := UpdatePackageVersion(path, "Example.Core", "2.0.0"); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(path)
+	if !strings.Contains(string(data), `Version="[2.0.0]"`) {
+		t.Fatalf("exact lock was not preserved: %s", data)
+	}
+}
+
 func pkgNameSet(proj *ParsedProject) map[string]bool {
 	names := make(map[string]bool)
 	for ref := range proj.Packages {
@@ -589,6 +604,162 @@ func TestAddPackageReference_NoVersion(t *testing.T) {
 	}
 	if strings.Contains(result, `Include="Polly" Version=`) {
 		t.Fatalf("should not have Version attribute for CPM package:\n%s", result)
+	}
+}
+
+func TestUpdatePackageVersionSupportsUpdateOverrideAndChildMetadata(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		want    string
+	}{
+		{
+			name: "central update",
+			content: `<Project><ItemGroup>
+  <PackageVersion Update="Example.Core" Version="1.0.0" />
+</ItemGroup></Project>`,
+			want: `PackageVersion Update="Example.Core" Version="2.0.0"`,
+		},
+		{
+			name: "version override",
+			content: `<Project><ItemGroup>
+  <PackageReference Include="Example.Core" VersionOverride="1.0.0" />
+</ItemGroup></Project>`,
+			want: `PackageReference Include="Example.Core" VersionOverride="2.0.0"`,
+		},
+		{
+			name: "child version",
+			content: `<Project><ItemGroup>
+  <PackageReference Include="Example.Core">
+    <Version>1.0.0</Version>
+    <PrivateAssets>all</PrivateAssets>
+  </PackageReference>
+</ItemGroup></Project>`,
+			want: `<Version>2.0.0</Version>`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "Test.csproj")
+			if err := os.WriteFile(path, []byte(tt.content), 0o640); err != nil {
+				t.Fatal(err)
+			}
+			if err := UpdatePackageVersion(path, "example.core", "2.0.0"); err != nil {
+				t.Fatal(err)
+			}
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(data), tt.want) {
+				t.Fatalf("updated file missing %q:\n%s", tt.want, data)
+			}
+			info, err := os.Stat(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := info.Mode().Perm(); got != 0o640 {
+				t.Fatalf("mode = %o, want 640", got)
+			}
+		})
+	}
+}
+
+func TestRemovePackageReferencePreservesOtherElementsAndCentralVersion(t *testing.T) {
+	content := `<Project><ItemGroup><PackageReference Include="Remove.Me" Version="1.0.0" /><PackageReference Include="Keep.Me" Version="2.0.0" /></ItemGroup>
+  <ItemGroup>
+    <PackageVersion Include="Remove.Me" Version="1.0.0" />
+  </ItemGroup>
+</Project>`
+	path := filepath.Join(t.TempDir(), "Test.csproj")
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := RemovePackageReference(path, "remove.me"); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(data)
+	if strings.Contains(got, `<PackageReference Include="Remove.Me"`) {
+		t.Fatalf("reference still present:\n%s", got)
+	}
+	if !strings.Contains(got, `<PackageReference Include="Keep.Me"`) {
+		t.Fatalf("neighboring reference was removed:\n%s", got)
+	}
+	if !strings.Contains(got, `<PackageVersion Include="Remove.Me"`) {
+		t.Fatalf("shared central version was removed:\n%s", got)
+	}
+}
+
+func TestUpdatePackageVersionRefusesVersionlessReference(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "Test.csproj")
+	if err := os.WriteFile(path, []byte(`<Project><ItemGroup><PackageReference Include="Example.Core" /></ItemGroup></Project>`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := os.ReadFile(path)
+	if err := UpdatePackageVersion(path, "Example.Core", "2.0.0"); err == nil {
+		t.Fatal("expected an unsupported literal-version error")
+	}
+	after, _ := os.ReadFile(path)
+	if string(after) != string(before) {
+		t.Fatalf("unsupported edit changed the file:\nbefore: %s\nafter: %s", before, after)
+	}
+}
+
+func TestUpdatePackageVersionRefusesMSBuildExpressionTarget(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "App.csproj")
+	original := `<Project><ItemGroup><PackageReference Include="Example.Core" Version="1.0.0" /></ItemGroup></Project>`
+	if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := UpdatePackageVersion(path, "Example.Core", "$(ExampleVersion)"); err == nil {
+		t.Fatal("expected property-expression target to be refused")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != original {
+		t.Fatalf("refused edit changed the file: %s", data)
+	}
+}
+
+func TestUpdatePackageVersionRefusesExistingMSBuildExpression(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "App.csproj")
+	original := `<Project><ItemGroup><PackageReference Include="Example.Core" Version="$(ExampleVersion)" /></ItemGroup></Project>`
+	if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := UpdatePackageVersion(path, "Example.Core", "2.0.0"); err == nil {
+		t.Fatal("expected existing property expression to be refused")
+	}
+	data, _ := os.ReadFile(path)
+	if string(data) != original {
+		t.Fatalf("refused edit changed the file: %s", data)
+	}
+}
+
+func TestMutationRefusesDuplicatePackageNodes(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "App.csproj")
+	original := `<Project><ItemGroup Condition="'$(TargetFramework)' == 'net8.0'"><PackageReference Include="Example.Core" Version="1.0.0" /></ItemGroup><ItemGroup Condition="'$(TargetFramework)' == 'net9.0'"><PackageReference Update="Example.Core" Version="2.0.0" /></ItemGroup></Project>`
+	if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := UpdatePackageVersion(path, "Example.Core", "3.0.0"); err == nil {
+		t.Fatal("expected duplicate conditional update to be refused")
+	}
+	if err := RemovePackageReference(path, "Example.Core"); err == nil {
+		t.Fatal("expected duplicate conditional removal to be refused")
+	}
+	data, _ := os.ReadFile(path)
+	if string(data) != original {
+		t.Fatalf("refused mutations changed the file: %s", data)
 	}
 }
 

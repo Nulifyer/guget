@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -589,20 +590,31 @@ func projectOrRepoURL(leaf *registrationLeaf) string {
 
 // NewNugetService creates and initialises a service for the given NugetSource.
 func NewNugetService(source NugetSource) (*NugetService, error) {
+	return NewNugetServiceContext(context.Background(), source)
+}
+
+func NewNugetServiceContext(ctx context.Context, source NugetSource) (*NugetService, error) {
+	if !strings.HasPrefix(strings.ToLower(source.URL), "http://") && !strings.HasPrefix(strings.ToLower(source.URL), "https://") {
+		return nil, fmt.Errorf("source is restore-only; metadata browsing requires an HTTP(S) NuGet V3 service index")
+	}
 	svc := &NugetService{
 		sourceURL:  source.URL,
 		sourceName: source.Name,
 		client:     &http.Client{Transport: newAuthTransport(source), Timeout: 15 * time.Second},
 	}
-	if err := svc.resolveEndpoints(); err != nil {
+	if err := svc.resolveEndpointsContext(ctx); err != nil {
 		return nil, err
 	}
 	return svc, nil
 }
 
 func (s *NugetService) resolveEndpoints() error {
+	return s.resolveEndpointsContext(context.Background())
+}
+
+func (s *NugetService) resolveEndpointsContext(ctx context.Context) error {
 	var idx serviceIndex
-	if err := s.getJSON(s.sourceURL, &idx); err != nil {
+	if err := s.getJSONContext(ctx, s.sourceURL, &idx); err != nil {
 		return fmt.Errorf("fetching service index: %w", err)
 	}
 	var searchVer, regVer SemVer
@@ -651,7 +663,7 @@ func (s *NugetService) resolveEndpoints() error {
 		// those directly in parallel instead of using the slow query2 endpoint.
 		feedURL := feedsBase + "/_apis/packaging/Feeds/" + ado.Feed + "?api-version=7.1"
 		var feedResp adoFeedResponse
-		if err := s.getJSON(feedURL, &feedResp); err != nil {
+		if err := s.getJSONContext(ctx, feedURL, &feedResp); err != nil {
 			logDebug("[%s] could not fetch feed config (upstream detection skipped): %v", s.sourceName, err)
 		} else {
 			for _, us := range feedResp.UpstreamSources {
@@ -671,8 +683,12 @@ func (s *NugetService) resolveEndpoints() error {
 // For Azure DevOps feeds, it uses the ADO REST API which is significantly
 // faster than the NuGet SearchQueryService (query2) endpoint.
 func (s *NugetService) Search(query string, take int) ([]SearchResult, error) {
+	return s.SearchContext(context.Background(), query, take)
+}
+
+func (s *NugetService) SearchContext(ctx context.Context, query string, take int) ([]SearchResult, error) {
 	if s.adoSearchBase != "" {
-		return s.searchADO(query, take)
+		return s.searchADOContext(ctx, query, take)
 	}
 	logDebug("[%s] search query=%q take=%d", s.sourceName, query, take)
 	params := url.Values{}
@@ -681,7 +697,10 @@ func (s *NugetService) Search(query string, take int) ([]SearchResult, error) {
 	params.Set("prerelease", "false")
 	params.Set("semVerLevel", "2.0.0")
 	var resp searchResponse
-	if err := s.getJSON(s.searchBase+"?"+params.Encode(), &resp); err != nil {
+	if s.searchBase == "" {
+		return nil, fmt.Errorf("source %q does not advertise SearchQueryService", s.sourceName)
+	}
+	if err := s.getJSONContext(ctx, s.searchBase+"?"+params.Encode(), &resp); err != nil {
 		return nil, err
 	}
 	logDebug("[%s] search returned %d results", s.sourceName, len(resp.Data))
@@ -694,6 +713,10 @@ func (s *NugetService) Search(query string, take int) ([]SearchResult, error) {
 // are searched directly in parallel so the user sees the full package
 // catalogue without the 25-30 s penalty of the query2 fan-out.
 func (s *NugetService) searchADO(query string, take int) ([]SearchResult, error) {
+	return s.searchADOContext(context.Background(), query, take)
+}
+
+func (s *NugetService) searchADOContext(ctx context.Context, query string, take int) ([]SearchResult, error) {
 	logDebug("[%s] ADO REST API search query=%q take=%d upstreams=%d", s.sourceName, query, take, len(s.adoUpstreams))
 
 	type searchResult struct {
@@ -707,14 +730,14 @@ func (s *NugetService) searchADO(query string, take int) ([]SearchResult, error)
 
 	// 1. Search the ADO feed itself (cached/local packages).
 	go func() {
-		results, err := s.searchADOLocal(query, take)
+		results, err := s.searchADOLocalContext(ctx, query, take)
 		ch <- searchResult{results, err, "ado"}
 	}()
 
 	// 2. Search each public upstream source directly.
 	for _, upstream := range s.adoUpstreams {
 		go func(loc string) {
-			results, err := s.searchUpstream(loc, query, take)
+			results, err := s.searchUpstreamContext(ctx, loc, query, take)
 			ch <- searchResult{results, err, loc}
 		}(upstream)
 	}
@@ -724,7 +747,12 @@ func (s *NugetService) searchADO(query string, take int) ([]SearchResult, error)
 	var merged []SearchResult
 	var lastErr error
 	for range workers {
-		sr := <-ch
+		var sr searchResult
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case sr = <-ch:
+		}
 		if sr.err != nil {
 			logWarn("[%s] search source %s failed: %v", s.sourceName, sr.source, sr.err)
 			lastErr = sr.err
@@ -749,6 +777,10 @@ func (s *NugetService) searchADO(query string, take int) ([]SearchResult, error)
 
 // searchADOLocal searches the ADO REST API for packages cached in the feed.
 func (s *NugetService) searchADOLocal(query string, take int) ([]SearchResult, error) {
+	return s.searchADOLocalContext(context.Background(), query, take)
+}
+
+func (s *NugetService) searchADOLocalContext(ctx context.Context, query string, take int) ([]SearchResult, error) {
 	// Build URL manually — url.Values.Encode() would percent-encode the "$"
 	// in OData parameters like $top, which the ADO API does not accept.
 	searchURL := s.adoSearchBase +
@@ -758,7 +790,7 @@ func (s *NugetService) searchADOLocal(query string, take int) ([]SearchResult, e
 		"&api-version=7.1-preview.1"
 
 	var resp adoPackageResponse
-	if err := s.getJSON(searchURL, &resp); err != nil {
+	if err := s.getJSONContext(ctx, searchURL, &resp); err != nil {
 		return nil, fmt.Errorf("ADO REST API search: %w", err)
 	}
 
@@ -787,9 +819,13 @@ func (s *NugetService) searchADOLocal(query string, take int) ([]SearchResult, e
 // The SearchQueryService URL for each upstream is resolved once and cached
 // on the NugetService so subsequent searches skip the service index fetch.
 func (s *NugetService) searchUpstream(serviceIndexURL, query string, take int) ([]SearchResult, error) {
+	return s.searchUpstreamContext(context.Background(), serviceIndexURL, query, take)
+}
+
+func (s *NugetService) searchUpstreamContext(ctx context.Context, serviceIndexURL, query string, take int) ([]SearchResult, error) {
 	logDebug("[upstream] searching %s for %q", serviceIndexURL, query)
 
-	searchBase, err := s.resolveUpstreamSearchBase(serviceIndexURL)
+	searchBase, err := s.resolveUpstreamSearchBaseContext(ctx, serviceIndexURL)
 	if err != nil {
 		return nil, err
 	}
@@ -801,7 +837,7 @@ func (s *NugetService) searchUpstream(serviceIndexURL, query string, take int) (
 	params.Set("prerelease", "false")
 	params.Set("semVerLevel", "2.0.0")
 
-	req, err := http.NewRequest("GET", searchBase+"?"+params.Encode(), nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, searchBase+"?"+params.Encode(), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -824,11 +860,15 @@ func (s *NugetService) searchUpstream(serviceIndexURL, query string, take int) (
 // resolveUpstreamSearchBase returns the cached SearchQueryService URL for the
 // given upstream service index, fetching and caching it on first call.
 func (s *NugetService) resolveUpstreamSearchBase(serviceIndexURL string) (string, error) {
+	return s.resolveUpstreamSearchBaseContext(context.Background(), serviceIndexURL)
+}
+
+func (s *NugetService) resolveUpstreamSearchBaseContext(ctx context.Context, serviceIndexURL string) (string, error) {
 	if v, ok := s.upstreamSearchBases.Load(serviceIndexURL); ok {
 		return v.(string), nil
 	}
 
-	req, err := http.NewRequest("GET", serviceIndexURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, serviceIndexURL, nil)
 	if err != nil {
 		return "", err
 	}
@@ -1113,9 +1153,17 @@ func isTransientHTTP(code int) bool {
 }
 
 func (s *NugetService) getJSON(u string, dst any) error {
+	return s.getJSONContext(context.Background(), u, dst)
+}
+
+func (s *NugetService) getJSONContext(ctx context.Context, u string, dst any) error {
 	logTrace("[%s] GET %s", s.sourceName, u)
 	start := time.Now()
-	resp, err := s.client.Get(u)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := s.client.Do(req)
 	elapsed := time.Since(start)
 	if err != nil {
 		logTrace("[%s] GET %s failed after %s: %v", s.sourceName, u, elapsed, err)
@@ -1126,8 +1174,18 @@ func (s *NugetService) getJSON(u string, dst any) error {
 		resp.Body.Close()
 		jitter := 500 + rand.Intn(1000)
 		logWarn("[%s] GET %s → %d, retrying in %dms...", s.sourceName, u, resp.StatusCode, jitter)
-		time.Sleep(time.Duration(jitter) * time.Millisecond)
-		resp, err = s.client.Get(u)
+		timer := time.NewTimer(time.Duration(jitter) * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+		req, err = http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+		if err != nil {
+			return err
+		}
+		resp, err = s.client.Do(req)
 		if err != nil {
 			logWarn("[%s] GET %s retry failed: %v", s.sourceName, u, err)
 			return err

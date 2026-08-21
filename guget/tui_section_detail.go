@@ -206,10 +206,11 @@ func (m *App) renderDetailProjectVersions(row packageRow) string {
 		for ref := range p.Packages {
 			if ref.Name == row.ref.Name {
 				proj := styleSubtle.Render(fmt.Sprintf("  %-20s", truncate(p.FileName, 20)))
-				ver := styleText.Render(ref.Version.String())
-				if ref.Locked {
-					ver = styleYellow.Render("[") + ver + styleYellow.Render("]")
+				requested := ref.Requested
+				if requested == "" {
+					requested = ref.Version.String()
 				}
+				ver := styleText.Render(requested)
 				line := proj + " " + ver
 				sourceFile := p.SourceFileForPackage(ref.Name)
 				if sourceFile != p.FilePath {

@@ -5,36 +5,26 @@ import (
 	"strings"
 
 	bubble_tea "charm.land/bubbletea/v2"
+	editplan "github.com/nulifyer/guget/internal/edit"
 )
 
 func (m *App) addPackageToProject(pkgName, version string, project *ParsedProject) bubble_tea.Cmd {
-	project.Packages.Add(PackageReference{Name: pkgName, Version: ParseSemVer(version)})
-	project.PackageSources[strings.ToLower(pkgName)] = project.FilePath
-	if m.ctx.Results == nil {
-		m.ctx.Results = make(map[string]nugetResult)
-	}
-	if m.search.fetchedInfo != nil {
-		m.ctx.Results[pkgName] = nugetResult{pkg: m.search.fetchedInfo, source: m.search.fetchedSource}
-		m.search.fetchedInfo = nil
-		m.search.fetchedSource = ""
-	}
-	m.rebuildPackageRows()
-	for i, row := range m.packages.rows {
-		if strings.EqualFold(row.ref.Name, pkgName) {
-			m.packages.cursor = i
-			break
-		}
-	}
-	m.clampOffset()
-	m.refreshDetail()
 	m.focus = focusPackages
 	filePath := project.FilePath
 	return func() bubble_tea.Msg {
 		logInfo("AddPackageReference: %s %s → %s", pkgName, version, filePath)
-		if err := AddPackageReference(filePath, pkgName, version); err != nil {
+		change, err := PlanAddPackageReference(filePath, pkgName, version)
+		if err != nil {
 			return writeResultMsg{err: err}
 		}
-		return writeResultMsg{err: nil}
+		plan, err := editplan.NewPlan(change)
+		if err != nil {
+			return writeResultMsg{err: err}
+		}
+		if _, err := plan.Apply(); err != nil {
+			return writeResultMsg{err: err}
+		}
+		return writeResultMsg{written: plan.Len(), reload: true}
 	}
 }
 
@@ -104,53 +94,6 @@ func (s *locationPicker) HandleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 // For CPM targets, it performs a dual write: PackageVersion to the CPM file
 // and a version-less PackageReference to the project file.
 func (m *App) addPackageToLocation(pkgName, version string, project *ParsedProject, target AddTarget) bubble_tea.Cmd {
-	project.Packages.Add(PackageReference{Name: pkgName, Version: ParseSemVer(version)})
-	project.PackageSources[strings.ToLower(pkgName)] = target.FilePath
-
-	if m.ctx.Results == nil {
-		m.ctx.Results = make(map[string]nugetResult)
-	}
-	if m.search.fetchedInfo != nil {
-		m.ctx.Results[pkgName] = nugetResult{pkg: m.search.fetchedInfo, source: m.search.fetchedSource}
-		m.search.fetchedInfo = nil
-		m.search.fetchedSource = ""
-	}
-
-	// If adding to a shared file, propagate to all projects that also reference it.
-	if target.Kind != AddTargetProject {
-		for _, p := range m.allProjects() {
-			if p == project {
-				continue
-			}
-			matched := false
-			// Props projects parsed via ParsePropsAsProject have no AddTargets
-			// but their FilePath is the props file itself.
-			if p.FilePath == target.FilePath {
-				matched = true
-			} else {
-				for _, at := range p.AddTargets {
-					if at.FilePath == target.FilePath {
-						matched = true
-						break
-					}
-				}
-			}
-			if matched {
-				p.Packages.Add(PackageReference{Name: pkgName, Version: ParseSemVer(version)})
-				p.PackageSources[strings.ToLower(pkgName)] = target.FilePath
-			}
-		}
-	}
-
-	m.rebuildPackageRows()
-	for i, row := range m.packages.rows {
-		if strings.EqualFold(row.ref.Name, pkgName) {
-			m.packages.cursor = i
-			break
-		}
-	}
-	m.clampOffset()
-	m.refreshDetail()
 	m.focus = focusPackages
 
 	projectFilePath := project.FilePath
@@ -158,23 +101,36 @@ func (m *App) addPackageToLocation(pkgName, version string, project *ParsedProje
 	targetKind := target.Kind
 
 	return func() bubble_tea.Msg {
+		var changes []editplan.Change
 		switch targetKind {
 		case AddTargetCPM:
 			logInfo("AddPackageVersion: %s %s → %s", pkgName, version, targetFilePath)
-			if err := AddPackageVersion(targetFilePath, pkgName, version); err != nil {
+			centralChange, err := PlanAddPackageVersion(targetFilePath, pkgName, version)
+			if err != nil {
 				return writeResultMsg{err: err}
 			}
 			logInfo("AddPackageReference (CPM): %s → %s", pkgName, projectFilePath)
-			if err := AddPackageReference(projectFilePath, pkgName, ""); err != nil {
+			projectChange, err := PlanAddPackageReference(projectFilePath, pkgName, "")
+			if err != nil {
 				return writeResultMsg{err: err}
 			}
+			changes = append(changes, centralChange, projectChange)
 		default:
 			logInfo("AddPackageReference: %s %s → %s", pkgName, version, targetFilePath)
-			if err := AddPackageReference(targetFilePath, pkgName, version); err != nil {
+			change, err := PlanAddPackageReference(targetFilePath, pkgName, version)
+			if err != nil {
 				return writeResultMsg{err: err}
 			}
+			changes = append(changes, change)
 		}
-		return writeResultMsg{err: nil}
+		plan, err := editplan.NewPlan(changes...)
+		if err != nil {
+			return writeResultMsg{err: err}
+		}
+		if _, err := plan.Apply(); err != nil {
+			return writeResultMsg{err: err}
+		}
+		return writeResultMsg{written: plan.Len(), reload: true}
 	}
 }
 

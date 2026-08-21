@@ -2,7 +2,7 @@
 set -e
 
 REPO="nulifyer/guget"
-INSTALL_DIR="${INSTALL_DIR:-}"
+INSTALL_DIR="${GUGET_INSTALL:-}"
 
 # ── OS detection ──────────────────────────────────────────────────────────────
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
@@ -68,8 +68,8 @@ if command -v sha256sum &>/dev/null; then
 elif command -v shasum &>/dev/null; then
   ACTUAL=$(shasum -a 256 "$TMP/$FILENAME" | awk '{print $1}')
 else
-  echo "Warning: sha256sum/shasum not found, skipping checksum verification"
-  ACTUAL="$EXPECTED"
+  echo "Error: sha256sum or shasum is required for checksum verification"
+  exit 1
 fi
 
 if [ "$ACTUAL" != "$EXPECTED" ]; then

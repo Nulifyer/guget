@@ -6,22 +6,55 @@ on:
       - "v*"
 
 jobs:
+  verify:
+    name: Verify release
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: guget
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6.0.2
+
+      - name: Set up Go
+        uses: actions/setup-go@v6.4.0
+        with:
+          go-version-file: guget/go.mod
+          cache-dependency-path: guget/go.sum
+
+      - name: Verify
+        run: |
+          go mod verify
+          gofmt -w .
+          git diff --exit-code
+          go vet ./...
+          go test ./...
+          go test -race ./...
+
   release:
     name: Release
+    needs: verify
     runs-on: ubuntu-latest
     permissions:
       contents: write
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v6.0.2
         with:
           fetch-depth: 0
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6.4.0
         with:
           go-version-file: guget/go.mod
+
+      - name: Verify embedded release version
+        working-directory: guget
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          go build -ldflags "-X main.version=$VERSION" -o /tmp/guget-release-check .
+          test "$(/tmp/guget-release-check version)" = "guget $VERSION"
 
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v7
@@ -33,11 +66,12 @@ jobs:
 
   vscode-extension:
     name: Publish VSCode Extension
+    needs: verify
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v6.0.2
         with:
           fetch-depth: 0
 
@@ -55,7 +89,7 @@ jobs:
 
       - name: Set up Node
         if: steps.changes.outputs.changed == 'true'
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v6.0.0
         with:
           node-version: 20
 

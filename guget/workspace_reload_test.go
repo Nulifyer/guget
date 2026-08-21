@@ -46,6 +46,23 @@ func TestPlanPackageReload_ReusesCachedResults(t *testing.T) {
 	}
 }
 
+func TestFindUnsupportedPackageArtifacts(t *testing.T) {
+	root := t.TempDir()
+	toolDir := filepath.Join(root, ".config")
+	if err := os.MkdirAll(toolDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{filepath.Join(root, "packages.config"), filepath.Join(toolDir, "dotnet-tools.json")} {
+		if err := os.WriteFile(path, []byte("{}"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	artifacts := findUnsupportedPackageArtifacts(root)
+	if len(artifacts) != 2 {
+		t.Fatalf("artifacts = %#v", artifacts)
+	}
+}
+
 func TestScanWatchedWorkspaceFiles_IgnoresBuildOutput(t *testing.T) {
 	root := t.TempDir()
 

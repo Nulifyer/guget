@@ -9,7 +9,6 @@ BAR_MAX=40
 C_WIN='\033[38;5;109m'  # blue
 C_LIN='\033[38;5;142m'  # yellow
 C_MAC='\033[38;5;175m'  # purple
-C_DIM='\033[2m'
 C_RST='\033[0m'
 
 RAW=$(curl -fsSL "https://api.github.com/repos/$REPO/releases")
@@ -40,7 +39,7 @@ echo "  ────────────────────────
 printf "  %10s   ${C_LIN}## linux${C_RST}  ${C_MAC}## darwin${C_RST}  ${C_WIN}## windows${C_RST}\n" ""
 echo ""
 
-while IFS=$'\t' read -r tag linux darwin windows total; do
+while IFS=$'\t' read -r tag linux darwin _windows total; do
   TOTAL=$((TOTAL + total))
   BAR_TOTAL=$(( total * BAR_MAX / MAX ))
   if [[ "$total" -gt 0 && "$BAR_TOTAL" -eq 0 ]]; then BAR_TOTAL=1; fi

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -10,9 +11,9 @@ import (
 	lipgloss "charm.land/lipgloss/v2"
 )
 
-func runDepTreeCmd(project *ParsedProject) bubble_tea.Cmd {
+func runDepTreeCmd(ctx context.Context, project *ParsedProject) bubble_tea.Cmd {
 	return func() bubble_tea.Msg {
-		cmd := exec.Command("dotnet", "list", project.FilePath, "package", "--include-transitive")
+		cmd := exec.CommandContext(ctx, "dotnet", "list", project.FilePath, "package", "--include-transitive")
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			return depTreeReadyMsg{err: fmt.Errorf("dotnet list: %w\n%s", err, strings.TrimSpace(string(out)))}
@@ -64,7 +65,7 @@ func (m *App) openTransitiveDepTree() bubble_tea.Cmd {
 	}
 	m.ctx.StatusLine = ""
 	m.depTree = newDepTreeOverlay(m, proj.FileName+" (transitive packages)", true)
-	return runDepTreeCmd(proj)
+	return runDepTreeCmd(m.lifecycle, proj)
 }
 
 func (m *App) depTreeOverlaySize() (w, h int) {

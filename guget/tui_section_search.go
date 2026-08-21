@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -141,14 +142,15 @@ func (s *packageSearch) doSearchCmd(query string) bubble_tea.Cmd {
 				// whose package ID is allowed on the source that found it.
 				if sourceMapping.IsConfigured() {
 					allowed := sourceMapping.SourcesForPackage(r.ID)
-					if len(allowed) > 0 {
-						allowedSet := NewSet[string]()
-						for _, k := range allowed {
-							allowedSet.Add(strings.ToLower(k))
-						}
-						if !allowedSet.Contains(strings.ToLower(sr.source)) {
-							continue
-						}
+					if len(allowed) == 0 {
+						continue
+					}
+					allowedSet := NewSet[string]()
+					for _, k := range allowed {
+						allowedSet.Add(strings.ToLower(k))
+					}
+					if !allowedSet.Contains(strings.ToLower(sr.source)) {
+						continue
 					}
 				}
 				seen.Add(key)
@@ -173,6 +175,9 @@ func (s *packageSearch) doSearchCmd(query string) bubble_tea.Cmd {
 func (s *packageSearch) fetchPackageCmd(id string) bubble_tea.Cmd {
 	services := FilterServices(s.app.ctx.NugetServices, s.app.ctx.SourceMapping, id)
 	return func() bubble_tea.Msg {
+		if len(services) == 0 {
+			return packageFetchedMsg{err: fmt.Errorf("package source mapping allows no available source for %q", id)}
+		}
 		var lastErr error
 		for _, svc := range services {
 			info, err := svc.SearchExact(id)
