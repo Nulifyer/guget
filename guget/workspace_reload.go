@@ -46,7 +46,7 @@ func loadWorkspaceContext(ctx context.Context, projectDir string) (*workspaceSna
 		snapshot.NugetServices = append(snapshot.NugetServices, svc)
 	}
 	if len(snapshot.NugetServices) == 0 {
-		return nil, fmt.Errorf("no reachable NuGet sources found")
+		logWarn("No metadata-capable NuGet sources are available; package inspection remains available")
 	}
 	DeduplicateADOUpstreams(snapshot.NugetServices)
 
@@ -263,7 +263,11 @@ func fetchPackageMetadataAsync(send func(tea.Msg), generation int, nugetServices
 					var lastErr error
 					eligibleServices := FilterServices(nugetServices, sourceMapping, name)
 					if len(eligibleServices) == 0 {
-						lastErr = fmt.Errorf("package source mapping allows no available source for %q", name)
+						if len(nugetServices) == 0 {
+							lastErr = fmt.Errorf("no metadata-capable NuGet source is available for %q", name)
+						} else {
+							lastErr = fmt.Errorf("package source mapping allows no available source for %q", name)
+						}
 					}
 					for _, svc := range eligibleServices {
 						info, lastErr = svc.SearchExact(name)

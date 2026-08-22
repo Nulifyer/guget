@@ -254,6 +254,25 @@ func TestSourcesFromNugetConfigIncludesRelativeLocalSourceAsRestoreOnly(t *testi
 	}
 }
 
+func TestSourcesFromBuildPropsPreservesHTTPURL(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "Directory.Build.props")
+	data := []byte(`<Project><PropertyGroup><RestoreSources>https://packages.example.test/v3/index.json;./packages</RestoreSources></PropertyGroup></Project>`)
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sources := sourcesFromBuildProps(path)
+	if len(sources) != 2 {
+		t.Fatalf("sources = %#v", sources)
+	}
+	if got := sources[0].URL; got != "https://packages.example.test/v3/index.json" {
+		t.Fatalf("HTTP URL = %q", got)
+	}
+	if got, want := sources[1].URL, filepath.Join(dir, "packages"); got != want {
+		t.Fatalf("local URL = %q, want %q", got, want)
+	}
+}
+
 func TestDetectSources_WithMapping(t *testing.T) {
 	td := testDataDir(t)
 	detected := DetectSources(td)

@@ -208,8 +208,8 @@ var themes = map[string]Theme{
 // initTheme applies the named theme to the package-level color and style vars.
 // Call this before NewApp. If noColor is true, all color output is disabled.
 func initTheme(name string, noColor bool) {
+	hyperlinkEnabled = true
 	if noColor {
-		hyperlinkEnabled = false
 		// In lipgloss v2, color downsampling is handled by bubbletea.
 		// Setting all colors to NoColor effectively disables color output.
 		nc := lipgloss.NoColor{}

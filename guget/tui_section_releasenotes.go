@@ -158,8 +158,22 @@ func fetchNuspecVersionNotesCmd(svc *NugetService, pkgID, version string) bubble
 
 func (s *releaseNotesOverlay) fetchReleaseNotesCmd(rel GitHubRelease) bubble_tea.Cmd {
 	return func() bubble_tea.Msg {
-		return releaseNotesReadyMsg{body: rel.Body, htmlURL: rel.HTMLURL}
+		return releaseNotesReadyMsg{tag: rel.TagName, body: rel.Body, htmlURL: rel.HTMLURL}
 	}
+}
+
+func (s *releaseNotesOverlay) selectedGitHubTag() string {
+	if s.ghCursor < 0 || s.ghCursor >= len(s.ghReleases) {
+		return ""
+	}
+	return s.ghReleases[s.ghCursor].TagName
+}
+
+func (s *releaseNotesOverlay) selectedNuSpecVersion() string {
+	if s.nsCursor < 0 || s.nsCursor >= len(s.nsVersions) {
+		return ""
+	}
+	return s.nsVersions[s.nsCursor]
 }
 
 func (s *releaseNotesOverlay) FooterKeys() []kv {
@@ -223,22 +237,30 @@ func (s *releaseNotesOverlay) HandleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 func (s *releaseNotesOverlay) moveCursor(delta int) bubble_tea.Cmd {
 	switch s.activeTab {
 	case tabReleases:
-		next := s.ghCursor + delta
-		if next < 0 || next >= len(s.ghReleases) {
+		return s.selectCursor(s.ghCursor + delta)
+	case tabNuSpec:
+		return s.selectCursor(s.nsCursor + delta)
+	}
+	return nil
+}
+
+func (s *releaseNotesOverlay) selectCursor(index int) bubble_tea.Cmd {
+	s.focusRight = false
+	switch s.activeTab {
+	case tabReleases:
+		if index < 0 || index >= len(s.ghReleases) || index == s.ghCursor {
 			return nil
 		}
-		s.ghCursor = next
+		s.ghCursor = index
 		s.ghLoading = true
 		s.ghNotes = ""
-		return s.fetchReleaseNotesCmd(s.ghReleases[next])
+		return s.fetchReleaseNotesCmd(s.ghReleases[index])
 	case tabNuSpec:
-		next := s.nsCursor + delta
-		if next < 0 || next >= len(s.nsVersions) {
+		if index < 0 || index >= len(s.nsVersions) || index == s.nsCursor {
 			return nil
 		}
-		s.nsCursor = next
-		ver := s.nsVersions[next]
-		// Return cached notes if we've already fetched this version.
+		s.nsCursor = index
+		ver := s.nsVersions[index]
 		if cached, ok := s.nsNotesCache[ver]; ok {
 			s.nsNotes = cached
 			s.updateViewportContent()
@@ -415,7 +437,7 @@ func (s *releaseNotesOverlay) Render() string {
 	}
 
 	// ── Title ──
-	title := styleAccentBold.Render(s.title)
+	title := overlayTitleLine(s.title, innerW)
 
 	// ── Tab bar ──
 	ghLabel := s.tabLabel(tabReleases)
@@ -428,6 +450,23 @@ func (s *releaseNotesOverlay) Render() string {
 		nsLabel = styleMuted.Render("[2] ") + styleAccentBold.Render(nsLabel)
 	}
 	tabBar := ghLabel + styleBorder.Render(" │ ") + nsLabel
+	regions := []mouseRegion{overlayCloseRegion(overlayW, s.HandleKey)}
+	ghWidth := lipgloss.Width(ghLabel)
+	nsWidth := lipgloss.Width(nsLabel)
+	regions = append(regions,
+		mouseRegion{
+			rect: mouseRect{x: overlayContentX, y: overlayContentY + 1, w: ghWidth, h: 1},
+			click: func(bubble_tea.MouseMsg) bubble_tea.Cmd {
+				return s.HandleKey(bubble_tea.KeyPressMsg(bubble_tea.Key{Code: '1'}))
+			},
+		},
+		mouseRegion{
+			rect: mouseRect{x: overlayContentX + ghWidth + 3, y: overlayContentY + 1, w: nsWidth, h: 1},
+			click: func(bubble_tea.MouseMsg) bubble_tea.Cmd {
+				return s.HandleKey(bubble_tea.KeyPressMsg(bubble_tea.Key{Code: '2'}))
+			},
+		},
+	)
 
 	titleDivider := styleBorder.Render(strings.Repeat("─", innerW))
 
@@ -448,6 +487,22 @@ func (s *releaseNotesOverlay) Render() string {
 	}
 	headerLine := padRight(leftHdr, listW) + div + padRight(rightHdr, rightW+2)
 	headerDivider := styleBorder.Render(strings.Repeat("─", listW) + "┼" + strings.Repeat("─", rightW+2))
+	regions = append(regions,
+		mouseRegion{
+			rect: mouseRect{x: overlayContentX, y: overlayContentY + 3, w: listW, h: 1},
+			click: func(bubble_tea.MouseMsg) bubble_tea.Cmd {
+				s.focusRight = false
+				return nil
+			},
+		},
+		mouseRegion{
+			rect: mouseRect{x: overlayContentX + listW + 1, y: overlayContentY + 3, w: rightW + 2, h: 1},
+			click: func(bubble_tea.MouseMsg) bubble_tea.Cmd {
+				s.focusRight = true
+				return nil
+			},
+		},
+	)
 
 	// ── Left panel ──
 	maxTagW := listW - 3 // prefix "▶ " (2) + left margin (1)
@@ -498,6 +553,13 @@ func (s *releaseNotesOverlay) Render() string {
 	var leftLines []string
 	for i := scrollStart; i < len(allLeft) && i < scrollStart+bodyH; i++ {
 		leftLines = append(leftLines, padRight(allLeft[i], listW))
+		index := i
+		regions = append(regions, mouseRegion{
+			rect: mouseRect{x: overlayContentX, y: overlayContentY + 5 + i - scrollStart, w: listW, h: 1},
+			click: func(bubble_tea.MouseMsg) bubble_tea.Cmd {
+				return s.selectCursor(index)
+			},
+		})
 	}
 	for len(leftLines) < bodyH {
 		leftLines = append(leftLines, strings.Repeat(" ", listW))
@@ -542,6 +604,35 @@ func (s *releaseNotesOverlay) Render() string {
 	box := styleOverlay.
 		Width(overlayW).
 		Render(content)
+	bodyY := overlayContentY + 5
+	regions = append(regions,
+		mouseRegion{
+			rect: mouseRect{x: overlayContentX, y: bodyY, w: listW, h: bodyH},
+			wheel: func(event bubble_tea.MouseMsg) bubble_tea.Cmd {
+				switch event.Mouse().Button {
+				case bubble_tea.MouseWheelUp:
+					return s.moveCursor(-1)
+				case bubble_tea.MouseWheelDown:
+					return s.moveCursor(1)
+				default:
+					return nil
+				}
+			},
+		},
+		mouseRegion{
+			rect: mouseRect{x: overlayContentX + listW + 1, y: bodyY, w: rightW + 2, h: bodyH},
+			click: func(bubble_tea.MouseMsg) bubble_tea.Cmd {
+				s.focusRight = true
+				return nil
+			},
+			wheel: func(event bubble_tea.MouseMsg) bubble_tea.Cmd {
+				s.focusRight = true
+				var cmd bubble_tea.Cmd
+				s.vp, cmd = s.vp.Update(event)
+				return cmd
+			},
+		},
+	)
 
-	return s.centerOverlay(box)
+	return s.centerOverlayInteractive(box, regions)
 }

@@ -130,6 +130,66 @@ func TestDispatchCLI_AddDryRunAndApply(t *testing.T) {
 	}
 }
 
+func TestDispatchCLI_AddIgnoresDisabledCentralPackageFile(t *testing.T) {
+	root := t.TempDir()
+	project := writeCLIProject(t, root, "App", `<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup></Project>`)
+	if err := os.WriteFile(filepath.Join(root, "Directory.Packages.props"), []byte(`<Project><PropertyGroup><ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally></PropertyGroup></Project>`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	code, stdout, stderr := runCLIForTest(t, "add", "Example.Core", "--file", project, "--version", "1.4.0", "--project", root, "--dry-run", "--format", "json")
+	if code != ExitSuccess {
+		t.Fatalf("code = %d, stderr = %q", code, stderr)
+	}
+	var plan planDocument
+	if err := json.Unmarshal([]byte(stdout), &plan); err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Changes) != 1 || plan.Changes[0].Path != project || plan.Changes[0].Version != "1.4.0" {
+		t.Fatalf("plan = %#v", plan)
+	}
+}
+
+func TestRestoreProjectsPassesInteractiveFlag(t *testing.T) {
+	project := &ParsedProject{FilePath: filepath.Join(t.TempDir(), "App.csproj")}
+	for _, test := range []struct {
+		name        string
+		interactive bool
+		wantArgs    []string
+	}{
+		{name: "noninteractive", wantArgs: []string{"restore", project.FilePath}},
+		{name: "interactive", interactive: true, wantArgs: []string{"restore", project.FilePath, "--interactive"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var gotName string
+			var gotArgs []string
+			runtime := cliRuntime{
+				stdin: strings.NewReader(""), stdout: io.Discard, stderr: io.Discard,
+				runCommand: func(_ context.Context, name string, args []string, _ io.Reader, _, _ io.Writer) error {
+					gotName = name
+					gotArgs = append([]string(nil), args...)
+					return nil
+				},
+			}
+			if code := runtime.restoreProjects(context.Background(), []*ParsedProject{project}, test.interactive); code != ExitSuccess {
+				t.Fatalf("code = %d", code)
+			}
+			if gotName != "dotnet" || strings.Join(gotArgs, "\x00") != strings.Join(test.wantArgs, "\x00") {
+				t.Fatalf("command = %s %q, want dotnet %q", gotName, gotArgs, test.wantArgs)
+			}
+		})
+	}
+}
+
+func TestDispatchCLI_MutationRejectsUnusedInteractiveFlag(t *testing.T) {
+	root := t.TempDir()
+	project := writeCLIProject(t, root, "App", `<Project Sdk="Microsoft.NET.Sdk" />`)
+	code, _, stderr := runCLIForTest(t, "add", "Example.Core", "--file", project, "--version", "1.0.0", "--project", root, "--interactive")
+	if code != ExitUsage || !strings.Contains(stderr, "--interactive requires --restore") {
+		t.Fatalf("code = %d, stderr = %q", code, stderr)
+	}
+}
+
 func TestDispatchCLI_UpdateAndRemoveRequireExplicitScope(t *testing.T) {
 	root := t.TempDir()
 	project := writeCLIProject(t, root, "App", `<Project Sdk="Microsoft.NET.Sdk">

@@ -80,18 +80,28 @@ func (m *App) applyOrConfirmUpdate(pkgName, newVersion string, project *ParsedPr
 
 func (s *confirmRemove) Render() string {
 	w := s.Width()
+	innerW := w - 6
 	lines := []string{
-		styleRedBold.Render("Remove package?"),
+		overlayTitleLine("Remove package?", innerW),
 		styleSubtle.Render(s.pkgName),
+		"",
 	}
+	buttonLine, buttonRegions := renderOverlayButtons(innerW, len(lines), s.HandleKey,
+		overlayButton{label: "Cancel", code: bubble_tea.KeyEscape},
+		overlayButton{label: "Remove", code: bubble_tea.KeyEnter},
+	)
+	lines = append(lines, buttonLine)
+	regions := []mouseRegion{overlayCloseRegion(w, s.HandleKey)}
+	regions = append(regions, buttonRegions...)
 	box := styleOverlayDanger.
 		Width(w).
 		Render(strings.Join(lines, "\n"))
-	return s.centerOverlay(box)
+	return s.centerOverlayInteractive(box, regions)
 }
 
 func (s *confirmUpdate) Render() string {
 	w := s.Width()
+	innerW := w - 6
 	pinnedVer := ""
 	for _, row := range s.app.packages.rows {
 		if strings.EqualFold(row.ref.Name, s.pkgName) {
@@ -100,13 +110,21 @@ func (s *confirmUpdate) Render() string {
 		}
 	}
 	lines := []string{
-		styleYellowBold.Render("Version is pinned"),
+		overlayTitleLine("Version is pinned", innerW),
 		styleSubtle.Render(s.pkgName) + "  " + styleYellow.Render("["+pinnedVer+"]"),
 		"",
 		styleMuted.Render("Update to " + s.newVersion + " anyway?"),
+		"",
 	}
+	buttonLine, buttonRegions := renderOverlayButtons(innerW, len(lines), s.HandleKey,
+		overlayButton{label: "Cancel", code: bubble_tea.KeyEscape},
+		overlayButton{label: "Update", code: bubble_tea.KeyEnter},
+	)
+	lines = append(lines, buttonLine)
+	regions := []mouseRegion{overlayCloseRegion(w, s.HandleKey)}
+	regions = append(regions, buttonRegions...)
 	box := styleOverlay.
 		Width(w).
 		Render(strings.Join(lines, "\n"))
-	return s.centerOverlay(box)
+	return s.centerOverlayInteractive(box, regions)
 }

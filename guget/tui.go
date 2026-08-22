@@ -33,6 +33,7 @@ type App struct {
 
 	projectDir string
 	send       func(bubble_tea.Msg)
+	mouse      bool
 
 	focus focusPanel
 
@@ -113,6 +114,7 @@ func NewApp(projectDir string, snapshot *workspaceSnapshot, initialLogLines []st
 		ctx:             ctx,
 		lifecycle:       context.Background(),
 		projectDir:      projectDir,
+		mouse:           !flags.NoMouse,
 		sourceSignature: workspaceSourceSignature(snapshot.Sources, snapshot.SourceMapping),
 		projects: projectPanel{
 			sectionBase: sectionBase{baseWidth: 30, minWidth: 10},
@@ -282,6 +284,16 @@ func (m *App) Update(msg bubble_tea.Msg) (bubble_tea.Model, bubble_tea.Cmd) {
 		m.ctx.LogLines = append(m.ctx.LogLines, msg.line)
 		m.updateLogView()
 
+	case openURLRequestedMsg:
+		cmds = append(cmds, openURLCmd(m.lifecycle, msg.url))
+
+	case openURLResultMsg:
+		if msg.err != nil {
+			cmds = append(cmds, m.setStatus("▲ "+msg.err.Error(), true))
+		} else {
+			cmds = append(cmds, m.setStatus("Opened "+shortURLHost(msg.url), false))
+		}
+
 	case releaseListReadyMsg:
 		m.releaseNotes.ghLoading = false
 		if msg.owner != "" {
@@ -290,15 +302,17 @@ func (m *App) Update(msg bubble_tea.Msg) (bubble_tea.Model, bubble_tea.Cmd) {
 		}
 		// Apply piggy-backed nuspec release notes if present.
 		if msg.nuspecVer != "" {
-			m.releaseNotes.nsLoading = false
 			if msg.nuspecNotes != "" {
 				m.releaseNotes.nsAvailable = true
 			}
-			m.releaseNotes.nsNotes = msg.nuspecNotes
 			if m.releaseNotes.nsNotesCache == nil {
 				m.releaseNotes.nsNotesCache = make(map[string]string)
 			}
 			m.releaseNotes.nsNotesCache[msg.nuspecVer] = msg.nuspecNotes
+			if msg.nuspecVer == m.releaseNotes.selectedNuSpecVersion() {
+				m.releaseNotes.nsLoading = false
+				m.releaseNotes.nsNotes = msg.nuspecNotes
+			}
 		}
 		if msg.err != nil {
 			m.releaseNotes.ghErr = msg.err
@@ -323,6 +337,9 @@ func (m *App) Update(msg bubble_tea.Msg) (bubble_tea.Model, bubble_tea.Cmd) {
 		cmds = append(cmds, m.releaseNotes.fetchReleaseNotesCmd(msg.releases[0]))
 
 	case releaseNotesReadyMsg:
+		if msg.tag != m.releaseNotes.selectedGitHubTag() {
+			break
+		}
 		m.releaseNotes.ghLoading = false
 		if msg.err != nil {
 			m.releaseNotes.ghNotes = ""
@@ -333,16 +350,18 @@ func (m *App) Update(msg bubble_tea.Msg) (bubble_tea.Model, bubble_tea.Cmd) {
 		m.releaseNotes.updateViewportContent()
 
 	case nuspecVersionNotesReadyMsg:
-		m.releaseNotes.nsLoading = false
 		if msg.notes != "" {
 			m.releaseNotes.nsAvailable = true
 		}
-		m.releaseNotes.nsNotes = msg.notes
 		if m.releaseNotes.nsNotesCache == nil {
 			m.releaseNotes.nsNotesCache = make(map[string]string)
 		}
 		m.releaseNotes.nsNotesCache[msg.version] = msg.notes
-		m.releaseNotes.updateViewportContent()
+		if msg.version == m.releaseNotes.selectedNuSpecVersion() {
+			m.releaseNotes.nsLoading = false
+			m.releaseNotes.nsNotes = msg.notes
+			m.releaseNotes.updateViewportContent()
+		}
 
 	case depTreeReadyMsg:
 		m.depTree.loading = false
@@ -351,6 +370,9 @@ func (m *App) Update(msg bubble_tea.Msg) (bubble_tea.Model, bubble_tea.Cmd) {
 			m.depTree.content = m.depTree.renderParsedDotnetList(parseDotnetListOutput(msg.content))
 		}
 		m.depTree.vp.SetContent(m.depTree.buildContent())
+
+	case mouseInputMsg:
+		cmds = append(cmds, m.handleMouse(msg))
 
 	case bubble_tea.KeyMsg:
 		handled := false
@@ -372,23 +394,9 @@ func (m *App) Update(msg bubble_tea.Msg) (bubble_tea.Model, bubble_tea.Cmd) {
 			if keyMsg, ok := msg.(bubble_tea.KeyMsg); ok {
 				switch keyMsg.String() {
 				case "up", "k":
-					if m.projects.cursor > 0 {
-						m.projects.cursor--
-						m.clampProjectOffset()
-						m.packages.cursor = 0
-						m.packages.scroll = 0
-						m.rebuildPackageRows()
-						m.refreshDetail()
-					}
+					m.moveProjectCursor(-1)
 				case "down", "j":
-					if m.projects.cursor < len(m.projects.items)-1 {
-						m.projects.cursor++
-						m.clampProjectOffset()
-						m.packages.cursor = 0
-						m.packages.scroll = 0
-						m.rebuildPackageRows()
-						m.refreshDetail()
-					}
+					m.moveProjectCursor(1)
 				}
 			}
 		case focusDetail:
@@ -471,17 +479,13 @@ func (m *App) handleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 		}
 
 	case "up", "k":
-		if m.focus == focusPackages && m.packages.cursor > 0 {
-			m.packages.cursor--
-			m.clampOffset()
-			m.refreshDetail()
+		if m.focus == focusPackages {
+			m.movePackageCursor(-1)
 		}
 
 	case "down", "j":
-		if m.focus == focusPackages && m.packages.cursor < len(m.packages.rows)-1 {
-			m.packages.cursor++
-			m.clampOffset()
-			m.refreshDetail()
+		if m.focus == focusPackages {
+			m.movePackageCursor(1)
 		}
 
 	case "u":
@@ -537,21 +541,12 @@ func (m *App) handleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 
 	case "o":
 		if m.focus == focusPackages {
-			m.packages.sortMode = m.packages.sortMode.next()
-			m.packages.sortDir = m.packages.sortMode.defaultDir()
-			m.packages.cursor = 0
-			m.packages.scroll = 0
-			m.rebuildPackageRows()
-			m.refreshDetail()
+			m.cyclePackageSort()
 		}
 
 	case "O":
 		if m.focus == focusPackages {
-			m.packages.sortDir = !m.packages.sortDir
-			m.packages.cursor = 0
-			m.packages.scroll = 0
-			m.rebuildPackageRows()
-			m.refreshDetail()
+			m.reversePackageSort()
 		}
 
 	case "d":
@@ -642,9 +637,13 @@ func (m *App) View() bubble_tea.View {
 
 	// Overlay views — render in the space above the footer.
 	var overlay string
+	var overlayRegions []mouseRegion
 	for _, o := range m.overlays() {
 		if o.IsActive() {
 			overlay = o.Render()
+			if provider, ok := o.(interface{ MouseRegions() []mouseRegion }); ok {
+				overlayRegions = provider.MouseRegions()
+			}
 			break
 		}
 	}
@@ -659,6 +658,7 @@ func (m *App) View() bubble_tea.View {
 		}
 		trimmed := strings.Join(overlayLines, "\n")
 		v.SetContent(trimmed + "\n" + footer)
+		m.bindMouse(&v, mouseLayout{modal: true, regions: overlayRegions})
 		return v
 	}
 
@@ -688,5 +688,6 @@ func (m *App) View() bubble_tea.View {
 	content := strings.Join(bodyLines, "\n") + "\n" + footer
 
 	v.SetContent(content)
+	m.bindMouse(&v, m.mainMouseLayout(leftW, midW, rightW))
 	return v
 }

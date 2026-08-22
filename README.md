@@ -125,6 +125,9 @@ Usage:
     log-file     -lf, --log-file
                 Write all log output to this file (in addition to the TUI log panel)
 
+    no-mouse     -nm, --no-mouse
+                Disable mouse navigation in the TUI
+
     version      -V, --version
                 Print the version and exit
 ```
@@ -143,6 +146,9 @@ guget -v debug
 
 # Use the dracula theme
 guget -t dracula
+
+# Leave clicks and wheel events to the terminal
+guget --no-mouse
 
 # Sort by available updates, newest first
 guget -o available:desc
@@ -190,6 +196,21 @@ contracts.
 | `↓` / `j` | Move down |
 | `Enter` | Confirm / move focus from Projects to Packages |
 | `Esc` / `q` / `Ctrl+C` | Quit (main screen) / Close (overlay) |
+
+Mouse navigation is enabled by default. A left click selects project and
+package rows, sorts package columns, opens links, switches release-note tabs,
+and operates visible overlay buttons. Picker rows select or toggle their item;
+file-changing actions still require an explicit Add, Apply, Update, or Remove
+button. In the package header, click the bracketed sort mode to cycle through
+the modes and click its arrow to reverse direction. Requested, Available, and
+Source are direct sort shortcuts. The wheel navigates or scrolls the panel
+under the pointer without changing keyboard focus. Overlays remain modal, so
+clicks cannot reach the main screen underneath them.
+
+Mouse reporting can take over clicks that the terminal would otherwise use for
+text selection. Use the terminal's mouse-bypass modifier, commonly Shift, for
+native handling. Run `guget --no-mouse` to leave all mouse input with the
+terminal.
 
 ### Package Actions (packages panel)
 

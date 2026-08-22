@@ -54,8 +54,9 @@ type sectionBase struct {
 	maxMargin int // subtracted from availW for max (e.g. 4 → max = availW-4)
 
 	// State
-	active      bool // overlays: whether this overlay is currently shown
-	widthOffset int  // mutated by [ / ] resize
+	active       bool // overlays: whether this overlay is currently shown
+	widthOffset  int  // mutated by [ / ] resize
+	mouseRegions []mouseRegion
 }
 
 // Section is satisfied by any type that embeds sectionBase.
@@ -113,12 +114,101 @@ func (s *sectionBase) ResetOffset() {
 func (s *sectionBase) closeOverlay() {
 	s.ResetOffset()
 	s.active = false
+	s.mouseRegions = nil
 	s.app.ctx.StatusLine = ""
 }
 
 // centerOverlay wraps a rendered box in lipgloss.Place centered in the overlay area.
 func (s *sectionBase) centerOverlay(box string) string {
+	s.mouseRegions = nil
 	return lipgloss.Place(s.app.ctx.Width, s.app.overlayHeight(), lipgloss.Center, lipgloss.Center, box)
+}
+
+const (
+	overlayContentX = 3 // border (1) + horizontal padding (2)
+	overlayContentY = 2 // border (1) + vertical padding (1)
+)
+
+// centerOverlayInteractive translates box-relative regions into terminal
+// coordinates using the same centering rule as lipgloss.Place.
+func (s *sectionBase) centerOverlayInteractive(box string, regions []mouseRegion) string {
+	boxW := lipgloss.Width(box)
+	boxH := lipgloss.Height(box)
+	left := imax(0, (s.app.ctx.Width-boxW)/2)
+	top := imax(0, (s.app.overlayHeight()-boxH)/2)
+
+	s.mouseRegions = make([]mouseRegion, len(regions))
+	copy(s.mouseRegions, regions)
+	for i := range s.mouseRegions {
+		s.mouseRegions[i].rect.x += left
+		s.mouseRegions[i].rect.y += top
+	}
+	return lipgloss.Place(s.app.ctx.Width, s.app.overlayHeight(), lipgloss.Center, lipgloss.Center, box)
+}
+
+func (s *sectionBase) MouseRegions() []mouseRegion {
+	regions := make([]mouseRegion, len(s.mouseRegions))
+	copy(regions, s.mouseRegions)
+	return regions
+}
+
+func overlayTitleLine(title string, innerW int) string {
+	const closeLabel = "[×]"
+	if innerW <= lipgloss.Width(closeLabel) {
+		return styleSubtleBold.Render(closeLabel)
+	}
+	title = truncate(title, innerW-lipgloss.Width(closeLabel)-1)
+	gap := innerW - lipgloss.Width(title) - lipgloss.Width(closeLabel)
+	return styleAccentBold.Render(title) + strings.Repeat(" ", gap) + styleSubtleBold.Render(closeLabel)
+}
+
+func overlayCloseRegion(outerW int, handle func(bubble_tea.KeyMsg) bubble_tea.Cmd) mouseRegion {
+	return mouseRegion{
+		rect:  mouseRect{x: outerW - 6, y: overlayContentY, w: 3, h: 1},
+		click: keyMouseHandler(handle, bubble_tea.KeyEscape),
+	}
+}
+
+type overlayButton struct {
+	label string
+	code  rune
+}
+
+func renderOverlayButtons(innerW, contentLine int, handle func(bubble_tea.KeyMsg) bubble_tea.Cmd, buttons ...overlayButton) (string, []mouseRegion) {
+	plain := make([]string, len(buttons))
+	totalW := 0
+	for i, button := range buttons {
+		plain[i] = "[ " + button.label + " ]"
+		totalW += lipgloss.Width(plain[i])
+		if i > 0 {
+			totalW += 2
+		}
+	}
+	left := imax(0, (innerW-totalW)/2)
+	var line strings.Builder
+	line.WriteString(strings.Repeat(" ", left))
+	regions := make([]mouseRegion, 0, len(buttons))
+	x := left
+	for i, button := range buttons {
+		if i > 0 {
+			line.WriteString("  ")
+			x += 2
+		}
+		label := plain[i]
+		line.WriteString(styleAccentBold.Render(label))
+		width := lipgloss.Width(label)
+		regions = append(regions, mouseRegion{
+			rect: mouseRect{
+				x: overlayContentX + x,
+				y: overlayContentY + contentLine,
+				w: width,
+				h: 1,
+			},
+			click: keyMouseHandler(handle, button.code),
+		})
+		x += width
+	}
+	return line.String(), regions
 }
 
 func clampW(w, minW, maxW int) int {
@@ -164,7 +254,6 @@ func truncateStyled(s string, n int) string {
 }
 
 // hyperlinkEnabled controls whether OSC 8 escape codes are emitted.
-// Disabled when --no-color is active.
 var hyperlinkEnabled = true
 
 // hyperlink wraps text in an OSC 8 terminal hyperlink.
@@ -173,7 +262,14 @@ func hyperlink(url, text string) string {
 	if !hyperlinkEnabled || url == "" {
 		return text
 	}
-	return "\x1b]8;;" + url + "\x1b\\" + text + "\x1b]8;;\x1b\\ ↗"
+	return hyperlinkBare(url, text) + " ↗"
+}
+
+func hyperlinkBare(url, text string) string {
+	if !hyperlinkEnabled || url == "" {
+		return text
+	}
+	return "\x1b]8;;" + url + "\x1b\\" + text + "\x1b]8;;\x1b\\"
 }
 
 // clampListScroll adjusts *scroll so that cursor is visible within a viewport

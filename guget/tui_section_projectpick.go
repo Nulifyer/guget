@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	bubble_tea "charm.land/bubbletea/v2"
+	lipgloss "charm.land/lipgloss/v2"
 )
 
 func (m *App) openProjectPicker(pkgName, version string) {
@@ -168,12 +169,14 @@ func defaultAddTarget(p *ParsedProject) AddTarget {
 func (s *projectPicker) Render() string {
 	w := s.Width()
 	innerW := w - 6 // border (2) + padding (2*2)
+	regions := []mouseRegion{overlayCloseRegion(w, s.HandleKey)}
 
 	lines := []string{
-		styleAccentBold.Render("Add to which projects?"),
+		overlayTitleLine("Add to which projects?", innerW),
 		styleSubtle.Render(s.pkgName + " " + s.version),
 		"",
 	}
+	rowStart := len(lines)
 
 	maxVisible := s.app.overlayHeight() - 8
 	if maxVisible < 5 {
@@ -245,6 +248,17 @@ func (s *projectPicker) Render() string {
 		}
 
 		lines = append(lines, cursor+check+nameStyle.Render(name)+suffix)
+		index := i
+		regions = append(regions, mouseRegion{
+			rect: mouseRect{x: overlayContentX, y: overlayContentY + rowStart + i - start, w: innerW, h: 1},
+			click: func(bubble_tea.MouseMsg) bubble_tea.Cmd {
+				s.cursor = index
+				if s.items[index].selectable() {
+					s.items[index].selected = !s.items[index].selected
+				}
+				return nil
+			},
+		})
 	}
 
 	// Summary line
@@ -262,11 +276,22 @@ func (s *projectPicker) Render() string {
 	} else {
 		lines = append(lines, styleMuted.Render(padRight("", 2)+"No projects selected"))
 	}
+	lines = append(lines, "")
+	buttonLine, buttonRegions := renderOverlayButtons(innerW, len(lines), s.HandleKey,
+		overlayButton{label: "Cancel", code: bubble_tea.KeyEscape},
+		overlayButton{label: "Add", code: bubble_tea.KeyEnter},
+	)
+	lines = append(lines, buttonLine)
+	regions = append(regions, buttonRegions...)
 
 	box := styleOverlay.
 		Width(w).
 		Render(strings.Join(lines, "\n"))
-	return s.centerOverlay(box)
+	regions = append(regions, mouseRegion{
+		rect:  mouseRect{x: 1, y: 1, w: w - 2, h: lipgloss.Height(box) - 2},
+		wheel: verticalWheelHandler(s.HandleKey),
+	})
+	return s.centerOverlayInteractive(box, regions)
 }
 
 func formatCount(n int, singular, plural string) string {

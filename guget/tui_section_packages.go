@@ -60,61 +60,127 @@ func renderAvailableVersion(row packageRow) string {
 	return compStyle.Render(compat)
 }
 
+func renderCurrentVersion(row packageRow, width int) string {
+	if row.diverged {
+		low := styleSubtle.Render(row.oldest.String())
+		sep := styleMuted.Render("–")
+		high := styleYellow.Render(row.ref.Version.String())
+		return padRight(low+sep+high, width)
+	}
+	return padRight(styleSubtle.Render(currentVersionText(row)), width)
+}
+
+type packageColumnLayout struct {
+	innerW     int
+	nameW      int
+	currentW   int
+	availableW int
+	sourceW    int
+	showAvail  bool
+	showSource bool
+}
+
+func (m *App) packageColumns(w int) packageColumnLayout {
+	const (
+		colPrefix     = 4
+		versionColPad = 3
+		sourceColPad  = 2
+	)
+	header, _ := packageSortHeader(m.packages.sortMode, m.packages.sortDir)
+	minNameW := max(20, lipgloss.Width(header))
+	innerW := w - 4
+	currentW := len("Requested")
+	availableW := len("Available")
+	sourceW := len("Source")
+	for _, row := range m.packages.rows {
+		if n := lipgloss.Width(currentVersionText(row)); n > currentW {
+			currentW = n
+		}
+		if n := lipgloss.Width(availableVersionText(row)); n > availableW {
+			availableW = n
+		}
+		if n := lipgloss.Width(row.source); n > sourceW {
+			sourceW = n
+		}
+	}
+	currentW += versionColPad
+	availableW += versionColPad
+	sourceW += sourceColPad
+
+	budget := innerW - colPrefix - currentW
+	showSource := budget >= minNameW+availableW+sourceW
+	if showSource {
+		budget -= sourceW
+	}
+	showAvail := budget >= minNameW+availableW
+	if showAvail {
+		budget -= availableW
+	}
+	nameW := budget
+	if nameW < minNameW {
+		nameW = minNameW
+	}
+	return packageColumnLayout{
+		innerW: innerW, nameW: nameW, currentW: currentW,
+		availableW: availableW, sourceW: sourceW,
+		showAvail: showAvail, showSource: showSource,
+	}
+}
+
+func (m *App) setPackageSort(mode packageSortMode) {
+	if m.packages.sortMode == mode {
+		m.packages.sortDir = !m.packages.sortDir
+	} else {
+		m.packages.sortMode = mode
+		m.packages.sortDir = mode.defaultDir()
+	}
+	m.refreshPackageSort()
+}
+
+func (m *App) cyclePackageSort() {
+	m.packages.sortMode = m.packages.sortMode.next()
+	m.packages.sortDir = m.packages.sortMode.defaultDir()
+	m.refreshPackageSort()
+}
+
+func (m *App) reversePackageSort() {
+	m.packages.sortDir = !m.packages.sortDir
+	m.refreshPackageSort()
+}
+
+func (m *App) refreshPackageSort() {
+	m.packages.cursor = 0
+	m.packages.scroll = 0
+	m.rebuildPackageRows()
+	m.refreshDetail()
+}
+
+func packageSortHeader(mode packageSortMode, ascending bool) (text string, directionOffset int) {
+	arrow := "▼"
+	if ascending {
+		arrow = "▲"
+	}
+	prefix := "Package [" + mode.label() + "] "
+	return prefix + arrow, lipgloss.Width(prefix)
+}
+
 func (m *App) renderPackagePanel(w int) string {
 	focused := m.focus == focusPackages
 
 	visibleH := m.packageListHeight()
 	var lines []string
 
-	innerW := w - 4 // border + padding
-
-	const (
-		colPrefix = 4 // "▶ " + icon + space
-		minNameW  = 20
-		colPad    = 2 // padding between columns
-	)
-
-	// Compute column widths from actual data.
-	colCurrent := len("Requested")
-	colAvail := len("Available")
-	colSource := len("Source")
-	for _, row := range m.packages.rows {
-		if n := len(currentVersionText(row)); n > colCurrent {
-			colCurrent = n
-		}
-		if n := len(availableVersionText(row)); n > colAvail {
-			colAvail = n
-		}
-		if n := len(row.source); n > colSource {
-			colSource = n
-		}
-	}
-	colCurrent += colPad
-	colAvail += colPad
-	colSource += colPad
-
-	// Reserve columns: source hides first, then available.
-	budget := innerW - colPrefix - colCurrent
-	showSource := budget >= minNameW+colAvail+colSource
-	if showSource {
-		budget -= colSource
-	}
-	showAvail := budget >= minNameW+colAvail
-	if showAvail {
-		budget -= colAvail
-	}
-	nameW := budget
-	if nameW < minNameW {
-		nameW = minNameW
-	}
+	columns := m.packageColumns(w)
+	innerW := columns.innerW
+	nameW := columns.nameW
+	colCurrent := columns.currentW
+	colAvail := columns.availableW
+	showAvail := columns.showAvail
+	showSource := columns.showSource
 
 	// Header
 	hStyle := styleSubtleBold
-	sortArrow := "▼"
-	if m.packages.sortDir {
-		sortArrow = "▲"
-	}
-	pkgHeader := "Package (by " + m.packages.sortMode.label() + " " + sortArrow + ")"
+	pkgHeader, _ := packageSortHeader(m.packages.sortMode, m.packages.sortDir)
 	header := "  " + padRight(hStyle.Render(pkgHeader), nameW) +
 		padRight(hStyle.Render("Requested"), colCurrent)
 	if showAvail {
@@ -155,15 +221,7 @@ func (m *App) renderPackagePanel(w int) string {
 		}
 		name := padRight(nameStyle.Render(rawName), nameW)
 
-		var current string
-		if row.diverged {
-			low := styleSubtle.Render(row.oldest.String())
-			sep := styleMuted.Render("–")
-			high := styleYellow.Render(currentVersionText(row))
-			current = padRight(low+sep+high, colCurrent)
-		} else {
-			current = padRight(styleSubtle.Render(currentVersionText(row)), colCurrent)
-		}
+		current := renderCurrentVersion(row, colCurrent)
 
 		line := ""
 		prefix := "  "

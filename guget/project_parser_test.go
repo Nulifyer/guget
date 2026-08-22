@@ -813,6 +813,86 @@ func TestParseCsproj_AddTargets_CPM(t *testing.T) {
 	}
 }
 
+func TestParseCsproj_DoesNotEnableDisabledCPM(t *testing.T) {
+	dir := t.TempDir()
+	projectPath := filepath.Join(dir, "App.csproj")
+	mustWriteFile(t, filepath.Join(dir, "Directory.Packages.props"), `<Project><PropertyGroup><ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally></PropertyGroup><ItemGroup><PackageVersion Include="Example.Core" Version="2.0.0" /></ItemGroup></Project>`)
+	mustWriteFile(t, projectPath, `<Project Sdk="Microsoft.NET.Sdk"><ItemGroup><PackageReference Include="Example.Core" /></ItemGroup></Project>`)
+
+	project, err := ParseCsproj(projectPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, target := range project.AddTargets {
+		if target.Kind == AddTargetCPM {
+			t.Fatalf("disabled CPM was offered as an add target: %#v", target)
+		}
+	}
+	for ref := range project.Packages {
+		if ref.Name == "Example.Core" && ref.Version.Raw != "" {
+			t.Fatalf("disabled central version was applied: %#v", ref)
+		}
+	}
+}
+
+func TestParseCsproj_DoesNotEnableConditionalCPM(t *testing.T) {
+	dir := t.TempDir()
+	projectPath := filepath.Join(dir, "App.csproj")
+	mustWriteFile(t, filepath.Join(dir, "Directory.Packages.props"), `<Project><PropertyGroup Condition="'$(UseCPM)' == 'true'"><ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally></PropertyGroup><ItemGroup><PackageVersion Include="Example.Core" Version="2.0.0" /></ItemGroup></Project>`)
+	mustWriteFile(t, projectPath, `<Project Sdk="Microsoft.NET.Sdk"><ItemGroup><PackageReference Include="Example.Core" /></ItemGroup></Project>`)
+
+	project, err := ParseCsproj(projectPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if projectCPMTarget(project) != "" {
+		t.Fatal("conditional CPM was treated as unconditionally active")
+	}
+}
+
+func TestParseCsproj_EnablesCPMFromDirectoryBuildProps(t *testing.T) {
+	dir := t.TempDir()
+	projectDir := filepath.Join(dir, "src")
+	projectPath := filepath.Join(projectDir, "App.csproj")
+	mustWriteFile(t, filepath.Join(dir, "Directory.Packages.props"), `<Project><ItemGroup><PackageVersion Include="Example.Core" Version="2.0.0" /></ItemGroup></Project>`)
+	mustWriteFile(t, filepath.Join(dir, "Directory.Build.props"), `<Project><PropertyGroup><ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally></PropertyGroup></Project>`)
+	mustWriteFile(t, filepath.Join(projectDir, "Directory.Build.props"), `<Project><Import Project="$([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(MSBuildThisFileDirectory)../'))" /></Project>`)
+	mustWriteFile(t, projectPath, `<Project Sdk="Microsoft.NET.Sdk"><ItemGroup><PackageReference Include="Example.Core" /></ItemGroup></Project>`)
+
+	project, err := ParseCsproj(projectPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if projectCPMTarget(project) == "" {
+		t.Fatal("expected active CPM target")
+	}
+	for ref := range project.Packages {
+		if ref.Name == "Example.Core" && ref.Version.Raw == "2.0.0" {
+			return
+		}
+	}
+	t.Fatal("central version was not resolved")
+}
+
+func TestParseCsproj_IgnoresPackageReferenceRemove(t *testing.T) {
+	dir := t.TempDir()
+	projectPath := filepath.Join(dir, "App.csproj")
+	mustWriteFile(t, projectPath, `<Project Sdk="Microsoft.NET.Sdk"><ItemGroup><PackageReference Remove="Analyzer.Package" /><PackageReference Include="Example.Core" Version="1.0.0" /></ItemGroup></Project>`)
+
+	project, err := ParseCsproj(projectPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if project.Packages.Len() != 1 {
+		t.Fatalf("packages = %#v", project.Packages.ToSlice())
+	}
+	for ref := range project.Packages {
+		if ref.Name != "Example.Core" {
+			t.Fatalf("unexpected package %#v", ref)
+		}
+	}
+}
+
 func TestParseCsproj_AddTargets_ImportedProps(t *testing.T) {
 	td := testDataDir(t)
 	proj, err := ParseCsproj(filepath.Join(td, "ProjectB", "ProjectB.csproj"))

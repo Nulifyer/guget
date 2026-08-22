@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/nulifyer/guget/internal/atomicfile"
 )
 
 func TestPlanRefusesStaleFileBeforeWriting(t *testing.T) {
@@ -29,6 +31,39 @@ func TestPlanRefusesStaleFileBeforeWriting(t *testing.T) {
 	data, _ := os.ReadFile(path)
 	if got := string(data); got != "external" {
 		t.Fatalf("contents = %q, want external edit preserved", got)
+	}
+}
+
+func TestPlanRollsBackWriteThatFailedAfterReplace(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "App.csproj")
+	if err := os.WriteFile(path, []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	change, _ := ReadChange(path, []byte("new"))
+	plan, err := NewPlan(change)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writes := 0
+	result, err := plan.apply(func(path string, data []byte, mode os.FileMode) error {
+		writes++
+		if writeErr := os.WriteFile(path, data, mode); writeErr != nil {
+			return writeErr
+		}
+		if writes == 1 {
+			return atomicfile.ErrAfterReplace
+		}
+		return nil
+	})
+	if !errors.Is(err, atomicfile.ErrAfterReplace) {
+		t.Fatalf("error = %v, want ErrAfterReplace", err)
+	}
+	if len(result.RolledBack) != 1 || result.RolledBack[0] != path {
+		t.Fatalf("RolledBack = %v", result.RolledBack)
+	}
+	data, _ := os.ReadFile(path)
+	if got := string(data); got != "old" {
+		t.Fatalf("contents = %q, want old", got)
 	}
 }
 

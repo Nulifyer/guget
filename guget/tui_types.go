@@ -30,9 +30,9 @@ type packageSortMode int
 const (
 	sortByStatus    packageSortMode = iota // status then name (default)
 	sortByName                             // name only
+	sortBySource                           // source then name
 	sortByCurrent                          // published date of installed version (newest first)
 	sortByAvailable                        // published date of best available upgrade (newest first)
-	sortBySource                           // source then name
 )
 
 func (s packageSortMode) label() string {
@@ -150,6 +150,15 @@ type logLineMsg struct {
 	line string
 }
 
+type openURLRequestedMsg struct {
+	url string
+}
+
+type openURLResultMsg struct {
+	url string
+	err error
+}
+
 type depTreeReadyMsg struct {
 	content string
 	err     error
@@ -165,6 +174,7 @@ type releaseListReadyMsg struct {
 }
 
 type releaseNotesReadyMsg struct {
+	tag     string
 	body    string
 	htmlURL string
 	err     error

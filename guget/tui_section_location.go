@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	bubble_tea "charm.land/bubbletea/v2"
+	lipgloss "charm.land/lipgloss/v2"
 	editplan "github.com/nulifyer/guget/internal/edit"
 )
 
@@ -136,12 +137,15 @@ func (m *App) addPackageToLocation(pkgName, version string, project *ParsedProje
 
 func (s *locationPicker) Render() string {
 	w := s.Width()
+	innerW := w - 6
+	regions := []mouseRegion{overlayCloseRegion(w, s.HandleKey)}
 
 	lines := []string{
-		styleAccentBold.Render("Add to which file?"),
+		overlayTitleLine("Add to which file?", innerW),
 		styleSubtle.Render(s.pkgName + " " + s.version),
 		"",
 	}
+	rowStart := len(lines)
 
 	type row struct {
 		fileName  string
@@ -184,10 +188,29 @@ func (s *locationPicker) Render() string {
 			padRight(styleMuted.Render("["+r.kindLabel+"]"), maxKind+3) +
 			styleSubtle.Render(r.desc)
 		lines = append(lines, line)
+		index := i
+		regions = append(regions, mouseRegion{
+			rect: mouseRect{x: overlayContentX, y: overlayContentY + rowStart + i, w: innerW, h: 1},
+			click: func(bubble_tea.MouseMsg) bubble_tea.Cmd {
+				s.cursor = index
+				return nil
+			},
+		})
 	}
+	lines = append(lines, "")
+	buttonLine, buttonRegions := renderOverlayButtons(innerW, len(lines), s.HandleKey,
+		overlayButton{label: "Cancel", code: bubble_tea.KeyEscape},
+		overlayButton{label: "Add", code: bubble_tea.KeyEnter},
+	)
+	lines = append(lines, buttonLine)
+	regions = append(regions, buttonRegions...)
 
 	box := styleOverlay.
 		Width(w).
 		Render(strings.Join(lines, "\n"))
-	return s.centerOverlay(box)
+	regions = append(regions, mouseRegion{
+		rect:  mouseRect{x: 1, y: 1, w: w - 2, h: lipgloss.Height(box) - 2},
+		wheel: verticalWheelHandler(s.HandleKey),
+	})
+	return s.centerOverlayInteractive(box, regions)
 }

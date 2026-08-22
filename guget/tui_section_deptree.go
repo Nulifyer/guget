@@ -395,7 +395,7 @@ func (s *depTreeOverlay) Render() string {
 
 	var lines []string
 	lines = append(lines,
-		styleAccentBold.Render(s.title),
+		overlayTitleLine(s.title, innerW),
 	)
 	lines = append(lines,
 		styleBorder.Render(strings.Repeat("─", innerW)),
@@ -418,6 +418,13 @@ func (s *depTreeOverlay) Render() string {
 	box := styleOverlay.
 		Width(overlayW).
 		Render(strings.Join(lines, "\n"))
+	regions := []mouseRegion{
+		overlayCloseRegion(overlayW, s.HandleKey),
+		{
+			rect:  mouseRect{x: 1, y: 1, w: overlayW - 2, h: lipgloss.Height(box) - 2},
+			wheel: verticalWheelHandler(s.HandleKey),
+		},
+	}
 
-	return s.centerOverlay(box)
+	return s.centerOverlayInteractive(box, regions)
 }

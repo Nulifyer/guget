@@ -61,6 +61,7 @@ const (
 	Flag_LogFile    = "log-file"
 	Flag_Theme      = "theme"
 	Flag_SortBy     = "sort-by"
+	Flag_NoMouse    = "no-mouse"
 )
 
 type BuiltFlags struct {
@@ -71,6 +72,7 @@ type BuiltFlags struct {
 	LogFile    string
 	Theme      string
 	SortBy     string
+	NoMouse    bool
 }
 
 func BuildFlags(flags map[string]IParsedFlag) BuiltFlags {
@@ -82,6 +84,7 @@ func BuildFlags(flags map[string]IParsedFlag) BuiltFlags {
 		LogFile:    GetFlag[string](flags, Flag_LogFile),
 		Theme:      GetFlag[string](flags, Flag_Theme),
 		SortBy:     GetFlag[string](flags, Flag_SortBy),
+		NoMouse:    GetFlag[bool](flags, Flag_NoMouse),
 	}
 }
 
@@ -97,6 +100,12 @@ func registerCLIFlags() {
 		Aliases:     []string{"-nc", "--no-color"},
 		Default:     Optional(false),
 		Description: "Disable colored output in the terminal",
+	})
+	RegisterFlag(Flag[bool]{
+		Name:        Flag_NoMouse,
+		Aliases:     []string{"-nm", "--no-mouse"},
+		Default:     Optional(false),
+		Description: "Disable mouse navigation in the TUI",
 	})
 	RegisterFlag(Flag[string]{
 		Name:           Flag_Verbosity,

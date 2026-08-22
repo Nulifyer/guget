@@ -8,6 +8,10 @@ import (
 	"time"
 )
 
+// ErrAfterReplace marks an error reported after the destination already
+// contains the requested data. Multi-file callers must roll that path back.
+var ErrAfterReplace = errors.New("destination replaced before durability check failed")
+
 // WriteFile replaces path only after data has been written and synced to a
 // same-directory temporary file. Existing permissions are preserved.
 func WriteFile(path string, data []byte, fallbackMode os.FileMode) error {
@@ -55,10 +59,10 @@ func WriteFile(path string, data []byte, fallbackMode os.FileMode) error {
 		}
 		time.Sleep(time.Duration(50*(attempt+1)) * time.Millisecond)
 	}
-	if err := syncDirectory(dir); err != nil {
-		return fmt.Errorf("sync directory for %s: %w", path, err)
-	}
 	committed = true
+	if err := syncDirectory(dir); err != nil {
+		return fmt.Errorf("%w: sync directory for %s: %w", ErrAfterReplace, path, err)
+	}
 	return nil
 }
 

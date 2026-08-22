@@ -100,7 +100,11 @@ func (p Plan) apply(write writeFunc) (Result, error) {
 
 	for _, change := range p.changes {
 		if err := write(change.Path, change.After, change.Mode); err != nil {
-			rollbackErr := p.rollback(write, result.Changed, &result)
+			changed := result.Changed
+			if errors.Is(err, atomicfile.ErrAfterReplace) {
+				changed = append(append([]string(nil), changed...), change.Path)
+			}
+			rollbackErr := p.rollback(write, changed, &result)
 			return result, errors.Join(fmt.Errorf("apply %s: %w", change.Path, err), rollbackErr)
 		}
 		result.Changed = append(result.Changed, change.Path)
@@ -118,6 +122,9 @@ func (p Plan) rollback(write writeFunc, changed []string, result *Result) error 
 		path := changed[i]
 		change := byPath[path]
 		if err := write(path, change.Before, change.Mode); err != nil {
+			if errors.Is(err, atomicfile.ErrAfterReplace) {
+				result.RolledBack = append(result.RolledBack, path)
+			}
 			errs = append(errs, fmt.Errorf("rollback %s: %w", path, err))
 			continue
 		}

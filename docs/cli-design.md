@@ -146,6 +146,8 @@ Mutation commands add:
 --interactive                allow an authentication provider to prompt
 ```
 
+`restore` also accepts `--interactive` and passes it to `dotnet restore`.
+
 `add` requires at least one `--file`. `update` and `remove` require one or more
 `--file` values or `--all`. They never guess a target from a TUI selection or use
 the current package row. `--file` and `--all` are mutually exclusive.

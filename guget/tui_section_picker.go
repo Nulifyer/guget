@@ -99,6 +99,8 @@ func (m *App) openVersionPicker() {
 
 func (s *versionPicker) Render() string {
 	w := s.Width()
+	innerW := w - 6
+	regions := []mouseRegion{overlayCloseRegion(w, s.HandleKey)}
 	maxVisible := 16
 	versions := s.versions
 
@@ -121,7 +123,7 @@ func (s *versionPicker) Render() string {
 
 	var lines []string
 	lines = append(lines,
-		styleAccentBold.Render("Select version"),
+		overlayTitleLine("Select version", innerW),
 	)
 	lines = append(lines,
 		styleSubtle.Render(s.pkgName),
@@ -136,8 +138,9 @@ func (s *versionPicker) Render() string {
 		lines = append(lines, notice)
 	}
 	lines = append(lines,
-		styleBorder.Render(strings.Repeat("─", w-6)),
+		styleBorder.Render(strings.Repeat("─", innerW)),
 	)
+	rowStart := len(lines)
 
 	for i := start; i < end; i++ {
 		v := versions[i]
@@ -194,7 +197,7 @@ func (s *versionPicker) Render() string {
 		verStr := style.Render(v.SemVer.String())
 		if strings.EqualFold(pkgSource, "nuget.org") || (pkgInfo != nil && pkgInfo.NugetOrgURL != "") {
 			verURL := "https://www.nuget.org/packages/" + s.pkgName + "/" + v.SemVer.String()
-			verStr = hyperlink(verURL, verStr)
+			verStr += " " + hyperlinkBare(verURL, styleSubtle.Render("↗"))
 		}
 		verText := style.Render(prefix) + verStr + extras
 
@@ -210,6 +213,14 @@ func (s *versionPicker) Render() string {
 			}
 		}
 		lines = append(lines, verText)
+		index := i
+		regions = append(regions, mouseRegion{
+			rect: mouseRect{x: overlayContentX, y: overlayContentY + rowStart + i - start, w: innerW, h: 1},
+			click: func(bubble_tea.MouseMsg) bubble_tea.Cmd {
+				s.cursor = index
+				return nil
+			},
+		})
 	}
 
 	lines = append(lines, "")
@@ -218,10 +229,25 @@ func (s *versionPicker) Render() string {
 		styleRed.Render("■") + " incompat  " +
 		styleRed.Render("▲") + " vuln"
 	lines = append(lines, styleMuted.Render(legend))
+	lines = append(lines, "")
+	actionLabel := "Apply"
+	if s.addMode {
+		actionLabel = "Add"
+	}
+	buttonLine, buttonRegions := renderOverlayButtons(innerW, len(lines), s.HandleKey,
+		overlayButton{label: "Cancel", code: bubble_tea.KeyEscape},
+		overlayButton{label: actionLabel, code: bubble_tea.KeyEnter},
+	)
+	lines = append(lines, buttonLine)
+	regions = append(regions, buttonRegions...)
 
 	box := styleOverlay.
 		Width(w).
 		Render(strings.Join(lines, "\n"))
+	regions = append(regions, mouseRegion{
+		rect:  mouseRect{x: 1, y: 1, w: w - 2, h: lipgloss.Height(box) - 2},
+		wheel: verticalWheelHandler(s.HandleKey),
+	})
 
-	return s.centerOverlay(box)
+	return s.centerOverlayInteractive(box, regions)
 }

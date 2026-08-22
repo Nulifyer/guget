@@ -10,7 +10,7 @@ useful in `list` even when an item is read-only.
 | SDK-style C#, F#, or VB project | Yes | Yes | Literal project-owned references are supported. |
 | `PackageReference Include` or `Update` | Yes | Yes | Attribute and child-element versions are recognized. |
 | `VersionOverride` | Yes | Yes | Treated as a project-owned version. |
-| Central Package Management | Yes | Yes | Reference and version owners are separate; adds are transactional across both files. |
+| Central Package Management | Yes | Yes | Requires a literal, unconditional `ManagePackageVersionsCentrally=true`; reference and version owners are separate. |
 | `Directory.Build.props` or explicit `.props` import | Yes | Limited | Literal, unambiguous owners can update; inherited removal is refused without a local reference. |
 | MSBuild property version expression | Yes | Read-only by default | Evaluated value is shown, but rewriting the property owner is not inferred. |
 | Conditional references | Per evaluated TFM | Limited | Only XML shapes with a proven literal owner are editable. |
@@ -23,3 +23,5 @@ useful in `list` even when an item is read-only.
 
 Mutation commands require explicit files or `--all`, refuse ambiguous ownership,
 and preflight source hashes. Unsupported files remain byte-for-byte unchanged.
+The TUI can inspect projects with only restore-only sources. Metadata search and
+release lookup remain unavailable until an HTTP(S) V3 source is configured.

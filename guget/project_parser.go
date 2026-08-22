@@ -15,7 +15,8 @@ import (
 )
 
 type ImportElement struct {
-	Project string `xml:"Project,attr"`
+	Project   string `xml:"Project,attr"`
+	Condition string `xml:"Condition,attr"`
 }
 
 type Project struct {
@@ -33,9 +34,16 @@ type PropertyGroup struct {
 	TargetFramework  string
 	TargetFrameworks string
 	Properties       map[string]string // all other child elements
+	Condition        string
 }
 
 func (pg *PropertyGroup) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error {
+	for _, attr := range start.Attr {
+		if attr.Name.Local == "Condition" {
+			pg.Condition = attr.Value
+			break
+		}
+	}
 	for {
 		tok, err := d.Token()
 		if err != nil {
@@ -186,13 +194,14 @@ func ParseCsproj(filePath string) (*ParsedProject, error) {
 
 	projectDir := filepath.Dir(filePath)
 	visited := map[string]bool{absFilePath: true}
+	dbp := findDirectoryBuildProps(projectDir)
 
 	// Build CPM version map from Directory.Packages.props if present.
 	// CPM projects declare <PackageReference Include="Pkg" /> without a Version;
 	// the version is defined centrally as <PackageVersion Include="Pkg" Version="x" />.
 	cpmVersions := make(map[string]string) // lowercase name → version string
 	var cpmFilePath string
-	if dpp := findDirectoryPackagesProps(projectDir); dpp != "" {
+	if dpp := activeDirectoryPackagesProps(projectDir, project.PropertyGroups, dbp); dpp != "" {
 		if absDpp, err := filepath.Abs(dpp); err == nil {
 			cpmFilePath = absDpp
 			if refs, _, _, err := parsePropsFile(absDpp); err == nil {
@@ -207,6 +216,10 @@ func ParseCsproj(filePath string) (*ParsedProject, error) {
 
 	for _, ig := range project.ItemGroups {
 		for _, raw := range ig.PackageReferences {
+			name := raw.effectiveName()
+			if name == "" {
+				continue
+			}
 			version := raw.Version
 			sourceFile := filePath
 			switch {
@@ -218,23 +231,22 @@ func ParseCsproj(filePath string) (*ParsedProject, error) {
 				version = raw.VersionOverride
 			case cpmFilePath != "":
 				// No version specified — resolve from Directory.Packages.props.
-				if cpmVer, ok := cpmVersions[strings.ToLower(raw.effectiveName())]; ok {
+				if cpmVer, ok := cpmVersions[strings.ToLower(name)]; ok {
 					version = cpmVer
 					sourceFile = cpmFilePath
 				}
 			}
 			result.Packages.Add(PackageReference{
-				Name:      raw.effectiveName(),
+				Name:      name,
 				Version:   ParseSemVer(version),
 				Requested: version,
 				Locked:    isExactLock(version),
 			})
-			result.PackageSources[strings.ToLower(raw.effectiveName())] = sourceFile
+			result.PackageSources[strings.ToLower(name)] = sourceFile
 		}
 	}
 
 	// Implicit import: Directory.Build.props (walk up from project dir)
-	dbp := findDirectoryBuildProps(projectDir)
 	if dbp != "" {
 		collectPropsPackages(result, dbp, projectDir, visited)
 	}
@@ -384,6 +396,113 @@ func findDirectoryPackagesProps(startDir string) string {
 	return ""
 }
 
+// activeDirectoryPackagesProps returns the nearest central package file only
+// when CPM is enabled by a literal, unconditional property. NuGet imports the
+// central file before Directory.Build.props and the project, so later values
+// override earlier ones here as they do during evaluation.
+func activeDirectoryPackagesProps(startDir string, projectGroups []PropertyGroup, buildPropsPath string) string {
+	dpp := findDirectoryPackagesProps(startDir)
+	if dpp == "" {
+		return ""
+	}
+
+	enabled := false
+	known := false
+	applyGroups := func(groups []PropertyGroup) {
+		if value, ok := literalBoolProperty(groups, "ManagePackageVersionsCentrally"); ok {
+			enabled = value
+			known = true
+		}
+	}
+	if value, ok := literalBoolPropertyFromFile(dpp, startDir, "ManagePackageVersionsCentrally", make(map[string]bool)); ok {
+		enabled, known = value, true
+	}
+	if buildPropsPath != "" {
+		if value, ok := literalBoolPropertyFromFile(buildPropsPath, startDir, "ManagePackageVersionsCentrally", make(map[string]bool)); ok {
+			enabled, known = value, true
+		}
+	}
+	applyGroups(projectGroups)
+	if !known || !enabled {
+		return ""
+	}
+	return dpp
+}
+
+func literalBoolPropertyFromFile(path, projectDir, name string, visited map[string]bool) (bool, bool) {
+	absPath, err := filepath.Abs(path)
+	if err != nil || visited[absPath] {
+		return false, false
+	}
+	visited[absPath] = true
+
+	_, imports, groups, err := parsePropsFile(absPath)
+	if err != nil {
+		return false, false
+	}
+	value := false
+	found := false
+	for _, imported := range imports {
+		if strings.TrimSpace(imported.Condition) != "" {
+			continue
+		}
+		resolved, resolveErr := resolveImportPath(imported.Project, filepath.Dir(absPath), projectDir)
+		if resolveErr != nil {
+			resolved = resolveGetPathOfFileAboveImport(imported.Project, filepath.Dir(absPath))
+		}
+		if resolved == "" {
+			continue
+		}
+		if importedValue, ok := literalBoolPropertyFromFile(resolved, projectDir, name, visited); ok {
+			value, found = importedValue, true
+		}
+	}
+	if localValue, ok := literalBoolProperty(groups, name); ok {
+		value, found = localValue, true
+	}
+	return value, found
+}
+
+func resolveGetPathOfFileAboveImport(raw, referringFileDir string) string {
+	lower := strings.ToLower(raw)
+	const buildPropsCall = "getpathoffileabove('directory.build.props'"
+	const packagesPropsCall = "getpathoffileabove('directory.packages.props'"
+	startDir := filepath.Dir(referringFileDir)
+	switch {
+	case strings.Contains(lower, buildPropsCall):
+		return findDirectoryBuildProps(startDir)
+	case strings.Contains(lower, packagesPropsCall):
+		return findDirectoryPackagesProps(startDir)
+	default:
+		return ""
+	}
+}
+
+func literalBoolProperty(groups []PropertyGroup, name string) (bool, bool) {
+	var value bool
+	found := false
+	for _, group := range groups {
+		for property, raw := range group.Properties {
+			if !strings.EqualFold(property, name) {
+				continue
+			}
+			if strings.TrimSpace(group.Condition) != "" {
+				value, found = false, true
+				continue
+			}
+			switch strings.ToLower(strings.TrimSpace(raw)) {
+			case "true":
+				value, found = true, true
+			case "false":
+				value, found = false, true
+			default:
+				value, found = false, true
+			}
+		}
+	}
+	return value, found
+}
+
 // resolveImportPath resolves MSBuild-style import paths with basic variable substitution.
 // referringFileDir is the directory containing the file with the <Import> element.
 // projectDir is the directory of the .csproj/.fsproj being parsed.
@@ -432,10 +551,16 @@ func parsePropsFile(filePath string) ([]rawPackageReference, []ImportElement, []
 			continue
 		}
 		for _, r := range ig.PackageReferences {
+			if r.effectiveName() == "" {
+				continue
+			}
 			r.Version = resolveProps(r.Version, props)
 			refs = append(refs, r)
 		}
 		for _, r := range ig.PackageVersions {
+			if r.effectiveName() == "" {
+				continue
+			}
 			r.Version = resolveProps(r.Version, props)
 			refs = append(refs, r)
 		}

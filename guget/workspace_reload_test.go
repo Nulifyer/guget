@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"slices"
@@ -8,6 +9,20 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 )
+
+func TestLoadWorkspaceAllowsRestoreOnlySources(t *testing.T) {
+	root := t.TempDir()
+	mustWriteFile(t, filepath.Join(root, "App.csproj"), `<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup></Project>`)
+	mustWriteFile(t, filepath.Join(root, "NuGet.Config"), `<configuration><packageSources><clear/><add key="local" value="./packages"/></packageSources></configuration>`)
+
+	snapshot, err := loadWorkspaceContext(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Sources) != 1 || len(snapshot.NugetServices) != 0 {
+		t.Fatalf("sources = %#v, services = %#v", snapshot.Sources, snapshot.NugetServices)
+	}
+}
 
 func TestPlanPackageReload_ReusesCachedResults(t *testing.T) {
 	snapshot := &workspaceSnapshot{

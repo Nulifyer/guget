@@ -28,7 +28,7 @@ func (s *sourcesOverlay) Render() string {
 
 	var lines []string
 	lines = append(lines,
-		styleAccentBold.Render("NuGet Sources"),
+		overlayTitleLine("NuGet Sources", innerW),
 	)
 	lines = append(lines,
 		styleBorder.Render(strings.Repeat("─", innerW)),
@@ -58,5 +58,5 @@ func (s *sourcesOverlay) Render() string {
 		Width(w).
 		Render(strings.Join(lines, "\n"))
 
-	return s.centerOverlay(box)
+	return s.centerOverlayInteractive(box, []mouseRegion{overlayCloseRegion(w, s.HandleKey)})
 }

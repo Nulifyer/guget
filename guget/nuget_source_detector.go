@@ -256,10 +256,14 @@ func sourcesFromBuildProps(path string) []NugetSource {
 			raw = strings.TrimSpace(raw)
 			if raw != "" {
 				value := raw
-				if !strings.HasPrefix(value, "http://") && !strings.HasPrefix(value, "https://") && !filepath.IsAbs(value) {
+				isHTTP := strings.HasPrefix(strings.ToLower(value), "http://") || strings.HasPrefix(strings.ToLower(value), "https://")
+				if !isHTTP && !filepath.IsAbs(value) {
 					value = filepath.Join(filepath.Dir(path), value)
 				}
-				sources = append(sources, NugetSource{Name: raw, URL: filepath.Clean(value)})
+				if !isHTTP {
+					value = filepath.Clean(value)
+				}
+				sources = append(sources, NugetSource{Name: raw, URL: value})
 			}
 		}
 	}

@@ -109,6 +109,9 @@ func (s *packageSearch) doSearchCmd(query string) bubble_tea.Cmd {
 	services := s.app.ctx.NugetServices
 	sourceMapping := s.app.ctx.SourceMapping
 	return func() bubble_tea.Msg {
+		if len(services) == 0 {
+			return searchResultsMsg{query: query, err: fmt.Errorf("no metadata-capable NuGet sources are available")}
+		}
 		type sourceResult struct {
 			results []SearchResult
 			err     error
@@ -176,7 +179,7 @@ func (s *packageSearch) fetchPackageCmd(id string) bubble_tea.Cmd {
 	services := FilterServices(s.app.ctx.NugetServices, s.app.ctx.SourceMapping, id)
 	return func() bubble_tea.Msg {
 		if len(services) == 0 {
-			return packageFetchedMsg{err: fmt.Errorf("package source mapping allows no available source for %q", id)}
+			return packageFetchedMsg{err: fmt.Errorf("no metadata-capable NuGet source is available for %q", id)}
 		}
 		var lastErr error
 		for _, svc := range services {
@@ -193,21 +196,26 @@ func (s *packageSearch) fetchPackageCmd(id string) bubble_tea.Cmd {
 func (s *packageSearch) Render() string {
 	w := s.Width()
 	innerW := w - 6 // border (2) + padding (2*2)
+	regions := []mouseRegion{overlayCloseRegion(w, s.HandleKey)}
 
 	var lines []string
 
 	// Title row
-	title := styleAccentBold.Render("Add Package")
 	proj := s.app.selectedProject()
-	projName := ""
+	title := "Add Package"
 	if proj != nil {
-		projName = styleSubtle.
-			Render("  " + truncate(proj.FileName, innerW-15))
+		title += "  " + proj.FileName
 	}
-	lines = append(lines, title+projName)
+	lines = append(lines, overlayTitleLine(title, innerW))
 
 	// Text input
 	lines = append(lines, s.input.View())
+	regions = append(regions, mouseRegion{
+		rect: mouseRect{x: overlayContentX, y: overlayContentY + 1, w: innerW, h: 1},
+		click: func(bubble_tea.MouseMsg) bubble_tea.Cmd {
+			return s.input.Focus()
+		},
+	})
 
 	// Divider
 	lines = append(lines,
@@ -306,12 +314,24 @@ func (s *packageSearch) Render() string {
 
 			line := prefix + pkgID + source + ver
 			lines = append(lines, line)
+			index := i
+			regions = append(regions, mouseRegion{
+				rect: mouseRect{x: overlayContentX, y: overlayContentY + len(lines) - 1, w: innerW, h: 1},
+				click: func(bubble_tea.MouseMsg) bubble_tea.Cmd {
+					s.cursor = index
+					return s.HandleKey(bubble_tea.KeyPressMsg(bubble_tea.Key{Code: bubble_tea.KeyEnter}))
+				},
+			})
 		}
 	}
 
 	box := styleOverlay.
 		Width(w).
 		Render(strings.Join(lines, "\n"))
+	regions = append(regions, mouseRegion{
+		rect:  mouseRect{x: 1, y: 1, w: w - 2, h: lipgloss.Height(box) - 2},
+		wheel: verticalWheelHandler(s.HandleKey),
+	})
 
-	return s.centerOverlay(box)
+	return s.centerOverlayInteractive(box, regions)
 }

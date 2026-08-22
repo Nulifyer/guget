@@ -44,6 +44,14 @@ func (s *helpOverlay) refreshView() {
 			},
 		},
 		{
+			title: "Mouse",
+			rows: [][2]string{
+				{"left click", "select rows, tabs, links, and buttons"},
+				{"wheel", "navigate or scroll under the pointer"},
+				{"Shift + mouse", "native terminal selection"},
+			},
+		},
+		{
 			title: "Package actions  (packages panel)",
 			rows: [][2]string{
 				{"u", "update to latest compatible (this project)"},
@@ -122,7 +130,6 @@ func (s *helpOverlay) refreshView() {
 	maxKeyW += 2
 
 	var lines []string
-	lines = append(lines, styleAccentBold.Render("Keybindings"))
 
 	for _, sec := range sections {
 		lines = append(lines, "")
@@ -137,9 +144,9 @@ func (s *helpOverlay) refreshView() {
 	w := s.Width()
 
 	content := strings.Join(lines, "\n")
-	// Available height for content inside the overlay box:
-	// overlay area - border (2) - padding (2) - margin (2)
-	maxH := s.app.overlayHeight() - 6
+	// Available height for scrollable content inside the overlay box after the
+	// fixed title and divider rows.
+	maxH := s.app.overlayHeight() - 8
 	if maxH < 8 {
 		maxH = 8
 	}
@@ -151,12 +158,24 @@ func (s *helpOverlay) refreshView() {
 
 func (s *helpOverlay) Render() string {
 	w := s.Width()
+	innerW := w - 6
 
-	content := s.vp.View()
+	content := strings.Join([]string{
+		overlayTitleLine("Keybindings", innerW),
+		styleBorder.Render(strings.Repeat("─", innerW)),
+		s.vp.View(),
+	}, "\n")
 
 	box := styleOverlay.
 		Width(w).
 		Render(content)
+	regions := []mouseRegion{
+		overlayCloseRegion(w, s.HandleKey),
+		{
+			rect:  mouseRect{x: 1, y: 1, w: w - 2, h: lipgloss.Height(box) - 2},
+			wheel: verticalWheelHandler(s.HandleKey),
+		},
+	}
 
-	return s.centerOverlay(box)
+	return s.centerOverlayInteractive(box, regions)
 }

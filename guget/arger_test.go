@@ -82,6 +82,7 @@ func TestCLIParseLongAliases(t *testing.T) {
 		t,
 		"--version",
 		"--no-color",
+		"--no-mouse",
 		"--verbose", "debug",
 		"--project", projectPath,
 		"--log-file", logPath,
@@ -91,6 +92,7 @@ func TestCLIParseLongAliases(t *testing.T) {
 
 	assertBuiltFlags(t, flags, BuiltFlags{
 		NoColor:    true,
+		NoMouse:    true,
 		Verbosity:  "debug",
 		ProjectDir: projectPath,
 		Version:    true,
@@ -111,6 +113,7 @@ func TestCLIParseShortAliases(t *testing.T) {
 		t,
 		"-V",
 		"-nc",
+		"-nm",
 		"-v", "trc",
 		"-p", projectPath,
 		"-lf", logPath,
@@ -120,6 +123,7 @@ func TestCLIParseShortAliases(t *testing.T) {
 
 	assertBuiltFlags(t, flags, BuiltFlags{
 		NoColor:    true,
+		NoMouse:    true,
 		Verbosity:  "trc",
 		ProjectDir: projectPath,
 		Version:    true,

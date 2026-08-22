@@ -124,10 +124,22 @@ type cliRuntime struct {
 	stdout     io.Writer
 	stderr     io.Writer
 	newService func(context.Context, NugetSource) (*NugetService, error)
+	runCommand func(context.Context, string, []string, io.Reader, io.Writer, io.Writer) error
+}
+
+func runCLICommand(ctx context.Context, name string, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
+	command := exec.CommandContext(ctx, name, args...)
+	command.Stdin = stdin
+	command.Stdout = stdout
+	command.Stderr = stderr
+	return command.Run()
 }
 
 func dispatchCLI(ctx context.Context, argv []string, stdin io.Reader, stdout, stderr io.Writer) ExitCode {
-	runtime := cliRuntime{stdin: stdin, stdout: stdout, stderr: stderr, newService: NewNugetServiceContext}
+	runtime := cliRuntime{
+		stdin: stdin, stdout: stdout, stderr: stderr,
+		newService: NewNugetServiceContext, runCommand: runCLICommand,
+	}
 	logSetOutput(stderr)
 	logSetLevel(LogLevelNone)
 	logSetColor(false)
@@ -219,13 +231,13 @@ func commandUsage(verb string) string {
 	case "search":
 		return "Usage: guget search QUERY [--project DIR] [--source NAME] [--format table|tsv|json|jsonl]\n"
 	case "add":
-		return "Usage: guget add PACKAGE --version VERSION --file PROJECT [--file PROJECT...] [--dry-run] [--restore]\n"
+		return "Usage: guget add PACKAGE --version VERSION --file PROJECT [--file PROJECT...] [--dry-run] [--restore] [--interactive]\n"
 	case "update":
-		return "Usage: guget update PACKAGE --version VERSION (--file PROJECT... | --all) [--dry-run] [--restore]\n"
+		return "Usage: guget update PACKAGE --version VERSION (--file PROJECT... | --all) [--dry-run] [--restore] [--interactive]\n"
 	case "remove":
-		return "Usage: guget remove PACKAGE (--file PROJECT... | --all) [--dry-run] [--restore]\n"
+		return "Usage: guget remove PACKAGE (--file PROJECT... | --all) [--dry-run] [--restore] [--interactive]\n"
 	case "restore":
-		return "Usage: guget restore (--file PROJECT... | --all) [--project DIR]\n"
+		return "Usage: guget restore (--file PROJECT... | --all) [--project DIR] [--interactive]\n"
 	case "completion":
 		return "Usage: guget completion bash|zsh|fish\n"
 	case "version":
@@ -877,6 +889,10 @@ func (r cliRuntime) runMutation(ctx context.Context, verb string, argv []string)
 		fmt.Fprintln(r.stderr, "guget add requires one or more explicit --file targets")
 		return ExitUsage
 	}
+	if args.bools["interactive"] && !args.bools["restore"] {
+		fmt.Fprintln(r.stderr, "--interactive requires --restore for mutation commands")
+		return ExitUsage
+	}
 	selectors := 0
 	if args.value("version", "") != "" {
 		selectors++
@@ -952,7 +968,7 @@ func (r cliRuntime) runMutation(ctx context.Context, verb string, argv []string)
 		fmt.Fprintln(r.stderr, "no changes needed")
 	}
 	if args.bools["restore"] && len(result.Changed) > 0 {
-		if code := r.restoreProjects(ctx, targets); code != ExitSuccess {
+		if code := r.restoreProjects(ctx, targets, args.bools["interactive"]); code != ExitSuccess {
 			return code
 		}
 	}
@@ -1025,7 +1041,7 @@ func buildMutationPlan(verb, packageID, version string, targets []*ParsedProject
 			if installed != nil {
 				continue
 			}
-			if central := findDirectoryPackagesProps(filepath.Dir(project.FilePath)); central != "" {
+			if central := projectCPMTarget(project); central != "" {
 				centralAbs, _ := filepath.Abs(central)
 				defined, err := fileDefinesPackage(centralAbs, packageID)
 				if err != nil {
@@ -1093,6 +1109,15 @@ func buildMutationPlan(verb, packageID, version string, targets []*ParsedProject
 		rows = []planRow{}
 	}
 	return plan, rows, nil
+}
+
+func projectCPMTarget(project *ParsedProject) string {
+	for _, target := range project.AddTargets {
+		if target.Kind == AddTargetCPM {
+			return target.FilePath
+		}
+	}
+	return ""
 }
 
 func fileHasPackageReference(path, packageID string) (bool, error) {
@@ -1167,7 +1192,7 @@ func renderPlan(doc planDocument, format string) ([]byte, error) {
 
 func (r cliRuntime) runRestore(ctx context.Context, argv []string) ExitCode {
 	values := cloneFlags(commonValueFlags, "file")
-	bools := cloneFlags(commonBoolFlags, "all")
+	bools := cloneFlags(commonBoolFlags, "all", "interactive")
 	args, err := parseCLIArgs(argv, values, bools)
 	if err != nil || len(args.positionals) != 0 {
 		if err != nil {
@@ -1207,16 +1232,20 @@ func (r cliRuntime) runRestore(ctx context.Context, argv []string) ExitCode {
 		fmt.Fprintf(r.stderr, "guget: %v\n", err)
 		return ExitUsage
 	}
-	return r.restoreProjects(ctx, targets)
+	return r.restoreProjects(ctx, targets, args.bools["interactive"])
 }
 
-func (r cliRuntime) restoreProjects(ctx context.Context, projects []*ParsedProject) ExitCode {
+func (r cliRuntime) restoreProjects(ctx context.Context, projects []*ParsedProject, interactive bool) ExitCode {
+	runCommand := r.runCommand
+	if runCommand == nil {
+		runCommand = runCLICommand
+	}
 	for _, project := range projects {
-		command := exec.CommandContext(ctx, "dotnet", "restore", project.FilePath)
-		command.Stdin = r.stdin
-		command.Stdout = r.stderr
-		command.Stderr = r.stderr
-		if err := command.Run(); err != nil {
+		args := []string{"restore", project.FilePath}
+		if interactive {
+			args = append(args, "--interactive")
+		}
+		if err := runCommand(ctx, "dotnet", args, r.stdin, r.stderr, r.stderr); err != nil {
 			if errors.Is(ctx.Err(), context.Canceled) {
 				return ExitInterrupted
 			}
