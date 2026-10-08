@@ -27,6 +27,7 @@ type AppContext struct {
 	Spinner         bubbles_spinner.Model
 	Restoring       bool
 	Reloading       bool
+	Saving          bool
 
 	// Status bar
 	StatusLine  string

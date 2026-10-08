@@ -33,10 +33,13 @@ func (m *App) requestReload(req reloadRequestedMsg) {
 		return
 	}
 
-	if m.ctx.Loading || m.ctx.Reloading {
+	if m.ctx.Loading || m.ctx.Reloading || m.ctx.Saving {
+		if req.selection == nil && m.hasPendingReload {
+			req.selection = m.pendingReload.selection
+		}
 		m.pendingReload = req
 		m.hasPendingReload = true
-		if !m.ctx.Loading {
+		if !m.ctx.Loading && !m.ctx.Saving {
 			m.setStatus("Reload queued", false)
 		}
 		return
@@ -91,7 +94,9 @@ func (m *App) handleWorkspaceReloaded(msg workspaceReloadedMsg) {
 	nextResults, toFetch := planPackageReload(msg.snapshot, m.ctx.Results, invalidateAll)
 	m.ctx.Results = nextResults
 	m.startPackageFetch(toFetch, false)
+	selectedPackage := m.packageSelection().name
 	m.rebuildPackageRows()
+	m.selectPackageByName(selectedPackage)
 	m.refreshDetail()
 
 	if len(toFetch) == 0 {
@@ -100,6 +105,8 @@ func (m *App) handleWorkspaceReloaded(msg workspaceReloadedMsg) {
 }
 
 func (m *App) applyWorkspaceSnapshot(snapshot *workspaceSnapshot) {
+	selection := m.activeReload.selection
+	applySelection := selection != nil && selection.origin == m.packageSelection()
 	selectedProjectPath := ""
 	if sel := m.selectedProject(); sel != nil {
 		selectedProjectPath = sel.FilePath
@@ -119,7 +126,17 @@ func (m *App) applyWorkspaceSnapshot(snapshot *workspaceSnapshot) {
 	m.selectProjectByPath(selectedProjectPath)
 
 	m.rebuildPackageRows()
-	m.selectPackageByName(selectedPackage)
+	if applySelection && selection.keepRow {
+		m.packages.cursor = min(selection.origin.cursor, max(0, len(m.packages.rows)-1))
+		m.clampOffset()
+	} else if applySelection {
+		m.selectPackageByName(selection.name)
+	} else {
+		m.selectPackageByName(selectedPackage)
+	}
+	// Apply an action's selection once. Later watcher reloads preserve whatever
+	// the user is reading, and metadata replies preserve the resulting package.
+	m.activeReload.selection = nil
 }
 
 func buildProjectItems(parsedProjects []*ParsedProject, propsProjects []*ParsedProject) []projectItem {
@@ -165,7 +182,7 @@ func (m *App) selectPackageByName(name string) {
 			return
 		}
 	}
-	m.packages.cursor = imax(0, len(m.packages.rows)-1)
+	m.packages.cursor = min(max(0, m.packages.cursor), max(0, len(m.packages.rows)-1))
 	m.clampOffset()
 }
 
@@ -193,7 +210,14 @@ func (m *App) startPackageFetch(names []string, initial bool) {
 
 func (m *App) finishReloadSuccess() {
 	m.ctx.Reloading = false
-	m.setStatus("✓ "+reloadStatusText(m.activeReload), false)
+	if m.activeReload.saveError != nil {
+		m.setStatus("▲ Save failed: "+m.activeReload.saveError.Error(), true)
+		if m.hasPendingReload && m.pendingReload.automatic {
+			m.pendingReload.saveError = m.activeReload.saveError
+		}
+	} else {
+		m.setStatus("✓ "+reloadStatusText(m.activeReload), false)
+	}
 	m.maybeStartQueuedReload()
 }
 

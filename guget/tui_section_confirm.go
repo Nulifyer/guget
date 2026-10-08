@@ -59,7 +59,7 @@ func (s *confirmUpdate) HandleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 		s.closeOverlay()
 	case "enter", "y":
 		s.closeOverlay()
-		return s.app.applyVersion(s.pkgName, s.newVersion, s.project)
+		return s.app.applyVersionWithSelection(s.pkgName, s.newVersion, s.project, s.selection)
 	}
 	return nil
 }
@@ -67,15 +67,23 @@ func (s *confirmUpdate) HandleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 // applyOrConfirmUpdate calls applyVersion directly, or opens the lock-confirm
 // overlay if the currently-installed version is pinned with [x.y.z].
 func (m *App) applyOrConfirmUpdate(pkgName, newVersion string, project *ParsedProject) bubble_tea.Cmd {
+	return m.applyOrConfirmUpdateWithSelection(pkgName, newVersion, project, nil)
+}
+
+func (m *App) applyOrConfirmUpdateWithSelection(pkgName, newVersion string, project *ParsedProject, selection *reloadSelection) bubble_tea.Cmd {
+	if !m.canMutate() {
+		return nil
+	}
 	if project != nil {
 		for _, row := range m.packages.rows {
 			if strings.EqualFold(row.ref.Name, pkgName) && row.ref.Locked {
 				m.confirmUpdate = newConfirmUpdate(m, pkgName, newVersion, project)
+				m.confirmUpdate.selection = selection
 				return nil
 			}
 		}
 	}
-	return m.applyVersion(pkgName, newVersion, project)
+	return m.applyVersionWithSelection(pkgName, newVersion, project, selection)
 }
 
 func (s *confirmRemove) Render() string {

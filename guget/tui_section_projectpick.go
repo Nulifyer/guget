@@ -133,22 +133,12 @@ func (s *projectPicker) confirmSelection() bubble_tea.Cmd {
 	if len(selected) == 1 {
 		return s.app.openLocationPickerOrAdd(s.pkgName, s.version, selected[0])
 	}
-	// Multiple projects: pre-cache the fetched info so subsequent adds find it.
-	if s.app.search.fetchedInfo != nil {
-		if s.app.ctx.Results == nil {
-			s.app.ctx.Results = make(map[string]nugetResult)
-		}
-		s.app.ctx.Results[s.pkgName] = nugetResult{
-			pkg:    s.app.search.fetchedInfo,
-			source: s.app.search.fetchedSource,
-		}
+	targets := make([]mutationTarget, 0, len(selected))
+	for _, project := range selected {
+		target := defaultAddTarget(project)
+		targets = append(targets, mutationTarget{project: project, addTarget: &target})
 	}
-	var cmds []bubble_tea.Cmd
-	for _, proj := range selected {
-		target := defaultAddTarget(proj)
-		cmds = append(cmds, s.app.addPackageToLocation(s.pkgName, s.version, proj, target))
-	}
-	return bubble_tea.Batch(cmds...)
+	return s.app.addPackageToTargets(s.pkgName, s.version, targets)
 }
 
 // defaultAddTarget picks the best AddTarget for a project when adding a

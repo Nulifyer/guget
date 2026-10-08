@@ -1,6 +1,6 @@
 # Guget architecture
 
-Architecture snapshot: 2026-08-21
+Architecture snapshot: 2026-10-08
 
 Guget has two front ends in one binary. Bare invocation starts Bubble Tea;
 recognized verbs dispatch before TUI flags, rendering, watchers, or log buffers
@@ -37,10 +37,14 @@ than turning a range lower bound into an alleged installed version.
   changes with rollback reporting.
 - `internal/atomicfile` performs same-directory temporary writes, flushes data,
   preserves permissions, and uses platform-specific replacement.
+- `internal/projectedit` prepares source-preserving XML changes and deduplicates
+  shared file targets into one edit plan. XML token offsets determine insertion
+  locations, and every resulting document must have one valid `Project` root.
+- `package_mutations.go` owns shared CLI and TUI mutation scope, version-owner
+  selection, explicit add locations, and lock policy.
 - `cli.go` owns verb parsing, streams, formats, and exit-code mapping.
 - `tui*.go` owns Bubble Tea state, input, layout, and presentation.
-- `project_parser.go` discovers declared references and produces source-preserving
-  changes for the supported XML shapes.
+- `project_parser.go` discovers declared references, imported props, and add locations.
 - `nuget_*.go` owns configuration discovery, source trust, credentials, and V3
   metadata.
 
@@ -77,6 +81,16 @@ Keyboard and mouse navigation call the same project and package selection
 helpers. Picker rows only select or toggle state. Package changes require a
 visible Add, Apply, Update, or Remove button, or the matching keyboard action.
 
+Main keyboard dispatch and help share the definitions in `tui_keys.go`.
+Key release events cause no actions. Key press repeats can navigate or request
+successive quick updates. Ctrl+C exits even when an overlay is active.
+
+The TUI permits one mutation at a time and queues disk reload requests during a
+write. Quick updates and removals retain the row position after a successful
+reload. Adds select the new package, while version-picker changes and ordinary
+reloads preserve package identity. A completion preserves later user navigation
+or sort changes. Metadata replies also preserve the selected package.
+
 ## Mutation transaction
 
 ```text
@@ -94,6 +108,10 @@ inspect explicit scope
 A CPM add is one logical plan: the central `PackageVersion` and project-local
 `PackageReference` either both apply or rollback is reported. Removing a project
 reference never implicitly removes its shared central version.
+
+Multi-project additions use one plan, including one central version edit for
+projects that share a CPM file. Planning failure writes nothing. No-op plans
+produce no reload request.
 
 ## Process lifetime
 

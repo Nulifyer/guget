@@ -30,52 +30,15 @@ func (s *helpOverlay) HandleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 }
 
 func (s *helpOverlay) refreshView() {
-	type section struct {
-		title string
-		rows  [][2]string // [key, description]
-	}
-	sections := []section{
-		{
-			title: "Navigation",
-			rows: [][2]string{
-				{"tab / shift+tab", "cycle focus between panels"},
-				{"↑ / ↓  or  j / k", "move up / down in list"},
-				{"enter", "switch focus to packages panel"},
-			},
+	sections := mainKeyHelpSections()
+	sections = append(sections, keyHelpSection{
+		title: "Mouse", rows: [][2]string{
+			{"left click", "select rows, tabs, links, and buttons"},
+			{"wheel", "navigate or scroll under the pointer"},
+			{"Shift + mouse", "native terminal selection"},
 		},
-		{
-			title: "Mouse",
-			rows: [][2]string{
-				{"left click", "select rows, tabs, links, and buttons"},
-				{"wheel", "navigate or scroll under the pointer"},
-				{"Shift + mouse", "native terminal selection"},
-			},
-		},
-		{
-			title: "Package actions  (packages panel)",
-			rows: [][2]string{
-				{"u", "update to latest compatible (this project)"},
-				{"U", "update to latest compatible (all projects)"},
-				{"a", "update to latest stable (this project)"},
-				{"A", "update to latest stable (all projects)"},
-				{"v", "pick a specific version from the list"},
-				{"d", "delete selected package from project"},
-				{"t", "show declared dependency tree for package"},
-				{"n", "view release notes (GitHub or NuGet)"},
-				{"o", "cycle sort order"},
-				{"O", "change sort direction"},
-			},
-		},
-		{
-			title: "Project actions",
-			rows: [][2]string{
-				{"ctrl+r", "reload projects from disk"},
-				{"r", "run dotnet restore (selected project)"},
-				{"R", "run dotnet restore (all projects)"},
-				{"T", "show full transitive dependency tree"},
-				{"/", "search NuGet and add a package"},
-			},
-		},
+	})
+	sections = append(sections, []keyHelpSection{
 		{
 			title: "Version picker  (v)",
 			rows: [][2]string{
@@ -101,17 +64,7 @@ func (s *helpOverlay) refreshView() {
 				{"esc", "close panel"},
 			},
 		},
-		{
-			title: "View toggles",
-			rows: [][2]string{
-				{"[ / ]", "resize focused panel"},
-				{"l", "toggle log panel"},
-				{"s", "toggle sources panel"},
-				{"?", "toggle this help"},
-				{"esc / q / ctrl+c", "quit"},
-			},
-		},
-	}
+	}...)
 
 	keyStyle := styleAccentBold
 	titleStyle := styleAccentBold

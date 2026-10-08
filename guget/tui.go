@@ -206,7 +206,9 @@ func (m *App) Update(msg bubble_tea.Msg) (bubble_tea.Model, bubble_tea.Cmd) {
 				}
 			}
 		}
+		selectedPackage := m.packageSelection().name
 		m.rebuildPackageRows()
+		m.selectPackageByName(selectedPackage)
 		m.refreshDetail()
 
 	case reloadRequestedMsg:
@@ -216,7 +218,9 @@ func (m *App) Update(msg bubble_tea.Msg) (bubble_tea.Model, bubble_tea.Cmd) {
 		m.handleWorkspaceReloaded(msg)
 
 	case writeResultMsg:
+		m.ctx.Saving = false
 		if msg.err != nil {
+			msg.selection = nil
 			cmds = append(cmds, m.setStatus("▲ Save failed: "+msg.err.Error(), true))
 		} else {
 			status := "✓ Saved"
@@ -226,9 +230,11 @@ func (m *App) Update(msg bubble_tea.Msg) (bubble_tea.Model, bubble_tea.Cmd) {
 				status = fmt.Sprintf("🔒 %d skipped (version locked)", msg.skipped)
 			}
 			cmds = append(cmds, m.setStatus(status, false))
-			if msg.reload {
-				m.requestReload(reloadRequestedMsg{reason: "package files changed"})
-			}
+		}
+		if msg.reload {
+			m.requestReload(reloadRequestedMsg{reason: "package files changed", selection: msg.selection, saveError: msg.err})
+		} else {
+			m.maybeStartQueuedReload()
 		}
 
 	case restoreResultMsg:
@@ -374,7 +380,13 @@ func (m *App) Update(msg bubble_tea.Msg) (bubble_tea.Model, bubble_tea.Cmd) {
 	case mouseInputMsg:
 		cmds = append(cmds, m.handleMouse(msg))
 
-	case bubble_tea.KeyMsg:
+	case bubble_tea.KeyReleaseMsg:
+		return m, nil
+
+	case bubble_tea.KeyPressMsg:
+		if msg.String() == "ctrl+c" {
+			return m, bubble_tea.Quit
+		}
 		handled := false
 		for _, o := range m.overlays() {
 			if o.IsActive() {
@@ -392,10 +404,10 @@ func (m *App) Update(msg bubble_tea.Msg) (bubble_tea.Model, bubble_tea.Cmd) {
 		switch m.focus {
 		case focusProjects:
 			if keyMsg, ok := msg.(bubble_tea.KeyMsg); ok {
-				switch keyMsg.String() {
-				case "up", "k":
+				switch mainKey(keyMsg.String()) {
+				case "up":
 					m.moveProjectCursor(-1)
-				case "down", "j":
+				case "down":
 					m.moveProjectCursor(1)
 				}
 			}
@@ -437,8 +449,11 @@ func (m *App) setStatus(text string, isErr bool) bubble_tea.Cmd {
 }
 
 func (m *App) handleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
-	switch msg.String() {
-	case "ctrl+c", "q", "esc":
+	if _, pressed := msg.(bubble_tea.KeyPressMsg); !pressed {
+		return nil
+	}
+	switch mainKey(msg.String()) {
+	case "ctrl+c":
 		return bubble_tea.Quit
 
 	case "tab":
@@ -478,12 +493,12 @@ func (m *App) handleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 			m.help.refreshView()
 		}
 
-	case "up", "k":
+	case "up":
 		if m.focus == focusPackages {
 			m.movePackageCursor(-1)
 		}
 
-	case "down", "j":
+	case "down":
 		if m.focus == focusPackages {
 			m.movePackageCursor(1)
 		}
@@ -550,7 +565,7 @@ func (m *App) handleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 		}
 
 	case "d":
-		if m.focus == focusPackages && m.packages.cursor < len(m.packages.rows) {
+		if m.canMutate() && m.focus == focusPackages && m.packages.cursor < len(m.packages.rows) {
 			m.confirmRemove = newConfirmRemove(m, m.packages.rows[m.packages.cursor].ref.Name)
 			m.ctx.StatusLine = ""
 		}

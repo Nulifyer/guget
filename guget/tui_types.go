@@ -105,6 +105,8 @@ type reloadRequestedMsg struct {
 	reason    string
 	paths     []string
 	automatic bool
+	selection *reloadSelection
+	saveError error
 }
 
 type workspaceReloadedMsg struct {
@@ -115,10 +117,11 @@ type workspaceReloadedMsg struct {
 }
 
 type writeResultMsg struct {
-	err     error
-	written int // number of files written (0 = unknown / not an applyVersion call)
-	skipped int // number of locked refs skipped during scope=all update
-	reload  bool
+	err       error
+	written   int // number of changed files in the completed transaction
+	skipped   int // number of locked refs skipped during scope=all update
+	reload    bool
+	selection *reloadSelection
 }
 
 type restoreResultMsg struct {
@@ -432,6 +435,7 @@ type confirmUpdate struct {
 	pkgName     string
 	newVersion  string
 	project     *ParsedProject
+	selection   *reloadSelection
 }
 
 type locationPicker struct {

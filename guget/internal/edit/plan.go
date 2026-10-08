@@ -76,6 +76,7 @@ func (p Plan) Paths() []string {
 func (p Plan) Len() int { return len(p.changes) }
 
 type Result struct {
+	// Changed includes every path replaced during apply, even if rolled back.
 	Changed    []string
 	RolledBack []string
 }
@@ -100,11 +101,10 @@ func (p Plan) apply(write writeFunc) (Result, error) {
 
 	for _, change := range p.changes {
 		if err := write(change.Path, change.After, change.Mode); err != nil {
-			changed := result.Changed
 			if errors.Is(err, atomicfile.ErrAfterReplace) {
-				changed = append(append([]string(nil), changed...), change.Path)
+				result.Changed = append(result.Changed, change.Path)
 			}
-			rollbackErr := p.rollback(write, changed, &result)
+			rollbackErr := p.rollback(write, result.Changed, &result)
 			return result, errors.Join(fmt.Errorf("apply %s: %w", change.Path, err), rollbackErr)
 		}
 		result.Changed = append(result.Changed, change.Path)

@@ -6,27 +6,11 @@ import (
 
 	bubble_tea "charm.land/bubbletea/v2"
 	lipgloss "charm.land/lipgloss/v2"
-	editplan "github.com/nulifyer/guget/internal/edit"
 )
 
 func (m *App) addPackageToProject(pkgName, version string, project *ParsedProject) bubble_tea.Cmd {
-	m.focus = focusPackages
-	filePath := project.FilePath
-	return func() bubble_tea.Msg {
-		logInfo("AddPackageReference: %s %s → %s", pkgName, version, filePath)
-		change, err := PlanAddPackageReference(filePath, pkgName, version)
-		if err != nil {
-			return writeResultMsg{err: err}
-		}
-		plan, err := editplan.NewPlan(change)
-		if err != nil {
-			return writeResultMsg{err: err}
-		}
-		if _, err := plan.Apply(); err != nil {
-			return writeResultMsg{err: err}
-		}
-		return writeResultMsg{written: plan.Len(), reload: true}
-	}
+	target := AddTarget{Kind: AddTargetProject, FilePath: project.FilePath}
+	return m.addPackageToLocation(pkgName, version, project, target)
 }
 
 // openLocationPickerOrAdd shows the location picker if the project has multiple
@@ -95,44 +79,24 @@ func (s *locationPicker) HandleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 // For CPM targets, it performs a dual write: PackageVersion to the CPM file
 // and a version-less PackageReference to the project file.
 func (m *App) addPackageToLocation(pkgName, version string, project *ParsedProject, target AddTarget) bubble_tea.Cmd {
-	m.focus = focusPackages
+	return m.addPackageToTargets(pkgName, version, []mutationTarget{{project: project, addTarget: &target}})
+}
 
-	projectFilePath := project.FilePath
-	targetFilePath := target.FilePath
-	targetKind := target.Kind
-
-	return func() bubble_tea.Msg {
-		var changes []editplan.Change
-		switch targetKind {
-		case AddTargetCPM:
-			logInfo("AddPackageVersion: %s %s → %s", pkgName, version, targetFilePath)
-			centralChange, err := PlanAddPackageVersion(targetFilePath, pkgName, version)
-			if err != nil {
-				return writeResultMsg{err: err}
-			}
-			logInfo("AddPackageReference (CPM): %s → %s", pkgName, projectFilePath)
-			projectChange, err := PlanAddPackageReference(projectFilePath, pkgName, "")
-			if err != nil {
-				return writeResultMsg{err: err}
-			}
-			changes = append(changes, centralChange, projectChange)
-		default:
-			logInfo("AddPackageReference: %s %s → %s", pkgName, version, targetFilePath)
-			change, err := PlanAddPackageReference(targetFilePath, pkgName, version)
-			if err != nil {
-				return writeResultMsg{err: err}
-			}
-			changes = append(changes, change)
-		}
-		plan, err := editplan.NewPlan(changes...)
-		if err != nil {
-			return writeResultMsg{err: err}
-		}
-		if _, err := plan.Apply(); err != nil {
-			return writeResultMsg{err: err}
-		}
-		return writeResultMsg{written: plan.Len(), reload: true}
+func (m *App) addPackageToTargets(pkgName, version string, targets []mutationTarget) bubble_tea.Cmd {
+	if !m.canMutate() {
+		return nil
 	}
+	m.focus = focusPackages
+	if m.search.fetchedInfo != nil {
+		if m.ctx.Results == nil {
+			m.ctx.Results = make(map[string]nugetResult)
+		}
+		m.ctx.Results[pkgName] = nugetResult{pkg: m.search.fetchedInfo, source: m.search.fetchedSource}
+		m.search.fetchedInfo = nil
+		m.search.fetchedSource = ""
+	}
+	selection := &reloadSelection{origin: m.packageSelection(), name: pkgName}
+	return m.startMutation("add", pkgName, version, targets, mutationOptions{}, selection)
 }
 
 func (s *locationPicker) Render() string {

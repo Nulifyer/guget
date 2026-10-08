@@ -226,6 +226,15 @@ terminal.
 | `d` | Remove selected package (prompts for confirmation) |
 | `t` | Show declared dependency tree for the selected package |
 
+With status sorting, hold `u` to update successive packages. Each successful
+quick update keeps the cursor on the same row while the updated package moves
+down. Guget accepts the next update after the write and reload finish.
+`U` and `A` apply to the selected package across projects.
+Pinned versions still require confirmation, and up-to-date packages do not trigger writes.
+
+Adding selects the new package. Removing keeps the nearest remaining row.
+Manual and automatic disk reloads preserve the selected package when it remains present.
+
 ### Project Actions
 
 | Key | Action |
@@ -244,6 +253,7 @@ terminal.
 | `s` | Toggle sources panel |
 | `?` | Toggle keybinding help |
 | `[` / `]` | Resize focused panel |
+| `Ctrl+C` | Quit from any panel or overlay |
 
 ### Search Overlay (`/`)
 

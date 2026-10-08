@@ -58,12 +58,52 @@ func TestPlanRollsBackWriteThatFailedAfterReplace(t *testing.T) {
 	if !errors.Is(err, atomicfile.ErrAfterReplace) {
 		t.Fatalf("error = %v, want ErrAfterReplace", err)
 	}
+	if len(result.Changed) != 1 || result.Changed[0] != path {
+		t.Fatalf("Changed = %v, want [%s]", result.Changed, path)
+	}
 	if len(result.RolledBack) != 1 || result.RolledBack[0] != path {
 		t.Fatalf("RolledBack = %v", result.RolledBack)
 	}
 	data, _ := os.ReadFile(path)
 	if got := string(data); got != "old" {
 		t.Fatalf("contents = %q, want old", got)
+	}
+}
+
+func TestPlanReportsReplacedFileWhenRollbackFails(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "App.csproj")
+	if err := os.WriteFile(path, []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	change, err := ReadChange(path, []byte("new"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := NewPlan(change)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rollbackErr := errors.New("injected rollback failure")
+	writes := 0
+	result, err := plan.apply(func(path string, data []byte, mode os.FileMode) error {
+		writes++
+		if writes > 1 {
+			return rollbackErr
+		}
+		if err := os.WriteFile(path, data, mode); err != nil {
+			return err
+		}
+		return atomicfile.ErrAfterReplace
+	})
+	if !errors.Is(err, atomicfile.ErrAfterReplace) || !errors.Is(err, rollbackErr) {
+		t.Fatalf("error = %v, want replacement and rollback errors", err)
+	}
+	if len(result.Changed) != 1 || result.Changed[0] != path || len(result.RolledBack) != 0 {
+		t.Fatalf("result = %+v", result)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || string(data) != "new" {
+		t.Fatalf("contents = %q, err = %v", data, err)
 	}
 }
 

@@ -7,11 +7,10 @@ import (
 	"strings"
 
 	bubble_tea "charm.land/bubbletea/v2"
-	editplan "github.com/nulifyer/guget/internal/edit"
 )
 
 func (m *App) updatePackage(useStable bool, scope actionScope) bubble_tea.Cmd {
-	if m.packages.cursor >= len(m.packages.rows) {
+	if !m.canMutate() || m.packages.cursor < 0 || m.packages.cursor >= len(m.packages.rows) {
 		return nil
 	}
 	row := m.packages.rows[m.packages.cursor]
@@ -31,7 +30,38 @@ func (m *App) updatePackage(useStable bool, scope actionScope) bubble_tea.Cmd {
 	if scope == scopeSelected {
 		project = m.selectedProject()
 	}
-	return m.applyOrConfirmUpdate(row.ref.Name, target.SemVer.String(), project)
+	version := target.SemVer.String()
+	projects := m.ctx.ParsedProjects
+	if project != nil {
+		projects = []*ParsedProject{project}
+	}
+	needsUpdate := false
+	skippedLocked := 0
+	for _, p := range projects {
+		for ref := range p.Packages {
+			requested := ref.Requested
+			if requested == "" {
+				requested = ref.Version.String()
+			}
+			if !strings.EqualFold(ref.Name, row.ref.Name) {
+				continue
+			}
+			if project == nil && ref.Locked {
+				skippedLocked++
+				continue
+			}
+			if requested != version && requested != "["+version+"]" {
+				needsUpdate = true
+			}
+		}
+	}
+	if !needsUpdate {
+		if skippedLocked > 0 {
+			return m.setStatus(fmt.Sprintf("🔒 %d skipped (version locked)", skippedLocked), false)
+		}
+		return nil
+	}
+	return m.applyOrConfirmUpdateWithSelection(row.ref.Name, version, project, m.rowReloadSelection())
 }
 
 func (m *App) isPropsProject(p *ParsedProject) bool {
@@ -43,73 +73,20 @@ func (m *App) isPropsProject(p *ParsedProject) bool {
 	return false
 }
 
-// allProjects returns every project (parsed + props) for propagation purposes.
-func (m *App) allProjects() []*ParsedProject {
-	all := make([]*ParsedProject, 0, len(m.ctx.ParsedProjects)+len(m.ctx.PropsProjects))
-	all = append(all, m.ctx.ParsedProjects...)
-	all = append(all, m.ctx.PropsProjects...)
-	return all
+func (m *App) applyVersion(pkgName, version string, targetProject *ParsedProject) bubble_tea.Cmd {
+	return m.applyVersionWithSelection(pkgName, version, targetProject, nil)
 }
 
-func (m *App) applyVersion(pkgName, version string, targetProject *ParsedProject) bubble_tea.Cmd {
+func (m *App) applyVersionWithSelection(pkgName, version string, targetProject *ParsedProject, selection *reloadSelection) bubble_tea.Cmd {
 	projects := m.ctx.ParsedProjects
 	if targetProject != nil {
 		projects = []*ParsedProject{targetProject}
 	}
-	var toWrite []string
-	// Determine the on-disk source file so we know which .props (if any) to propagate.
-	skippedLocked := 0
-	for _, p := range projects {
-		for ref := range p.Packages {
-			if ref.Name == pkgName {
-				if targetProject == nil && ref.Locked {
-					// scope=all: skip locked versions, track count for status warning
-					skippedLocked++
-				} else {
-					sourceFile := p.SourceFileForPackage(pkgName)
-					if sourceFile != "" {
-						toWrite = append(toWrite, sourceFile)
-					}
-				}
-			}
-		}
+	targets := make([]mutationTarget, 0, len(projects))
+	for _, project := range projects {
+		targets = append(targets, mutationTarget{project: project})
 	}
-
-	if skippedLocked > 0 {
-		logWarn("applyVersion: %s → %s (%d locked project(s) skipped)", pkgName, version, skippedLocked)
-	}
-
-	logInfo("applyVersion: %s → %s (%d file(s) to write, %d locked skipped)", pkgName, version, len(toWrite), skippedLocked)
-	if len(toWrite) == 0 {
-		if skippedLocked > 0 {
-			m.setStatus(fmt.Sprintf("🔒 %d skipped (version locked)", skippedLocked), false)
-		}
-		return nil
-	}
-	return func() bubble_tea.Msg {
-		seen := make(map[string]bool)
-		var changes []editplan.Change
-		for _, fp := range toWrite {
-			if seen[fp] {
-				continue
-			}
-			seen[fp] = true
-			change, err := PlanUpdatePackageVersion(fp, pkgName, version)
-			if err != nil {
-				logWarn("write failed for %s: %v", fp, err)
-				return writeResultMsg{err: err}
-			}
-			changes = append(changes, change)
-		}
-		plan, err := editplan.NewPlan(changes...)
-		if err != nil {
-			return writeResultMsg{err: err}
-		}
-		if _, err := plan.Apply(); err != nil {
-			return writeResultMsg{err: err}
-		}
-		return writeResultMsg{written: plan.Len(), skipped: skippedLocked, reload: true}
-	}
+	return m.startMutation("update", pkgName, version, targets, mutationOptions{skipLocked: targetProject == nil}, selection)
 }
 
 func (m *App) restore(scope actionScope) bubble_tea.Cmd {
@@ -146,68 +123,14 @@ func runDotnetRestore(ctx context.Context, projects []*ParsedProject) bubble_tea
 }
 
 func (m *App) removePackage(pkgName string) bubble_tea.Cmd {
-	targetProject := m.selectedProject() // nil = all projects
-	var toWrite []string
-
+	selected := m.selectedProject()
 	projects := m.ctx.ParsedProjects
-	if targetProject != nil {
-		projects = []*ParsedProject{targetProject}
+	if selected != nil {
+		projects = []*ParsedProject{selected}
 	}
-
-	for _, p := range projects {
-		for ref := range p.Packages {
-			if strings.EqualFold(ref.Name, pkgName) {
-				if targetProject != nil {
-					local, err := fileHasPackageReference(p.FilePath, pkgName)
-					if err != nil || !local {
-						return m.setStatus(fmt.Sprintf("read-only: %s is inherited from %s", pkgName, p.SourceFileForPackage(pkgName)), true)
-					}
-				}
-				// The project owns its PackageReference even when a central props
-				// file owns the version. For a workspace-wide removal, also plan
-				// against an imported props source; the editor only removes actual
-				// PackageReference nodes and preserves PackageVersion nodes.
-				toWrite = append(toWrite, p.FilePath)
-				if targetProject == nil {
-					sourceFile := p.SourceFileForPackage(pkgName)
-					if strings.HasSuffix(strings.ToLower(sourceFile), ".props") {
-						toWrite = append(toWrite, sourceFile)
-					}
-				}
-				break
-			}
-		}
+	targets := make([]mutationTarget, 0, len(projects))
+	for _, project := range projects {
+		targets = append(targets, mutationTarget{project: project})
 	}
-
-	logInfo("removePackage: %s (%d file(s) to write)", pkgName, len(toWrite))
-	if len(toWrite) == 0 {
-		return nil
-	}
-	return func() bubble_tea.Msg {
-		seen := make(map[string]bool)
-		var changes []editplan.Change
-		for _, fp := range toWrite {
-			if seen[fp] {
-				continue
-			}
-			seen[fp] = true
-			change, err := PlanRemovePackageReference(fp, pkgName)
-			if err != nil {
-				logWarn("remove failed for %s: %v", fp, err)
-				return writeResultMsg{err: err}
-			}
-			changes = append(changes, change)
-		}
-		plan, err := editplan.NewPlan(changes...)
-		if err != nil {
-			return writeResultMsg{err: err}
-		}
-		if plan.Len() == 0 {
-			return writeResultMsg{err: fmt.Errorf("package %q is inherited and cannot be removed from the selected project safely", pkgName)}
-		}
-		if _, err := plan.Apply(); err != nil {
-			return writeResultMsg{err: err}
-		}
-		return writeResultMsg{written: plan.Len(), reload: true}
-	}
+	return m.startMutation("remove", pkgName, "", targets, mutationOptions{removeInherited: selected == nil}, m.rowReloadSelection())
 }

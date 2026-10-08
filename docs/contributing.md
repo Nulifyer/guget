@@ -29,7 +29,9 @@ build`, and runs ShellCheck over release and installer scripts.
 - Package-use domain or dotnet evaluation: `guget/internal/packageops/`
 - Atomic replacement: `guget/internal/atomicfile/`
 - Logical transactions and stale-file checks: `guget/internal/edit/`
-- Source-preserving XML plan generation: `guget/project_parser.go`
+- Source-preserving XML edit planning: `guget/internal/projectedit/`
+- Shared mutation scope and ownership policy: `guget/package_mutations.go`
+- Project and imported props discovery: `guget/project_parser.go`
 - Headless behavior and output contracts: `guget/cli.go`
 - Bubble Tea behavior and layout: `guget/tui*.go`
 - NuGet source, mapping, and credentials: `guget/nuget_*.go`
