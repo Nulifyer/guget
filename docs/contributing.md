@@ -24,6 +24,9 @@ The scheduled integration workflow installs the .NET SDK and runs this tier.
 The normal CI workflow also builds `vscode-guget` with `npm ci` and `npm run
 build`, and runs ShellCheck over release and installer scripts.
 
+Use Node.js 22 or newer for extension builds and packaging. The VS Code
+packaging tool requires this runtime.
+
 ## Where changes belong
 
 - Package-use domain or dotnet evaluation: `guget/internal/packageops/`
