@@ -55,7 +55,7 @@ To run:
 - [.NET SDK](https://dotnet.microsoft.com/download) dotnet CLI
 
 To build:
-- [Go](https://go.dev/) 1.25+
+- [Go](https://go.dev/) 1.26+
 - [.NET SDK](https://dotnet.microsoft.com/download) dotnet CLI
 
 

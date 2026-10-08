@@ -2,6 +2,8 @@
 
 ## Verification tiers
 
+Use Go 1.26 or newer to build and test the CLI.
+
 Run the local gate from `guget/`:
 
 ```bash
@@ -26,6 +28,23 @@ build`, and runs ShellCheck over release and installer scripts.
 
 Use Node.js 22 or newer for extension builds and packaging. The VS Code
 packaging tool requires this runtime.
+
+## Dependency updates
+
+Preserve the effective `github.com/xo/terminfo` version at
+`v0.0.0-20220910002029-abceb7e1c41e`. This revision stayed fixed through earlier
+dependency upgrades, but the original reason was not recorded. Keep it as a
+conservative pin until its removal is reviewed separately.
+
+The `replace` directive in `guget/go.mod` enforces this pin. Newer Ultraviolet
+requires terminfo v1, so the version in the indirect `require` entry can differ
+from the code used to build Guget. Verify the effective revision with
+`go list -m -json github.com/xo/terminfo` and check `Replace.Version`.
+
+Update other Go dependencies with `go get -u -t ./...`, then run `go mod tidy`
+and the verification tiers above. For the extension, update the development
+dependencies and lockfile together, then run the build, type-check, and
+`npm audit` checks.
 
 ## Where changes belong
 

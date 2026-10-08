@@ -17,16 +17,16 @@ jobs:
         working-directory: guget
     steps:
       - name: Checkout
-        uses: actions/checkout@v6.0.2
+        uses: actions/checkout@v7.0.1
 
       - name: Set up Go
-        uses: actions/setup-go@v6.4.0
+        uses: actions/setup-go@v7.0.0
         with:
           go-version-file: guget/go.mod
           cache-dependency-path: guget/go.sum
 
       - name: Set up .NET
-        uses: actions/setup-dotnet@v5.0.0
+        uses: actions/setup-dotnet@v6.0.0
         with:
           dotnet-version: 10.0.x
 

@@ -14,10 +14,10 @@ jobs:
         working-directory: guget
     steps:
       - name: Checkout
-        uses: actions/checkout@v6.0.2
+        uses: actions/checkout@v7.0.1
 
       - name: Set up Go
-        uses: actions/setup-go@v6.4.0
+        uses: actions/setup-go@v7.0.0
         with:
           go-version-file: guget/go.mod
           cache-dependency-path: guget/go.sum
@@ -40,12 +40,12 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6.0.2
+        uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
 
       - name: Set up Go
-        uses: actions/setup-go@v6.4.0
+        uses: actions/setup-go@v7.0.0
         with:
           go-version-file: guget/go.mod
 
@@ -57,7 +57,7 @@ jobs:
           test "$(/tmp/guget-release-check version)" = "guget $VERSION"
 
       - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v7
+        uses: goreleaser/goreleaser-action@v7.2.3
         with:
           version: "~> v2"
           args: release --clean
@@ -71,7 +71,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6.0.2
+        uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
 
@@ -89,7 +89,7 @@ jobs:
 
       - name: Set up Node
         if: steps.changes.outputs.changed == 'true'
-        uses: actions/setup-node@v6.0.0
+        uses: actions/setup-node@v7.1.0
         with:
           node-version: 22
 
