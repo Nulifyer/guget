@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
@@ -11,14 +12,28 @@ import (
 )
 
 func (m *App) openSearch() bubble_tea.Cmd {
+	if !m.canMutate() {
+		return m.setStatus("Wait for the save or workspace reload to finish", false)
+	}
+	if m.search.cancel != nil {
+		m.search.cancel()
+	}
 	m.search = packageSearch{
-		sectionBase: sectionBase{app: m, baseWidth: 90, minWidth: 56, maxMargin: 4},
+		sectionBase: sectionBase{app: m, baseWidth: 90, minWidth: 56, maxMargin: 4, requestID: m.nextRequestID()},
 		input:       m.search.input,
 	}
 	m.search.input.Reset()
 	m.search.active = true
 	m.ctx.StatusLine = ""
 	return m.search.input.Focus()
+}
+
+func (s *packageSearch) closeOverlay() {
+	if s.cancel != nil {
+		s.cancel()
+	}
+	s.input.Blur()
+	s.sectionBase.closeOverlay()
 }
 
 func (s *packageSearch) FooterKeys() []kv {
@@ -51,10 +66,13 @@ func (s *packageSearch) HandleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 		return nil
 
 	case "enter":
-		if s.fetchingVersion || len(s.results) == 0 {
+		if s.loading || s.fetchingVersion || len(s.results) == 0 {
 			return nil
 		}
 		selected := s.results[s.cursor]
+		s.fetchingVersion = true
+		s.err = nil
+		requestID := s.requestID
 		// Check if already installed in this project
 		if proj := s.app.selectedProject(); proj != nil {
 			for ref := range proj.Packages {
@@ -68,12 +86,13 @@ func (s *packageSearch) HandleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 		// Use cached info if we already fetched this package (e.g. it's in another project).
 		if cached, ok := s.app.ctx.Results[selected.ID]; ok && cached.pkg != nil {
 			return func() bubble_tea.Msg {
-				return packageFetchedMsg{info: cached.pkg, source: cached.source}
+				return packageFetchedMsg{requestID: requestID, info: cached.pkg, source: cached.source}
 			}
 		}
-		s.fetchingVersion = true
-		s.err = nil
 		return s.fetchPackageCmd(selected.ID)
+	}
+	if s.fetchingVersion {
+		return nil
 	}
 
 	// Forward all other keys to the textinput
@@ -82,7 +101,12 @@ func (s *packageSearch) HandleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 	newQuery := s.input.Value()
 
 	if newQuery == "" {
+		if s.cancel != nil {
+			s.cancel()
+		}
 		s.results = nil
+		s.cursor = 0
+		s.err = nil
 		s.loading = false
 		s.debounceID++ // invalidate any in-flight debounce
 		s.lastQuery = ""
@@ -90,6 +114,12 @@ func (s *packageSearch) HandleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 	}
 
 	if newQuery != s.lastQuery {
+		if s.cancel != nil {
+			s.cancel()
+		}
+		s.results = nil
+		s.cursor = 0
+		s.err = nil
 		s.lastQuery = newQuery
 		s.loading = true
 		return bubble_tea.Batch(cmd, s.debounceCmd(newQuery))
@@ -100,17 +130,22 @@ func (s *packageSearch) HandleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 func (s *packageSearch) debounceCmd(query string) bubble_tea.Cmd {
 	s.debounceID++
 	id := s.debounceID
+	requestID := s.requestID
 	return bubble_tea.Tick(500*time.Millisecond, func(t time.Time) bubble_tea.Msg {
-		return searchDebounceMsg{id: id, query: query}
+		return searchDebounceMsg{requestID: requestID, id: id, query: query}
 	})
 }
 
 func (s *packageSearch) doSearchCmd(query string) bubble_tea.Cmd {
 	services := s.app.ctx.NugetServices
 	sourceMapping := s.app.ctx.SourceMapping
+	requestID, id := s.requestID, s.debounceID
+	ctx, cancel := context.WithCancel(s.app.lifecycle)
+	s.cancel = cancel
 	return func() bubble_tea.Msg {
+		defer cancel()
 		if len(services) == 0 {
-			return searchResultsMsg{query: query, err: fmt.Errorf("no metadata-capable NuGet sources are available")}
+			return searchResultsMsg{requestID: requestID, id: id, query: query, err: fmt.Errorf("no metadata-capable NuGet sources are available")}
 		}
 		type sourceResult struct {
 			results []SearchResult
@@ -121,7 +156,7 @@ func (s *packageSearch) doSearchCmd(query string) bubble_tea.Cmd {
 		ch := make(chan sourceResult, len(services))
 		for _, svc := range services {
 			go func(svc *NugetService) {
-				results, err := svc.Search(query, 50)
+				results, err := svc.SearchContext(ctx, query, 50)
 				ch <- sourceResult{results: results, err: err, source: svc.SourceName()}
 			}(svc)
 		}
@@ -162,7 +197,7 @@ func (s *packageSearch) doSearchCmd(query string) bubble_tea.Cmd {
 			}
 		}
 		if len(merged) == 0 && lastErr != nil {
-			return searchResultsMsg{query: query, err: lastErr}
+			return searchResultsMsg{requestID: requestID, id: id, query: query, err: lastErr}
 		}
 		// Push exact matches to the top.
 		lowerQ := strings.ToLower(query)
@@ -171,25 +206,29 @@ func (s *packageSearch) doSearchCmd(query string) bubble_tea.Cmd {
 			jExact := strings.ToLower(merged[j].ID) == lowerQ
 			return iExact && !jExact
 		})
-		return searchResultsMsg{results: merged, query: query}
+		return searchResultsMsg{requestID: requestID, id: id, results: merged, query: query}
 	}
 }
 
 func (s *packageSearch) fetchPackageCmd(id string) bubble_tea.Cmd {
 	services := FilterServices(s.app.ctx.NugetServices, s.app.ctx.SourceMapping, id)
+	requestID := s.requestID
+	ctx, cancel := context.WithCancel(s.app.lifecycle)
+	s.cancel = cancel
 	return func() bubble_tea.Msg {
+		defer cancel()
 		if len(services) == 0 {
-			return packageFetchedMsg{err: fmt.Errorf("no metadata-capable NuGet source is available for %q", id)}
+			return packageFetchedMsg{requestID: requestID, err: fmt.Errorf("no metadata-capable NuGet source is available for %q", id)}
 		}
 		var lastErr error
 		for _, svc := range services {
-			info, err := svc.SearchExact(id)
+			info, err := svc.SearchExactContext(ctx, id)
 			if err == nil {
-				return packageFetchedMsg{info: info, source: svc.SourceName()}
+				return packageFetchedMsg{requestID: requestID, info: info, source: svc.SourceName()}
 			}
 			lastErr = err
 		}
-		return packageFetchedMsg{err: lastErr}
+		return packageFetchedMsg{requestID: requestID, err: lastErr}
 	}
 }
 
@@ -233,8 +272,8 @@ func (s *packageSearch) Render() string {
 	// Body — scale with terminal height but cap at 20 rows.
 	// 7 = 3 fixed content lines + 4 box chrome (border 2 + padding 2).
 	maxVisible := s.app.overlayHeight() - 7
-	if maxVisible < 5 {
-		maxVisible = 5
+	if maxVisible < 1 {
+		maxVisible = 1
 	}
 	if maxVisible > 20 {
 		maxVisible = 20

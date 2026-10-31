@@ -8,7 +8,10 @@ import (
 )
 
 func (s *versionPicker) FooterKeys() []kv {
-	return []kv{{"↑↓", "nav"}, {"u/U", "update/all"}, {"esc", "close"}}
+	if s.addMode {
+		return []kv{{"↑↓", "nav"}, {"enter", "add"}, {"esc", "close"}}
+	}
+	return []kv{{"↑↓", "nav"}, {"enter", "select"}, {"u/U", "update/all"}, {"esc", "close"}}
 }
 
 func (s *versionPicker) HandleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
@@ -36,6 +39,9 @@ func (s *versionPicker) HandleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 	case "U":
 		return s.applyPickerVersion(scopeAll)
 	case "enter":
+		if !s.app.canMutate() {
+			return s.app.setStatus("Wait for the save or workspace reload to finish", false)
+		}
 		if v := s.selectedVersion(); v != nil {
 			s.closeOverlay()
 			if s.addMode {
@@ -58,6 +64,9 @@ func (s *versionPicker) routeAddVersion(version string) bubble_tea.Cmd {
 }
 
 func (s *versionPicker) applyPickerVersion(scope actionScope) bubble_tea.Cmd {
+	if !s.app.canMutate() {
+		return s.app.setStatus("Wait for the save or workspace reload to finish", false)
+	}
 	v := s.selectedVersion()
 	if v == nil {
 		return nil
@@ -101,17 +110,7 @@ func (s *versionPicker) Render() string {
 	w := s.Width()
 	innerW := w - 6
 	regions := []mouseRegion{overlayCloseRegion(w, s.HandleKey)}
-	maxVisible := 16
 	versions := s.versions
-
-	start := 0
-	if s.cursor > maxVisible-1 {
-		start = s.cursor - maxVisible + 1
-	}
-	end := start + maxVisible
-	if end > len(versions) {
-		end = len(versions)
-	}
 
 	// Look up package-level info for deprecation notice and source.
 	var pkgInfo *PackageInfo
@@ -141,6 +140,14 @@ func (s *versionPicker) Render() string {
 		styleBorder.Render(strings.Repeat("─", innerW)),
 	)
 	rowStart := len(lines)
+	compact := s.app.overlayHeight() < 14
+	trailingLines := 4 // blank, legend, blank, buttons
+	if compact {
+		trailingLines = 1
+	}
+	maxVisible := max(1, min(16, s.app.overlayHeight()-rowStart-trailingLines-4))
+	start := max(0, s.cursor-maxVisible+1)
+	end := min(len(versions), start+maxVisible)
 
 	for i := start; i < end; i++ {
 		v := versions[i]
@@ -223,13 +230,15 @@ func (s *versionPicker) Render() string {
 		})
 	}
 
-	lines = append(lines, "")
-	legend := styleGreen.Render("■") + " compat  " +
-		styleYellow.Render("■") + " pre  " +
-		styleRed.Render("■") + " incompat  " +
-		styleRed.Render("▲") + " vuln"
-	lines = append(lines, styleMuted.Render(legend))
-	lines = append(lines, "")
+	if !compact {
+		lines = append(lines, "")
+		legend := styleGreen.Render("■") + " compat  " +
+			styleYellow.Render("■") + " pre  " +
+			styleRed.Render("■") + " incompat  " +
+			styleRed.Render("▲") + " vuln"
+		lines = append(lines, styleMuted.Render(legend))
+		lines = append(lines, "")
+	}
 	actionLabel := "Apply"
 	if s.addMode {
 		actionLabel = "Add"

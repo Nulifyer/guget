@@ -140,7 +140,11 @@ func (s *locationPicker) Render() string {
 		}
 	}
 
-	for i, r := range rows {
+	maxVisible := max(1, s.app.overlayHeight()-rowStart-6)
+	start := max(0, s.cursor-maxVisible+1)
+	end := min(len(rows), start+maxVisible)
+	for i := start; i < end; i++ {
+		r := rows[i]
 		prefix := "  "
 		nameStyle := styleMuted
 		if i == s.cursor {
@@ -154,14 +158,16 @@ func (s *locationPicker) Render() string {
 		lines = append(lines, line)
 		index := i
 		regions = append(regions, mouseRegion{
-			rect: mouseRect{x: overlayContentX, y: overlayContentY + rowStart + i, w: innerW, h: 1},
+			rect: mouseRect{x: overlayContentX, y: overlayContentY + rowStart + i - start, w: innerW, h: 1},
 			click: func(bubble_tea.MouseMsg) bubble_tea.Cmd {
 				s.cursor = index
 				return nil
 			},
 		})
 	}
-	lines = append(lines, "")
+	if s.app.overlayHeight() >= 14 {
+		lines = append(lines, "")
+	}
 	buttonLine, buttonRegions := renderOverlayButtons(innerW, len(lines), s.HandleKey,
 		overlayButton{label: "Cancel", code: bubble_tea.KeyEscape},
 		overlayButton{label: "Add", code: bubble_tea.KeyEnter},

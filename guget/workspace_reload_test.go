@@ -153,22 +153,14 @@ func TestRequestReload_QueuesWhileReloading(t *testing.T) {
 	}
 }
 
-func TestRequestReload_QueuesWhileLoading(t *testing.T) {
-	app := &App{
-		ctx:        &AppContext{Loading: true},
-		send:       func(tea.Msg) {},
-		projectDir: t.TempDir(),
+func TestRequestReload_DoesNotWaitForMetadata(t *testing.T) {
+	app, messages, _ := newActionTestApp(t, "")
+	app.ctx.Loading = true
+	app.requestReload(reloadRequestedMsg{reason: "during initial load"})
+	if app.hasPendingReload || !app.ctx.Reloading {
+		t.Fatal("metadata loading delayed workspace reload")
 	}
-
-	req := reloadRequestedMsg{reason: "during initial load"}
-	app.requestReload(req)
-
-	if !app.hasPendingReload {
-		t.Fatal("expected hasPendingReload=true while initial load in flight")
-	}
-	if app.ctx.StatusLine != "" {
-		t.Fatalf("expected no queued-status during initial load, got %q", app.ctx.StatusLine)
-	}
+	finishActionReload(t, app, messages)
 }
 
 func TestRequestReload_QueuedBurstCoalesces(t *testing.T) {

@@ -7,6 +7,7 @@ import (
 
 func TestReleaseNotesIgnoreStaleNuSpecResponse(t *testing.T) {
 	app := &App{ctx: &AppContext{}, lifecycle: context.Background()}
+	app.releaseNotes.active = true
 	app.releaseNotes.nsVersions = []string{"2.0.0", "1.0.0"}
 	app.releaseNotes.nsCursor = 0
 	app.releaseNotes.nsLoading = true
@@ -28,6 +29,7 @@ func TestReleaseNotesIgnoreStaleNuSpecResponse(t *testing.T) {
 
 func TestReleaseNotesIgnoreStaleGitHubResponse(t *testing.T) {
 	app := &App{ctx: &AppContext{}, lifecycle: context.Background()}
+	app.releaseNotes.active = true
 	app.releaseNotes.ghReleases = []GitHubRelease{{TagName: "v2"}, {TagName: "v1"}}
 	app.releaseNotes.ghCursor = 0
 	app.releaseNotes.ghLoading = true

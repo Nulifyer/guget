@@ -30,6 +30,8 @@ func (s *helpOverlay) HandleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 }
 
 func (s *helpOverlay) refreshView() {
+	w := s.Width()
+	innerW := w - 6
 	sections := mainKeyHelpSections()
 	sections = append(sections, keyHelpSection{
 		title: "Mouse", rows: [][2]string{
@@ -87,24 +89,26 @@ func (s *helpOverlay) refreshView() {
 	for _, sec := range sections {
 		lines = append(lines, "")
 		lines = append(lines, titleStyle.Render(sec.title))
-		lines = append(lines, dimStyle.Render(strings.Repeat("─", maxKeyW+32)))
+		lines = append(lines, dimStyle.Render(strings.Repeat("─", innerW)))
 		for _, row := range sec.rows {
 			k := keyStyle.Render(padRight(row[0], maxKeyW))
-			d := descStyle.Render(row[1])
-			lines = append(lines, k+"  "+d)
+			description := strings.Split(wordWrap(row[1], max(1, innerW-maxKeyW-2)), "\n")
+			lines = append(lines, k+"  "+descStyle.Render(description[0]))
+			for _, continuation := range description[1:] {
+				lines = append(lines, strings.Repeat(" ", maxKeyW+2)+descStyle.Render(continuation))
+			}
 		}
 	}
-	w := s.Width()
 
 	content := strings.Join(lines, "\n")
 	// Available height for scrollable content inside the overlay box after the
 	// fixed title and divider rows.
-	maxH := s.app.overlayHeight() - 8
-	if maxH < 8 {
-		maxH = 8
+	maxH := s.app.overlayHeight() - 6
+	if maxH < 1 {
+		maxH = 1
 	}
 
-	s.vp.SetWidth(w - 4)
+	s.vp.SetWidth(innerW)
 	s.vp.SetHeight(maxH)
 	s.vp.SetContent(content)
 }

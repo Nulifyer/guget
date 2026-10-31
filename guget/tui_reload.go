@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -33,7 +34,7 @@ func (m *App) requestReload(req reloadRequestedMsg) {
 		return
 	}
 
-	if m.ctx.Loading || m.ctx.Reloading || m.ctx.Saving {
+	if m.ctx.Reloading || m.ctx.Saving {
 		if req.selection == nil && m.hasPendingReload {
 			req.selection = m.pendingReload.selection
 		}
@@ -51,15 +52,34 @@ func (m *App) requestReload(req reloadRequestedMsg) {
 
 	m.workspaceGeneration++
 	generation := m.workspaceGeneration
-
+	if m.metadataCancel != nil {
+		m.metadataCancel()
+	}
+	var previous *workspaceSnapshot
+	reuseServices := req.reason == "package files changed"
 	if req.automatic && len(req.paths) > 0 {
-		logInfo("Workspace change detected: %s", formatReloadPaths(m.projectDir, req.paths))
-	} else {
-		logInfo("Reload requested: %s", reloadStatusText(req))
+		reuseServices = true
+		for _, path := range req.paths {
+			if strings.EqualFold(filepath.Base(path), "nuget.config") {
+				reuseServices = false
+				break
+			}
+		}
+	}
+	if reuseServices {
+		previous = &workspaceSnapshot{Sources: m.ctx.Sources, NugetServices: m.ctx.NugetServices}
 	}
 
 	go func() {
-		snapshot, err := loadWorkspaceContext(m.lifecycle, m.projectDir)
+		if req.automatic && len(req.paths) > 0 {
+			logInfo("Workspace change detected: %s", formatReloadPaths(m.projectDir, req.paths))
+		} else {
+			logInfo("Reload requested: %s", reloadStatusText(req))
+		}
+		snapshot, err := loadWorkspaceReusingServices(m.lifecycle, m.projectDir, previous)
+		if err != nil {
+			logWarn("Reload failed: %v", err)
+		}
 		m.send(workspaceReloadedMsg{
 			generation: generation,
 			snapshot:   snapshot,
@@ -74,8 +94,14 @@ func (m *App) handleWorkspaceReloaded(msg workspaceReloadedMsg) {
 		return
 	}
 	if msg.err != nil {
-		logWarn("Reload failed: %v", msg.err)
 		m.ctx.Reloading = false
+		// The prior generation was canceled when the reload began. Resume its
+		// unresolved packages against the workspace that remains on screen.
+		names := make([]string, 0, len(m.ctx.PendingPackages))
+		for name := range m.ctx.PendingPackages {
+			names = append(names, name)
+		}
+		m.startPackageFetch(names, false)
 		m.setStatus("▲ Reload failed: "+msg.err.Error(), true)
 		m.maybeStartQueuedReload()
 		return
@@ -85,7 +111,7 @@ func (m *App) handleWorkspaceReloaded(msg workspaceReloadedMsg) {
 	nextSourceSig := workspaceSourceSignature(msg.snapshot.Sources, msg.snapshot.SourceMapping)
 	invalidateAll := currentSourceSig != "" && currentSourceSig != nextSourceSig
 	if invalidateAll {
-		logInfo("NuGet source configuration changed; refreshing all package metadata")
+		go logInfo("NuGet source configuration changed; refreshing all package metadata")
 	}
 
 	m.applyWorkspaceSnapshot(msg.snapshot)
@@ -99,9 +125,9 @@ func (m *App) handleWorkspaceReloaded(msg workspaceReloadedMsg) {
 	m.selectPackageByName(selectedPackage)
 	m.refreshDetail()
 
-	if len(toFetch) == 0 {
-		m.finishReloadSuccess()
-	}
+	// Disk state is authoritative now. Metadata continues independently so a
+	// slow package source cannot prevent actions on packages already resolved.
+	m.finishReloadSuccess()
 }
 
 func (m *App) applyWorkspaceSnapshot(snapshot *workspaceSnapshot) {
@@ -187,6 +213,10 @@ func (m *App) selectPackageByName(name string) {
 }
 
 func (m *App) startPackageFetch(names []string, initial bool) {
+	if m.metadataCancel != nil {
+		m.metadataCancel()
+		m.metadataCancel = nil
+	}
 	m.ctx.LoadingDone = 0
 	m.ctx.LoadingTotal = len(names)
 	m.ctx.PendingPackages = NewSet[string]()
@@ -205,7 +235,9 @@ func (m *App) startPackageFetch(names []string, initial bool) {
 		return
 	}
 
-	fetchPackageMetadataAsync(m.send, m.workspaceGeneration, m.ctx.NugetServices, m.ctx.SourceMapping, names)
+	ctx, cancel := context.WithCancel(m.lifecycle)
+	m.metadataCancel = cancel
+	fetchPackageMetadataAsync(ctx, m.send, m.workspaceGeneration, m.ctx.NugetServices, m.ctx.SourceMapping, names)
 }
 
 func (m *App) finishReloadSuccess() {
@@ -237,6 +269,10 @@ func (m *App) maybeStartQueuedReload() {
 // auto-reload triggered by a disk change doesn't yank the user out of what
 // they're reading.
 func (m *App) closeReloadUnsafeOverlays() {
+	if m.search.app != nil {
+		m.search.closeOverlay()
+		m.search.input.Blur()
+	}
 	if m.picker.app != nil {
 		m.picker.closeOverlay()
 	}

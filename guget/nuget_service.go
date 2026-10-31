@@ -535,6 +535,10 @@ type ghPackageResponse struct {
 // fetchGitHubPackage calls the GitHub API to get package metadata including
 // the linked repository. Returns nil on any error (best-effort).
 func (s *NugetService) fetchGitHubPackage(owner, packageName string) *ghPackageResponse {
+	return s.fetchGitHubPackageContext(context.Background(), owner, packageName)
+}
+
+func (s *NugetService) fetchGitHubPackageContext(ctx context.Context, owner, packageName string) *ghPackageResponse {
 	// Extract the PAT from the auth transport for Bearer auth to the GitHub REST API.
 	at, _ := s.client.Transport.(*authTransport)
 	if at == nil {
@@ -553,7 +557,7 @@ func (s *NugetService) fetchGitHubPackage(owner, packageName string) *ghPackageR
 		"https://api.github.com/orgs/%s/packages/nuget/%s",
 	} {
 		apiURL := fmt.Sprintf(tmpl, owner, packageName)
-		req, err := http.NewRequest("GET", apiURL, nil)
+		req, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
 		if err != nil {
 			continue
 		}
@@ -909,12 +913,16 @@ func (s *NugetService) resolveUpstreamSearchBaseContext(ctx context.Context, ser
 // feed types (e.g. Azure DevOps returns HTTP 500 from its search endpoint for
 // packages not in the feed, whereas the registration endpoint returns 404).
 func (s *NugetService) SearchExact(packageID string) (*PackageInfo, error) {
+	return s.SearchExactContext(context.Background(), packageID)
+}
+
+func (s *NugetService) SearchExactContext(ctx context.Context, packageID string) (*PackageInfo, error) {
 	searchStart := time.Now()
 	logDebug("[%s] looking up %q via registration index", s.sourceName, packageID)
 	regURL := fmt.Sprintf("%s%s/index.json", s.regBase, strings.ToLower(packageID))
 
 	var regIdx registrationIndex
-	if err := s.getJSON(regURL, &regIdx); err != nil {
+	if err := s.getJSONContext(ctx, regURL, &regIdx); err != nil {
 		var he *httpStatusError
 		if errors.As(err, &he) && he.Code == http.StatusNotFound {
 			logDebug("[%s] %q not found (404)", s.sourceName, packageID)
@@ -935,7 +943,7 @@ func (s *NugetService) SearchExact(packageID string) (*PackageInfo, error) {
 			// Page not inlined — fetch it separately.
 			logTrace("[%s] fetching registration page %d/%d: %s", s.sourceName, pi+1, len(regIdx.Items), page.ID)
 			var fullPage registrationPage
-			if err := s.getJSON(page.ID, &fullPage); err != nil {
+			if err := s.getJSONContext(ctx, page.ID, &fullPage); err != nil {
 				return nil, fmt.Errorf("fetching page %s: %w", page.ID, err)
 			}
 			items = fullPage.Items
@@ -1026,7 +1034,7 @@ func (s *NugetService) SearchExact(packageID string) (*PackageInfo, error) {
 	// For GitHub Packages, call the GitHub API to resolve the source repo.
 	if pkg.ProjectURL == "" {
 		if owner := extractGitHubOwner(s.sourceURL); owner != "" {
-			if ghPkg := s.fetchGitHubPackage(owner, packageID); ghPkg != nil {
+			if ghPkg := s.fetchGitHubPackageContext(ctx, owner, packageID); ghPkg != nil {
 				if ghPkg.Repository.HTMLURL != "" {
 					pkg.ProjectURL = ghPkg.Repository.HTMLURL
 				} else {

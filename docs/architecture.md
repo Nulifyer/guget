@@ -91,6 +91,26 @@ reload. Adds select the new package, while version-picker changes and ordinary
 reloads preserve package identity. A completion preserves later user navigation
 or sort changes. Metadata replies also preserve the selected package.
 
+Startup scanning and feed initialization run after the event loop starts.
+Applying a workspace snapshot releases the reload guard before package metadata
+finishes. Each package keeps its own pending state. Save-triggered reloads and
+project-file watcher reloads reuse services when the complete source configuration
+matches, including credentials. Manual and NuGet.Config reloads initialize feeds
+again. A superseded metadata generation cancels its HTTP requests.
+
+Metadata arrivals schedule one row rebuild per 25 ms burst. Stable library sorts
+replace insertion sorts, and installed-version dates are resolved once per sort.
+Search and read-only overlay responses carry an ID for the opening that requested
+them. Search additionally checks the query revision and cancels superseded HTTP
+requests, so closing or reopening an overlay cannot apply an old result.
+
+Live logs use one forwarding goroutine and ordered batches. Both in-memory log
+buffers retain at most 2,000 entries. Hidden logs do not rebuild their viewport,
+and visible log refreshes coalesce over 50 ms without forcing a scrolled reader
+to the bottom. File logging remains complete. List overlays size their visible
+rows to the available height. Below 80 by 12 cells, the resize screen accepts
+quit keys and blocks hidden actions.
+
 ## Mutation transaction
 
 ```text

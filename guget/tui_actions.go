@@ -14,7 +14,7 @@ func (m *App) updatePackage(useStable bool, scope actionScope) bubble_tea.Cmd {
 		return nil
 	}
 	row := m.packages.rows[m.packages.cursor]
-	if row.err != nil {
+	if row.err != nil || row.loading {
 		return nil
 	}
 	var target *PackageVersion

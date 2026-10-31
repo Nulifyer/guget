@@ -155,6 +155,11 @@ func (m *App) relayout() {
 	innerH := m.panelContentHeight() - 2
 	m.detail.vp.SetWidth(rightW - 4)
 	m.detail.vp.SetHeight(innerH)
+	if m.depTree.active {
+		w, h := m.depTreeOverlaySize()
+		m.depTree.vp.SetWidth(max(1, w-6))
+		m.depTree.vp.SetHeight(max(1, h-8))
+	}
 	if m.ctx.ShowLogs {
 		m.log.vp.SetWidth(m.layoutWidth() - 4) // stylePanel: hBorder(2) + hPadding(2) = 4
 		m.log.vp.SetHeight(logPanelLines)
@@ -181,24 +186,15 @@ func (m *App) panelWidths() (left, mid, right int) {
 		right = lw - left - mid
 	}
 
-	// Shrink panels when the terminal is too narrow.
+	// Keep package names and requested versions readable on narrow terminals.
+	// Share the remaining columns between the side panels in their chosen ratio.
 	const minW = 10
-	if mid < minW {
-		right = lw - left - minW
-		if right < minW {
-			right = minW
-		}
-		mid = lw - left - right
-		if mid < minW {
-			left = lw - minW - right
-			if left < minW {
-				left = minW
-			}
-			mid = lw - left - right
-		}
-		if mid < minW {
-			mid = minW
-		}
+	const minPackageW = 40
+	if mid < minPackageW {
+		sideW := lw - minPackageW
+		left = max(minW, min(sideW-minW, sideW*left/max(1, left+right)))
+		right = sideW - left
+		mid = minPackageW
 	}
 
 	return
@@ -251,13 +247,7 @@ func (m *App) renderFooter() string {
 	} else if m.ctx.Saving {
 		statusStr = m.ctx.Spinner.View() + styleAccent.Render(" saving...")
 	} else if m.ctx.Reloading {
-		if m.ctx.LoadingTotal > 0 {
-			statusStr = m.ctx.Spinner.View() + styleAccent.Render(
-				fmt.Sprintf(" reloading... (%d/%d)", m.ctx.LoadingDone, m.ctx.LoadingTotal),
-			)
-		} else {
-			statusStr = m.ctx.Spinner.View() + styleAccent.Render(" reloading...")
-		}
+		statusStr = m.ctx.Spinner.View() + styleAccent.Render(" reloading...")
 	} else if m.ctx.LoadingDone < m.ctx.LoadingTotal {
 		statusStr = m.ctx.Spinner.View() + styleAccent.Render(
 			fmt.Sprintf(" loading packages... (%d/%d)", m.ctx.LoadingDone, m.ctx.LoadingTotal),

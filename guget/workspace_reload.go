@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/fs"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -32,9 +33,20 @@ func loadWorkspace(projectDir string) (*workspaceSnapshot, error) {
 }
 
 func loadWorkspaceContext(ctx context.Context, projectDir string) (*workspaceSnapshot, error) {
+	return loadWorkspaceReusingServices(ctx, projectDir, nil)
+}
+
+// Saves only change package declarations. Reuse initialized feeds when their
+// complete configuration is unchanged, avoiding network discovery per keypress.
+// Manual and NuGet.Config reloads pass nil so credentials and failed feeds refresh.
+func loadWorkspaceReusingServices(ctx context.Context, projectDir string, previous *workspaceSnapshot) (*workspaceSnapshot, error) {
 	snapshot, err := scanWorkspace(projectDir)
 	if err != nil {
 		return nil, err
+	}
+	if previous != nil && slices.Equal(previous.Sources, snapshot.Sources) {
+		snapshot.NugetServices = previous.NugetServices
+		return snapshot, nil
 	}
 
 	for _, src := range snapshot.Sources {
@@ -234,7 +246,7 @@ func planPackageReload(snapshot *workspaceSnapshot, current map[string]nugetResu
 	return next, toFetch
 }
 
-func fetchPackageMetadataAsync(send func(tea.Msg), generation int, nugetServices []*NugetService, sourceMapping *PackageSourceMapping, packageNames []string) {
+func fetchPackageMetadataAsync(ctx context.Context, send func(tea.Msg), generation int, nugetServices []*NugetService, sourceMapping *PackageSourceMapping, packageNames []string) {
 	if send == nil || len(packageNames) == 0 {
 		return
 	}
@@ -258,6 +270,9 @@ func fetchPackageMetadataAsync(send func(tea.Msg), generation int, nugetServices
 			go func() {
 				defer wg.Done()
 				for name := range jobs {
+					if ctx.Err() != nil {
+						return
+					}
 					var info *PackageInfo
 					var sourceName string
 					var lastErr error
@@ -270,7 +285,7 @@ func fetchPackageMetadataAsync(send func(tea.Msg), generation int, nugetServices
 						}
 					}
 					for _, svc := range eligibleServices {
-						info, lastErr = svc.SearchExact(name)
+						info, lastErr = svc.SearchExactContext(ctx, name)
 						if lastErr == nil {
 							sourceName = svc.SourceName()
 							break
@@ -279,12 +294,15 @@ func fetchPackageMetadataAsync(send func(tea.Msg), generation int, nugetServices
 					}
 
 					if info != nil && !strings.EqualFold(sourceName, "nuget.org") && nugetOrgSvc != nil && serviceIncluded(eligibleServices, nugetOrgSvc) {
-						if nugetInfo, err := nugetOrgSvc.SearchExact(name); err == nil {
+						if nugetInfo, err := nugetOrgSvc.SearchExactContext(ctx, name); err == nil {
 							info.NugetOrgURL = "https://www.nuget.org/packages/" + nugetInfo.ID
 							enrichFromNugetOrg(info, nugetInfo)
 						}
 					}
 
+					if ctx.Err() != nil {
+						return
+					}
 					send(packageReadyMsg{
 						generation: generation,
 						name:       name,
@@ -294,7 +312,13 @@ func fetchPackageMetadataAsync(send func(tea.Msg), generation int, nugetServices
 			}()
 		}
 		for _, name := range packageNames {
-			jobs <- name
+			select {
+			case jobs <- name:
+			case <-ctx.Done():
+				close(jobs)
+				wg.Wait()
+				return
+			}
 		}
 		close(jobs)
 		wg.Wait()

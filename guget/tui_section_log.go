@@ -6,13 +6,29 @@ import (
 	lipgloss "charm.land/lipgloss/v2"
 )
 
+const maxLogLines = 2000
+
+func appendLogLine(lines []string, line string) []string {
+	if len(lines) >= maxLogLines {
+		copy(lines, lines[len(lines)-maxLogLines+1:])
+		lines = lines[:maxLogLines-1]
+	}
+	return append(lines, line)
+}
+
 func (m *App) updateLogView() {
+	follow := m.log.vp.AtBottom()
+	offset := m.log.vp.YOffset()
 	var colored []string
 	for _, line := range m.ctx.LogLines {
 		colored = append(colored, colorizeLogLine(line))
 	}
 	m.log.vp.SetContent(strings.Join(colored, "\n"))
-	m.log.vp.GotoBottom()
+	if follow {
+		m.log.vp.GotoBottom()
+	} else {
+		m.log.vp.SetYOffset(offset)
+	}
 }
 
 func colorizeLogLine(line string) string {

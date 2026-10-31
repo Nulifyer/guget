@@ -55,6 +55,7 @@ type sectionBase struct {
 
 	// State
 	active       bool // overlays: whether this overlay is currently shown
+	requestID    int  // identifies this opening so late replies cannot affect another
 	widthOffset  int  // mutated by [ / ] resize
 	mouseRegions []mouseRegion
 }

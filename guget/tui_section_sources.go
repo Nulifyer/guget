@@ -4,10 +4,11 @@ import (
 	"strings"
 
 	bubble_tea "charm.land/bubbletea/v2"
+	lipgloss "charm.land/lipgloss/v2"
 )
 
 func (s *sourcesOverlay) FooterKeys() []kv {
-	return []kv{{"esc", "close"}}
+	return []kv{{"↑↓", "scroll"}, {"esc", "close"}}
 }
 
 func (s *sourcesOverlay) HandleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
@@ -18,6 +19,10 @@ func (s *sourcesOverlay) HandleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 		s.Resize(4)
 	case "esc", "s", "q":
 		s.closeOverlay()
+	default:
+		var cmd bubble_tea.Cmd
+		s.vp, cmd = s.vp.Update(msg)
+		return cmd
 	}
 	return nil
 }
@@ -54,9 +59,15 @@ func (s *sourcesOverlay) Render() string {
 		}
 	}
 
+	s.vp.SetWidth(innerW)
+	s.vp.SetHeight(max(1, min(len(lines)-2, s.app.overlayHeight()-6)))
+	s.vp.SetContent(strings.Join(lines[2:], "\n"))
 	box := styleOverlay.
 		Width(w).
-		Render(strings.Join(lines, "\n"))
+		Render(strings.Join(lines[:2], "\n") + "\n" + s.vp.View())
 
-	return s.centerOverlayInteractive(box, []mouseRegion{overlayCloseRegion(w, s.HandleKey)})
+	return s.centerOverlayInteractive(box, []mouseRegion{
+		overlayCloseRegion(w, s.HandleKey),
+		{rect: mouseRect{x: 1, y: 1, w: w - 2, h: lipgloss.Height(box) - 2}, wheel: verticalWheelHandler(s.HandleKey)},
+	})
 }

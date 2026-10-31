@@ -225,7 +225,8 @@ contracts.
 | `↑` / `k` | Move up |
 | `↓` / `j` | Move down |
 | `Enter` | Confirm / move focus from Projects to Packages |
-| `Esc` / `q` / `Ctrl+C` | Quit (main screen) / Close (overlay) |
+| `Esc` / `q` | Quit (main screen) / Close (overlay) |
+| `Ctrl+C` | Quit from any screen |
 
 Mouse navigation is enabled by default. A left click selects project and
 package rows, sorts package columns, opens links, switches release-note tabs,
@@ -261,6 +262,17 @@ quick update keeps the cursor on the same row while the updated package moves
 down. Guget accepts the next update after the write and reload finish.
 `U` and `A` apply to the selected package across projects.
 Pinned versions still require confirmation, and up-to-date packages do not trigger writes.
+
+Scanning, metadata requests, saves, and restores run in the background. Panels,
+help, and navigation remain available while work proceeds. Packages with loaded
+metadata can be updated while other packages are still loading. Saves run one
+at a time. Unchanged feeds reuse their initialized connections after a save.
+Manual reloads and `NuGet.Config` changes refresh feed discovery.
+
+The log panel keeps the latest 2,000 entries and preserves your scroll position
+when you scroll away from the bottom. Use `--log-file` for complete logs.
+The TUI requires at least 80 columns and 12 rows. Smaller terminals show a resize
+message and disable package actions until the content is visible again.
 
 Adding selects the new package. Removing keeps the nearest remaining row.
 Manual and automatic disk reloads preserve the selected package when it remains present.

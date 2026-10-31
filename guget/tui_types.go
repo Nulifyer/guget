@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"fmt"
+	"slices"
 	"strings"
 
 	bubbles_textinpute "charm.land/bubbles/v2/textinput"
@@ -101,6 +103,8 @@ type packageReadyMsg struct {
 	result     nugetResult
 }
 
+type packageRowsRefreshMsg struct{}
+
 type reloadRequestedMsg struct {
 	reason    string
 	paths     []string
@@ -133,25 +137,31 @@ type resizeDebounceMsg struct {
 }
 
 type searchDebounceMsg struct {
-	id    int
-	query string
+	requestID int
+	id        int
+	query     string
 }
 
 type searchResultsMsg struct {
-	results []SearchResult
-	query   string
-	err     error
+	requestID int
+	id        int
+	results   []SearchResult
+	query     string
+	err       error
 }
 
 type packageFetchedMsg struct {
-	info   *PackageInfo
-	source string
-	err    error
+	requestID int
+	info      *PackageInfo
+	source    string
+	err       error
 }
 
-type logLineMsg struct {
-	line string
+type logBatchMsg struct {
+	lines []string
 }
+
+type logRefreshMsg struct{}
 
 type openURLRequestedMsg struct {
 	url string
@@ -163,11 +173,13 @@ type openURLResultMsg struct {
 }
 
 type depTreeReadyMsg struct {
-	content string
-	err     error
+	requestID int
+	content   string
+	err       error
 }
 
 type releaseListReadyMsg struct {
+	requestID   int
 	releases    []GitHubRelease
 	err         error
 	owner       string // set when repo was discovered late (e.g. from nuspec)
@@ -177,10 +189,11 @@ type releaseListReadyMsg struct {
 }
 
 type releaseNotesReadyMsg struct {
-	tag     string
-	body    string
-	htmlURL string
-	err     error
+	requestID int
+	tag       string
+	body      string
+	htmlURL   string
+	err       error
 }
 
 // nuspecVersionListReadyMsg signals that the list of versions for the NuSpec
@@ -193,9 +206,10 @@ type nuspecVersionListReadyMsg struct {
 
 // nuspecVersionNotesReadyMsg delivers the <releaseNotes> for a single version.
 type nuspecVersionNotesReadyMsg struct {
-	version string
-	notes   string
-	err     error
+	requestID int
+	version   string
+	notes     string
+	err       error
 }
 
 // --- Panel state types ---
@@ -276,6 +290,7 @@ type releaseNotesOverlay struct {
 
 type sourcesOverlay struct {
 	sectionBase // baseWidth=90, minWidth=40, maxMargin=4
+	vp          bubbles_viewport.Model
 }
 
 type helpOverlay struct {
@@ -306,6 +321,7 @@ func (p projectItem) Description() string {
 		fws = append(fws, fw.String())
 	}
 	if len(fws) > 0 {
+		slices.Sort(fws)
 		return strings.Join(fws, ", ")
 	}
 	return fmt.Sprintf("%d packages", p.project.Packages.Len())
@@ -423,6 +439,7 @@ type packageSearch struct {
 	fetchingVersion bool
 	fetchedInfo     *PackageInfo
 	fetchedSource   string
+	cancel          context.CancelFunc
 }
 
 type confirmRemove struct {

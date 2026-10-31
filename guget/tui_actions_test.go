@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -25,6 +26,9 @@ func newActionTestApp(t *testing.T, content string) (*App, chan tea.Msg, string)
 		t.Fatal(err)
 	}
 	m := NewApp(root, snapshot, nil, BuiltFlags{SortBy: "status:asc"})
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	m.lifecycle = ctx
 	m.ctx.Width, m.ctx.Height = 140, 40
 	m.focus = focusPackages
 	m.projects.cursor = 1
@@ -315,7 +319,8 @@ func TestSortAndNavigationAliases(t *testing.T) {
 func TestMetadataRepliesPreserveSelectedPackage(t *testing.T) {
 	m, _, _ := newActionTestApp(t, "")
 	m.movePackageCursor(1)
-	m.Update(packageReadyMsg{generation: m.workspaceGeneration, name: "A", result: nugetResult{pkg: &PackageInfo{ID: "A", Versions: []PackageVersion{{SemVer: ParseSemVer("1.0.0")}}}}})
+	_, cmd := m.Update(packageReadyMsg{generation: m.workspaceGeneration, name: "A", result: nugetResult{pkg: &PackageInfo{ID: "A", Versions: []PackageVersion{{SemVer: ParseSemVer("1.0.0")}}}}})
+	executeActionCmd(t, m, cmd)
 	if selectedActionPackage(m) != "B" || m.packages.cursor != 0 {
 		t.Fatalf("selected=%s cursor=%d", selectedActionPackage(m), m.packages.cursor)
 	}

@@ -1,6 +1,8 @@
 package main
 
 import (
+	"cmp"
+	"slices"
 	"strings"
 	"time"
 
@@ -413,11 +415,9 @@ func (m *App) rebuildPackageRows() {
 }
 
 func sortPackageRowsByName(rows []packageRow) {
-	for i := 1; i < len(rows); i++ {
-		for j := i; j > 0 && rows[j].ref.Name < rows[j-1].ref.Name; j-- {
-			rows[j], rows[j-1] = rows[j-1], rows[j]
-		}
-	}
+	slices.SortStableFunc(rows, func(a, b packageRow) int {
+		return strings.Compare(a.ref.Name, b.ref.Name)
+	})
 }
 
 func sortPackageRowsByStatus(rows []packageRow) {
@@ -441,41 +441,46 @@ func sortPackageRowsByStatus(rows []packageRow) {
 		}
 		return 4
 	}
-	for i := 1; i < len(rows); i++ {
-		for j := i; j > 0 && priority(rows[j]) < priority(rows[j-1]); j-- {
-			rows[j], rows[j-1] = rows[j-1], rows[j]
-		}
-	}
+	slices.SortStableFunc(rows, func(a, b packageRow) int {
+		return cmp.Compare(priority(a), priority(b))
+	})
 }
 
 func sortPackageRowsBySource(rows []packageRow) {
-	for i := 1; i < len(rows); i++ {
-		for j := i; j > 0 && rows[j].source < rows[j-1].source; j-- {
-			rows[j], rows[j-1] = rows[j-1], rows[j]
-		}
-	}
+	slices.SortStableFunc(rows, func(a, b packageRow) int {
+		return strings.Compare(a.source, b.source)
+	})
 }
 
 // sortPackageRowsByCurrent sorts by the published date of the currently
 // installed version (newest first).
 func sortPackageRowsByCurrent(rows []packageRow) {
-	published := func(r packageRow) time.Time {
-		if r.info == nil {
-			return time.Time{}
+	type versionKey struct {
+		info    *PackageInfo
+		version string
+	}
+	dates := make(map[versionKey]time.Time, len(rows))
+	for _, r := range rows {
+		key := versionKey{r.info, r.effectiveVersion().Raw}
+		if _, ok := dates[key]; ok {
+			continue
 		}
-		ver := r.effectiveVersion()
-		for i := range r.info.Versions {
-			if r.info.Versions[i].SemVer.Raw == ver.Raw {
-				return r.info.Versions[i].Published
+		dates[key] = time.Time{}
+		if r.info != nil {
+			for _, v := range r.info.Versions {
+				if v.SemVer.Raw == key.version {
+					dates[key] = v.Published
+					break
+				}
 			}
 		}
-		return time.Time{}
 	}
-	for i := 1; i < len(rows); i++ {
-		for j := i; j > 0 && published(rows[j]).Before(published(rows[j-1])); j-- {
-			rows[j], rows[j-1] = rows[j-1], rows[j]
-		}
+	published := func(r packageRow) time.Time {
+		return dates[versionKey{r.info, r.effectiveVersion().Raw}]
 	}
+	slices.SortStableFunc(rows, func(a, b packageRow) int {
+		return published(a).Compare(published(b))
+	})
 }
 
 // sortPackageRowsByAvailable sorts by the published date of the best available
@@ -493,11 +498,9 @@ func sortPackageRowsByAvailable(rows []packageRow) {
 		}
 		return time.Time{}
 	}
-	for i := 1; i < len(rows); i++ {
-		for j := i; j > 0 && published(rows[j]).Before(published(rows[j-1])); j-- {
-			rows[j], rows[j-1] = rows[j-1], rows[j]
-		}
-	}
+	slices.SortStableFunc(rows, func(a, b packageRow) int {
+		return published(a).Compare(published(b))
+	})
 }
 
 func (m *App) refreshDetail() {

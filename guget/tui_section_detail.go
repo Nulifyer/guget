@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	lipgloss "charm.land/lipgloss/v2"
@@ -104,6 +105,7 @@ func (m *App) renderDetailHeader(row packageRow, w int) string {
 		for a := range row.info.Authors {
 			authors = append(authors, a)
 		}
+		slices.Sort(authors)
 		s.WriteString(styleMuted.Render("Authors") + "\n")
 		s.WriteString(styleText.Render(strings.Join(authors, ", ")) + "\n\n")
 	}

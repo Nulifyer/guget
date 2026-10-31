@@ -11,20 +11,20 @@ import (
 	lipgloss "charm.land/lipgloss/v2"
 )
 
-func runDepTreeCmd(ctx context.Context, project *ParsedProject) bubble_tea.Cmd {
+func runDepTreeCmd(ctx context.Context, project *ParsedProject, requestID int) bubble_tea.Cmd {
 	return func() bubble_tea.Msg {
 		cmd := exec.CommandContext(ctx, "dotnet", "list", project.FilePath, "package", "--include-transitive")
 		out, err := cmd.CombinedOutput()
 		if err != nil {
-			return depTreeReadyMsg{err: fmt.Errorf("dotnet list: %w\n%s", err, strings.TrimSpace(string(out)))}
+			return depTreeReadyMsg{requestID: requestID, err: fmt.Errorf("dotnet list: %w\n%s", err, strings.TrimSpace(string(out)))}
 		}
-		return depTreeReadyMsg{content: string(out)}
+		return depTreeReadyMsg{requestID: requestID, content: string(out)}
 	}
 }
 
 func newDepTreeOverlay(m *App, title string, loading bool) depTreeOverlay {
 	dt := depTreeOverlay{
-		sectionBase: sectionBase{app: m, basePct: 80, minWidth: 40, maxMargin: 4, active: true},
+		sectionBase: sectionBase{app: m, basePct: 80, minWidth: 40, maxMargin: 4, active: true, requestID: m.nextRequestID()},
 		title:       title,
 		loading:     loading,
 	}
@@ -65,7 +65,7 @@ func (m *App) openTransitiveDepTree() bubble_tea.Cmd {
 	}
 	m.ctx.StatusLine = ""
 	m.depTree = newDepTreeOverlay(m, proj.FileName+" (transitive packages)", true)
-	return runDepTreeCmd(m.lifecycle, proj)
+	return runDepTreeCmd(m.lifecycle, proj, m.depTree.requestID)
 }
 
 func (m *App) depTreeOverlaySize() (w, h int) {

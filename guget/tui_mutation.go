@@ -34,7 +34,7 @@ func (m *App) rowReloadSelection() *reloadSelection {
 }
 
 func (m *App) canMutate() bool {
-	return !m.ctx.Saving && !m.ctx.Reloading && !m.ctx.Loading
+	return !m.ctx.Saving && !m.ctx.Reloading
 }
 
 func (m *App) startMutation(verb, packageID, version string, targets []mutationTarget, options mutationOptions, selection *reloadSelection) tea.Cmd {

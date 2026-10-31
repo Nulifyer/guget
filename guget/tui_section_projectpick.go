@@ -168,10 +168,12 @@ func (s *projectPicker) Render() string {
 	}
 	rowStart := len(lines)
 
-	maxVisible := s.app.overlayHeight() - 8
-	if maxVisible < 5 {
-		maxVisible = 5
+	compact := s.app.overlayHeight() < 14
+	trailingLines := 5 // blank, divider, summary, blank, buttons
+	if compact {
+		trailingLines = 1
 	}
+	maxVisible := max(1, s.app.overlayHeight()-rowStart-trailingLines-4)
 
 	start := 0
 	if s.cursor >= maxVisible {
@@ -252,21 +254,23 @@ func (s *projectPicker) Render() string {
 	}
 
 	// Summary line
-	count := s.selectedCount()
-	lines = append(lines, "")
-	lines = append(lines, styleMuted.Render(
-		padRight("", 2)+styleSubtle.Render(
-			strings.Repeat("─", innerW-2),
-		),
-	))
-	if count > 0 {
-		lines = append(lines, styleAccent.Render(
-			padRight("", 2)+formatCount(count, "project", "projects")+" selected",
+	if !compact {
+		count := s.selectedCount()
+		lines = append(lines, "")
+		lines = append(lines, styleMuted.Render(
+			padRight("", 2)+styleSubtle.Render(
+				strings.Repeat("─", innerW-2),
+			),
 		))
-	} else {
-		lines = append(lines, styleMuted.Render(padRight("", 2)+"No projects selected"))
+		if count > 0 {
+			lines = append(lines, styleAccent.Render(
+				padRight("", 2)+formatCount(count, "project", "projects")+" selected",
+			))
+		} else {
+			lines = append(lines, styleMuted.Render(padRight("", 2)+"No projects selected"))
+		}
+		lines = append(lines, "")
 	}
-	lines = append(lines, "")
 	buttonLine, buttonRegions := renderOverlayButtons(innerW, len(lines), s.HandleKey,
 		overlayButton{label: "Cancel", code: bubble_tea.KeyEscape},
 		overlayButton{label: "Add", code: bubble_tea.KeyEnter},

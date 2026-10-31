@@ -63,7 +63,16 @@ type App struct {
 	pendingReload       reloadRequestedMsg
 	hasPendingReload    bool
 
-	resizeDebounceID int
+	resizeDebounceID      int
+	requestID             int
+	logRefreshPending     bool
+	metadataCancel        context.CancelFunc
+	packageRefreshPending bool
+}
+
+func (m *App) nextRequestID() int {
+	m.requestID++
+	return m.requestID
 }
 
 // overlays returns all overlay sections in priority order (highest first).
@@ -140,6 +149,7 @@ func NewApp(projectDir string, snapshot *workspaceSnapshot, initialLogLines []st
 		},
 		sources: sourcesOverlay{
 			sectionBase: sectionBase{baseWidth: 90, minWidth: 40, maxMargin: 4},
+			vp:          bubbles_viewport.New(),
 		},
 		help: helpOverlay{
 			sectionBase: sectionBase{basePct: 60, minWidth: 56, maxMargin: 4},
@@ -206,13 +216,15 @@ func (m *App) Update(msg bubble_tea.Msg) (bubble_tea.Model, bubble_tea.Cmd) {
 			m.ctx.LoadingDone++
 			if m.ctx.LoadingDone >= m.ctx.LoadingTotal {
 				m.ctx.Loading = false
-				if m.ctx.Reloading {
-					m.finishReloadSuccess()
-				} else {
-					m.maybeStartQueuedReload()
-				}
 			}
 		}
+		if !m.packageRefreshPending {
+			m.packageRefreshPending = true
+			cmds = append(cmds, bubble_tea.Tick(25*time.Millisecond, func(time.Time) bubble_tea.Msg { return packageRowsRefreshMsg{} }))
+		}
+
+	case packageRowsRefreshMsg:
+		m.packageRefreshPending = false
 		selectedPackage := m.packageSelection().name
 		m.rebuildPackageRows()
 		m.selectPackageByName(selectedPackage)
@@ -247,20 +259,19 @@ func (m *App) Update(msg bubble_tea.Msg) (bubble_tea.Model, bubble_tea.Cmd) {
 	case restoreResultMsg:
 		m.ctx.Restoring = false
 		if msg.err != nil {
-			logError("restore failed: %v", msg.err)
 			cmds = append(cmds, m.setStatus("✗ Restore failed (see logs)", true))
 		} else {
 			cmds = append(cmds, m.setStatus("✓ Restore complete", false))
 		}
 
 	case searchDebounceMsg:
-		if msg.id == m.search.debounceID && msg.query != "" {
+		if m.search.active && msg.requestID == m.search.requestID && msg.id == m.search.debounceID && msg.query == m.search.lastQuery && msg.query != "" {
 			m.search.loading = true
 			cmds = append(cmds, m.search.doSearchCmd(msg.query))
 		}
 
 	case searchResultsMsg:
-		if msg.query == m.search.lastQuery {
+		if m.search.active && msg.requestID == m.search.requestID && msg.id == m.search.debounceID && msg.query == m.search.lastQuery {
 			m.search.loading = false
 			m.search.err = msg.err
 			if msg.err == nil {
@@ -270,8 +281,11 @@ func (m *App) Update(msg bubble_tea.Msg) (bubble_tea.Model, bubble_tea.Cmd) {
 		}
 
 	case packageFetchedMsg:
+		if !m.search.active || msg.requestID != m.search.requestID || !m.search.fetchingVersion {
+			break
+		}
 		m.search.fetchingVersion = false
-		if msg.err != nil {
+		if msg.err != nil || msg.info == nil {
 			m.search.err = msg.err
 			break
 		}
@@ -293,9 +307,20 @@ func (m *App) Update(msg bubble_tea.Msg) (bubble_tea.Model, bubble_tea.Cmd) {
 			m.picker = newVersionPicker(m, msg.info.ID, msg.info.Versions, allTFMs, nil, true)
 		}
 
-	case logLineMsg:
-		m.ctx.LogLines = append(m.ctx.LogLines, msg.line)
-		m.updateLogView()
+	case logBatchMsg:
+		for _, line := range msg.lines {
+			m.ctx.LogLines = appendLogLine(m.ctx.LogLines, line)
+		}
+		if m.ctx.ShowLogs && !m.logRefreshPending {
+			m.logRefreshPending = true
+			cmds = append(cmds, bubble_tea.Tick(50*time.Millisecond, func(time.Time) bubble_tea.Msg { return logRefreshMsg{} }))
+		}
+
+	case logRefreshMsg:
+		m.logRefreshPending = false
+		if m.ctx.ShowLogs {
+			m.updateLogView()
+		}
 
 	case openURLRequestedMsg:
 		cmds = append(cmds, openURLCmd(m.lifecycle, msg.url))
@@ -308,6 +333,9 @@ func (m *App) Update(msg bubble_tea.Msg) (bubble_tea.Model, bubble_tea.Cmd) {
 		}
 
 	case releaseListReadyMsg:
+		if !m.releaseNotes.active || msg.requestID != m.releaseNotes.requestID {
+			break
+		}
 		m.releaseNotes.ghLoading = false
 		if msg.owner != "" {
 			m.releaseNotes.ghOwner = msg.owner
@@ -350,7 +378,7 @@ func (m *App) Update(msg bubble_tea.Msg) (bubble_tea.Model, bubble_tea.Cmd) {
 		cmds = append(cmds, m.releaseNotes.fetchReleaseNotesCmd(msg.releases[0]))
 
 	case releaseNotesReadyMsg:
-		if msg.tag != m.releaseNotes.selectedGitHubTag() {
+		if !m.releaseNotes.active || msg.requestID != m.releaseNotes.requestID || msg.tag != m.releaseNotes.selectedGitHubTag() {
 			break
 		}
 		m.releaseNotes.ghLoading = false
@@ -363,6 +391,9 @@ func (m *App) Update(msg bubble_tea.Msg) (bubble_tea.Model, bubble_tea.Cmd) {
 		m.releaseNotes.updateViewportContent()
 
 	case nuspecVersionNotesReadyMsg:
+		if !m.releaseNotes.active || msg.requestID != m.releaseNotes.requestID {
+			break
+		}
 		if msg.notes != "" {
 			m.releaseNotes.nsAvailable = true
 		}
@@ -377,6 +408,9 @@ func (m *App) Update(msg bubble_tea.Msg) (bubble_tea.Model, bubble_tea.Cmd) {
 		}
 
 	case depTreeReadyMsg:
+		if !m.depTree.active || msg.requestID != m.depTree.requestID {
+			break
+		}
 		m.depTree.loading = false
 		m.depTree.err = msg.err
 		if msg.err == nil {
@@ -393,6 +427,12 @@ func (m *App) Update(msg bubble_tea.Msg) (bubble_tea.Model, bubble_tea.Cmd) {
 	case bubble_tea.KeyPressMsg:
 		if msg.String() == "ctrl+c" {
 			return m, bubble_tea.Quit
+		}
+		if m.ctx.Width > 0 && (m.ctx.Width < 80 || m.ctx.Height < 12) {
+			if mainKey(msg.String()) == "ctrl+c" {
+				return m, bubble_tea.Quit
+			}
+			return m, nil
 		}
 		handled := false
 		for _, o := range m.overlays() {
@@ -448,7 +488,7 @@ func (m *App) setStatus(text string, isErr bool) bubble_tea.Cmd {
 	}
 	maxW := m.layoutWidth() - 6 // padding + border
 	if lipgloss.Width(text) > maxW && maxW > 3 {
-		text = text[:maxW-3] + "..."
+		text = truncate(text, maxW)
 	}
 	m.ctx.StatusLine = text
 	m.ctx.StatusIsErr = isErr
@@ -644,15 +684,12 @@ func (m *App) View() bubble_tea.View {
 		v.SetContent("Initializing...")
 		return v
 	}
-
-	if m.ctx.Loading {
-		w := len(fmt.Sprintf("%d", m.ctx.LoadingTotal))
-		v.SetContent(lipgloss.Place(m.ctx.Width, m.ctx.Height,
-			lipgloss.Center, lipgloss.Center,
-			styleAccent.Render(
-				fmt.Sprintf("%s Loading packages... (%*d/%d)", m.ctx.Spinner.View(), w, m.ctx.LoadingDone, m.ctx.LoadingTotal),
-			),
-		))
+	if m.ctx.Width < 80 || m.ctx.Height < 12 {
+		lines := []string{"Resize terminal to at least 80 x 12.", "esc / q / ctrl+c quit"}
+		for i := range lines {
+			lines[i] = truncate(lines[i], max(0, m.ctx.Width))
+		}
+		v.SetContent(strings.Join(lines[:min(len(lines), max(0, m.ctx.Height))], "\n"))
 		return v
 	}
 
@@ -676,7 +713,7 @@ func (m *App) View() bubble_tea.View {
 		// Overlay renderers use overlayHeight() to fit above the footer.
 		// Safety trim in case the overlay output still exceeds the space.
 		overlayLines := strings.Split(overlay, "\n")
-		maxLines := m.ctx.Height - footerH
+		maxLines := max(0, m.ctx.Height-footerH)
 		if len(overlayLines) > maxLines {
 			overlayLines = overlayLines[:maxLines]
 		}
@@ -705,7 +742,7 @@ func (m *App) View() bubble_tea.View {
 	// footer height — the same pattern that makes overlays work.
 	joined := lipgloss.JoinVertical(lipgloss.Left, parts...)
 	bodyLines := strings.Split(joined, "\n")
-	maxBodyLines := m.ctx.Height - footerH
+	maxBodyLines := max(0, m.ctx.Height-footerH)
 	if len(bodyLines) > maxBodyLines {
 		bodyLines = bodyLines[:maxBodyLines]
 	}

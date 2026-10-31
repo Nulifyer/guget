@@ -179,6 +179,12 @@ func (l mouseLayout) packageIndexAt(x, y, total int) (int, bool) {
 }
 
 func (m *App) handleMouse(input mouseInputMsg) bubble_tea.Cmd {
+	if m.ctx.Width > 0 && (m.ctx.Width < 80 || m.ctx.Height < 12) {
+		return nil
+	}
+	if !input.layout.modal && m.anyOverlayActive() {
+		return nil
+	}
 	for _, region := range input.layout.regions {
 		event := input.event.Mouse()
 		if !region.rect.contains(event.X, event.Y) {

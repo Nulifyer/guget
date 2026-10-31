@@ -20,9 +20,11 @@ func versionString() string {
 }
 
 type logBuffer struct {
-	mu    sync.Mutex
-	lines []string
-	send  func(tea.Msg)
+	mu         sync.Mutex
+	lines      []string
+	send       func(tea.Msg)
+	pending    []string
+	forwarding bool
 }
 
 func (b *logBuffer) Write(p []byte) (int, error) {
@@ -31,18 +33,38 @@ func (b *logBuffer) Write(p []byte) (int, error) {
 		return len(p), nil
 	}
 	b.mu.Lock()
-	b.lines = append(b.lines, line)
+	b.lines = appendLogLine(b.lines, line)
 	send := b.send
-	b.mu.Unlock()
 	if send != nil {
-		// Use a goroutine so callers on the Bubbletea event loop goroutine
-		// (e.g. log calls inside Update) don't deadlock p.Send's channel.
-		go send(logLineMsg{line: line})
-	} else {
+		b.pending = appendLogLine(b.pending, line)
+		if !b.forwarding {
+			b.forwarding = true
+			go b.forward()
+		}
+	}
+	b.mu.Unlock()
+	if send == nil {
 		// Before the TUI starts, mirror to stderr so fatal errors are visible.
 		fmt.Fprintln(os.Stderr, line)
 	}
 	return len(p), nil
+}
+
+// One forwarder drains ordered batches. Logging on the event loop never waits
+// for Program.Send, and a slow UI cannot create one blocked goroutine per line.
+func (b *logBuffer) forward() {
+	for {
+		b.mu.Lock()
+		if len(b.pending) == 0 {
+			b.forwarding = false
+			b.mu.Unlock()
+			return
+		}
+		lines, send := b.pending, b.send
+		b.pending = nil
+		b.mu.Unlock()
+		send(logBatchMsg{lines: lines})
+	}
 }
 
 func (b *logBuffer) Lines() []string {
@@ -247,12 +269,7 @@ func main() {
 	}
 	logInfo("Starting guget with project directory: %s", fullProjectPath)
 
-	snapshot, err := loadWorkspaceContext(tuiCtx, fullProjectPath)
-	if err != nil {
-		logFatal("Error loading workspace: %v", err)
-	}
-
-	m := NewApp(fullProjectPath, snapshot, buf.Lines(), builtFlags)
+	m := NewApp(fullProjectPath, &workspaceSnapshot{}, buf.Lines(), builtFlags)
 	m.lifecycle = tuiCtx
 
 	p := tea.NewProgram(m, tea.WithContext(tuiCtx))
@@ -262,7 +279,7 @@ func main() {
 	buf.send = p.Send
 	buf.mu.Unlock()
 	m.SetSender(p.Send)
-	m.startInitialLoad()
+	m.requestReload(reloadRequestedMsg{reason: "initial load"})
 	stopWatcher := watchWorkspaceFiles(fullProjectPath, p.Send)
 	defer stopWatcher()
 
