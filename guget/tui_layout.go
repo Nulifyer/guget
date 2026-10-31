@@ -248,6 +248,8 @@ func (m *App) renderFooter() string {
 	statusStr := ""
 	if m.ctx.Restoring {
 		statusStr = m.ctx.Spinner.View() + styleAccent.Render(" restoring...")
+	} else if m.ctx.Saving {
+		statusStr = m.ctx.Spinner.View() + styleAccent.Render(" saving...")
 	} else if m.ctx.Reloading {
 		if m.ctx.LoadingTotal > 0 {
 			statusStr = m.ctx.Spinner.View() + styleAccent.Render(
@@ -256,12 +258,34 @@ func (m *App) renderFooter() string {
 		} else {
 			statusStr = m.ctx.Spinner.View() + styleAccent.Render(" reloading...")
 		}
+	} else if m.ctx.LoadingDone < m.ctx.LoadingTotal {
+		statusStr = m.ctx.Spinner.View() + styleAccent.Render(
+			fmt.Sprintf(" loading packages... (%d/%d)", m.ctx.LoadingDone, m.ctx.LoadingTotal),
+		)
 	} else if m.ctx.StatusLine != "" {
 		s := styleGreen
 		if m.ctx.StatusIsErr {
 			s = styleRed
 		}
 		statusStr = s.Render(m.ctx.StatusLine)
+	}
+
+	busy := m.ctx.Restoring || m.ctx.Saving || m.ctx.Reloading || m.ctx.LoadingDone < m.ctx.LoadingTotal
+	if !busy && m.updateVersion != "" && (m.ctx.StatusLine == "" || !m.ctx.StatusIsErr) {
+		notice := fmt.Sprintf("guget %s available · guget self-update", m.updateVersion)
+		if statusStr == "" {
+			notice += " · ctrl+x dismiss"
+		}
+		notice = truncate(notice, w)
+		if statusStr != "" {
+			remaining := w - lipgloss.Width(notice) - sepW
+			if remaining > 0 {
+				statusStr = truncate(statusStr, remaining) + sep
+			} else {
+				statusStr = ""
+			}
+		}
+		statusStr += styleSubtle.Render(notice)
 	}
 
 	return styleFooterBar.

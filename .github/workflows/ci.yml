@@ -43,6 +43,24 @@ jobs:
       - name: Race test
         run: go test -race ./...
 
+  self-update:
+    name: Self-update (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: guget
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: guget/go.mod
+      - name: Verify running executable replacement and recovery
+        run: go test -race ./internal/selfupdate
+
   vscode:
     name: VS Code extension
     runs-on: ubuntu-latest

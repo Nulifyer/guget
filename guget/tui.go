@@ -35,6 +35,10 @@ type App struct {
 	send       func(bubble_tea.Msg)
 	mouse      bool
 
+	updateVersion        string
+	updateChecksDisabled bool
+	updateCachePath      string
+
 	focus focusPanel
 
 	projects projectPanel
@@ -111,11 +115,12 @@ func NewApp(projectDir string, snapshot *workspaceSnapshot, initialLogLines []st
 	}
 
 	m := &App{
-		ctx:             ctx,
-		lifecycle:       context.Background(),
-		projectDir:      projectDir,
-		mouse:           !flags.NoMouse,
-		sourceSignature: workspaceSourceSignature(snapshot.Sources, snapshot.SourceMapping),
+		ctx:                  ctx,
+		lifecycle:            context.Background(),
+		projectDir:           projectDir,
+		mouse:                !flags.NoMouse,
+		updateChecksDisabled: flags.NoUpdateCheck,
+		sourceSignature:      workspaceSourceSignature(snapshot.Sources, snapshot.SourceMapping),
 		projects: projectPanel{
 			sectionBase: sectionBase{baseWidth: 30, minWidth: 10},
 			items:       projItems,
@@ -151,13 +156,15 @@ func NewApp(projectDir string, snapshot *workspaceSnapshot, initialLogLines []st
 }
 
 func (m *App) Init() bubble_tea.Cmd {
-	return m.ctx.Spinner.Tick
+	return bubble_tea.Batch(m.ctx.Spinner.Tick, m.checkForUpdate())
 }
 
 func (m *App) Update(msg bubble_tea.Msg) (bubble_tea.Model, bubble_tea.Cmd) {
 	var cmds []bubble_tea.Cmd
 
 	switch msg := msg.(type) {
+	case selfUpdateNoticeMsg:
+		m.updateVersion = msg.version
 
 	case bubble_tea.WindowSizeMsg:
 		m.ctx.Width = msg.Width
@@ -453,6 +460,8 @@ func (m *App) handleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 		return nil
 	}
 	switch mainKey(msg.String()) {
+	case "ctrl+x":
+		return m.dismissUpdateNotice()
 	case "ctrl+c":
 		return bubble_tea.Quit
 

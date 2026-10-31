@@ -41,6 +41,7 @@ var mainKeyBindings = []mainKeyBinding{
 	{"l", nil, "l", "toggle log panel", "View toggles"},
 	{"s", nil, "s", "toggle sources panel", "View toggles"},
 	{"?", nil, "?", "toggle this help", "View toggles"},
+	{"ctrl+x", nil, "ctrl+x", "dismiss Guget update notice for this release", "View toggles"},
 	{"ctrl+c", []string{"esc", "q"}, "esc / q / ctrl+c", "quit; ctrl+c also quits from overlays", "View toggles"},
 }
 

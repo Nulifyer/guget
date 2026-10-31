@@ -17,6 +17,7 @@ import (
 
 	"github.com/nulifyer/guget/internal/atomicfile"
 	"github.com/nulifyer/guget/internal/packageops"
+	"github.com/nulifyer/guget/internal/selfupdate"
 	"golang.org/x/term"
 )
 
@@ -37,7 +38,7 @@ const (
 var cliVerbs = map[string]struct{}{
 	"list": {}, "show": {}, "search": {}, "sources": {},
 	"add": {}, "update": {}, "remove": {}, "restore": {},
-	"completion": {}, "version": {}, "help": {},
+	"completion": {}, "version": {}, "help": {}, "self-update": {},
 }
 
 func isCLIVerb(arg string) bool {
@@ -157,6 +158,8 @@ func dispatchCLI(ctx context.Context, argv []string, stdin io.Reader, stdout, st
 	switch verb {
 	case "help":
 		code = runtime.runHelp(argv[1:])
+	case "self-update":
+		code = runtime.runSelfUpdate(ctx, argv[1:], selfupdate.New(version, nil), os.Executable)
 	case "version":
 		code = runtime.runVersion(argv[1:])
 	case "completion":
@@ -191,6 +194,7 @@ Commands:
   remove PACKAGE       remove from explicit --file targets or --all
   restore              run dotnet restore for explicit targets or --all
   completion SHELL     emit completion for bash, zsh, or fish
+  self-update          update the Guget executable (--check to inspect only)
   version              print the Guget version
   help [COMMAND]       show help
 
@@ -239,6 +243,8 @@ func commandUsage(verb string) string {
 		return "Usage: guget restore (--file PROJECT... | --all) [--project DIR] [--interactive]\n"
 	case "completion":
 		return "Usage: guget completion bash|zsh|fish\n"
+	case "self-update":
+		return "Usage: guget self-update [--check]\n"
 	case "version":
 		return "Usage: guget version\n"
 	}
@@ -259,7 +265,7 @@ func (r cliRuntime) runCompletion(args []string) ExitCode {
 		fmt.Fprint(r.stderr, commandUsage("completion"))
 		return ExitUsage
 	}
-	commands := "list show sources search add update remove restore completion version help"
+	commands := "list show sources search add update remove restore completion self-update version help"
 	switch args[0] {
 	case "bash":
 		fmt.Fprintf(r.stdout, "complete -W %q guget\n", commands)

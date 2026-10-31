@@ -96,7 +96,34 @@ go build -o guget        # Linux / macOS
 go build -o guget.exe    # Windows
 ```
 
+### Updating guget
 
+```bash
+guget self-update --check  # Check for a newer stable release
+guget self-update          # Download, verify, and replace this executable
+```
+
+`guget update PACKAGE` continues to update NuGet packages. Self-update uses the
+GitHub release archives and verifies their SHA-256 checksums before replacing the
+installed binary. It preserves the installation path and permissions, follows
+symlinks, and does nothing when no newer stable release exists. Development
+builds must install a release first. The installation directory must be writable.
+If another tool manages your installation, use that tool to update guget.
+
+The TUI checks for new stable releases in the background and shows an idle-footer
+notice. Quit the TUI before running `guget self-update`. Press `ctrl+x` to dismiss
+the notice for that release across sessions. Check results, including failures,
+are cached for 24 hours in the operating system's user cache directory under
+`guget/update.json`. Network failures stay silent in the TUI. Use
+`guget --no-update-check` or set `GUGET_NO_UPDATE_CHECK=1` to disable TUI checks.
+Explicit `guget self-update --check` always checks GitHub directly.
+
+Windows can retain `guget.exe.old` while the previous executable is running.
+The next update removes it. If interrupted updates leave a `.update-lock`
+directory beside the executable, remove that directory only after confirming
+that no self-update is running. If a Windows update was interrupted between
+replacement steps and `guget.exe` is missing, restore `guget.exe.old` to
+`guget.exe` before retrying.
 
 ## Usage
 
@@ -127,6 +154,9 @@ Usage:
 
     no-mouse     -nm, --no-mouse
                 Disable mouse navigation in the TUI
+
+    no-update-check  --no-update-check
+                Disable TUI checks for new Guget releases
 
     version      -V, --version
                 Print the version and exit

@@ -54,41 +54,50 @@ func (b *logBuffer) Lines() []string {
 }
 
 const (
-	Flag_NoColor    = "no-color"
-	Flag_Verbosity  = "verbosity"
-	Flag_ProjectDir = "project"
-	Flag_Version    = "version"
-	Flag_LogFile    = "log-file"
-	Flag_Theme      = "theme"
-	Flag_SortBy     = "sort-by"
-	Flag_NoMouse    = "no-mouse"
+	Flag_NoColor       = "no-color"
+	Flag_Verbosity     = "verbosity"
+	Flag_ProjectDir    = "project"
+	Flag_Version       = "version"
+	Flag_LogFile       = "log-file"
+	Flag_Theme         = "theme"
+	Flag_SortBy        = "sort-by"
+	Flag_NoMouse       = "no-mouse"
+	Flag_NoUpdateCheck = "no-update-check"
 )
 
 type BuiltFlags struct {
-	NoColor    bool
-	Verbosity  string
-	ProjectDir string
-	Version    bool
-	LogFile    string
-	Theme      string
-	SortBy     string
-	NoMouse    bool
+	NoColor       bool
+	Verbosity     string
+	ProjectDir    string
+	Version       bool
+	LogFile       string
+	Theme         string
+	SortBy        string
+	NoMouse       bool
+	NoUpdateCheck bool
 }
 
 func BuildFlags(flags map[string]IParsedFlag) BuiltFlags {
 	return BuiltFlags{
-		NoColor:    GetFlag[bool](flags, Flag_NoColor),
-		Verbosity:  GetFlag[string](flags, Flag_Verbosity),
-		ProjectDir: GetFlag[string](flags, Flag_ProjectDir),
-		Version:    GetFlag[bool](flags, Flag_Version),
-		LogFile:    GetFlag[string](flags, Flag_LogFile),
-		Theme:      GetFlag[string](flags, Flag_Theme),
-		SortBy:     GetFlag[string](flags, Flag_SortBy),
-		NoMouse:    GetFlag[bool](flags, Flag_NoMouse),
+		NoColor:       GetFlag[bool](flags, Flag_NoColor),
+		Verbosity:     GetFlag[string](flags, Flag_Verbosity),
+		ProjectDir:    GetFlag[string](flags, Flag_ProjectDir),
+		Version:       GetFlag[bool](flags, Flag_Version),
+		LogFile:       GetFlag[string](flags, Flag_LogFile),
+		Theme:         GetFlag[string](flags, Flag_Theme),
+		SortBy:        GetFlag[string](flags, Flag_SortBy),
+		NoMouse:       GetFlag[bool](flags, Flag_NoMouse),
+		NoUpdateCheck: GetFlag[bool](flags, Flag_NoUpdateCheck),
 	}
 }
 
 func registerCLIFlags() {
+	RegisterFlag(Flag[bool]{
+		Name:        Flag_NoUpdateCheck,
+		Aliases:     []string{"--no-update-check"},
+		Default:     Optional(false),
+		Description: "Disable TUI checks for new Guget releases",
+	})
 	RegisterFlag(Flag[bool]{
 		Name:        Flag_Version,
 		Aliases:     []string{"-V", "--version"},
