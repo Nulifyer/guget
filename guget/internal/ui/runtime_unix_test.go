@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"reflect"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -36,7 +36,11 @@ func TestRuntimeNativePTYLifecycle(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 			defer cancel()
-			command := exec.CommandContext(ctx, python, "-c", nativePTYLifecycleScript, binary, mode)
+			statusPath := filepath.Join(t.TempDir(), "status")
+			if err := os.WriteFile(statusPath, nil, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			command := exec.CommandContext(ctx, python, "-c", nativePTYLifecycleScript, binary, mode, statusPath)
 			if output, err := command.CombinedOutput(); err != nil {
 				t.Fatalf("native PTY %s: %v\n%s", mode, err, output)
 			}
@@ -102,12 +106,12 @@ func TestRuntimeNativePTYChild(t *testing.T) {
 		t.Skip("subprocess helper for native PTY lifecycle test")
 	}
 	var status *os.File
-	if raw := os.Getenv("GUGET_RUNTIME_PTY_STATUS_FD"); raw != "" {
-		descriptor, err := strconv.Atoi(raw)
+	if path := os.Getenv("GUGET_RUNTIME_PTY_STATUS_PATH"); path != "" {
+		var err error
+		status, err = os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0o600)
 		if err != nil {
 			t.Fatal(err)
 		}
-		status = os.NewFile(uintptr(descriptor), "native-pty-status")
 		defer status.Close()
 	}
 	fail := func(format string, args ...any) {
@@ -175,28 +179,20 @@ func TestRuntimeNativePTYChild(t *testing.T) {
 
 const nativePTYLifecycleScript = `
 import errno, fcntl, os, pty, select, signal, struct, sys, termios, time
-binary, mode = sys.argv[1:]
-status_read, status_write = os.pipe()
-os.set_inheritable(status_write, True)
+binary, mode, status_path = sys.argv[1:]
 pid, master = pty.fork()
 if pid == 0:
-    os.close(status_read)
     fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
     env = dict(os.environ, GUGET_RUNTIME_PTY_MODE=mode,
-               GUGET_RUNTIME_PTY_STATUS_FD=str(status_write))
+               GUGET_RUNTIME_PTY_STATUS_PATH=status_path)
     os.execve(binary, [binary, "-test.run=^TestRuntimeNativePTYChild$", "-test.timeout=20s"], env)
-os.close(status_write)
 content = bytearray()
 status_content = bytearray()
 reaped = False
-status_open = True
 def read_status():
-    global status_open
-    chunk = os.read(status_read, 4096)
-    if not chunk:
-        status_open = False
-        return
-    status_content.extend(chunk)
+    global status_content
+    with open(status_path, "rb") as status_file:
+        status_content = status_file.read()
     if b"NATIVE_PTY_FAILURE: " in status_content:
         raise RuntimeError("native helper failed: %r" % (bytes(status_content),))
 def receive_until(marker):
@@ -204,10 +200,8 @@ def receive_until(marker):
     while marker not in content:
         if time.monotonic() >= deadline:
             raise RuntimeError("timed out waiting for %r; output=%r" % (marker, bytes(content)))
-        watched = [master, status_read] if status_open else [master]
-        ready, _, _ = select.select(watched, [], [], 0.1)
-        if status_read in ready:
-            read_status()
+        read_status()
+        ready, _, _ = select.select([master], [], [], 0.05)
         if master not in ready:
             continue
         try:
@@ -224,11 +218,9 @@ def receive_status(marker):
     while marker not in status_content:
         if time.monotonic() >= deadline:
             raise RuntimeError("runtime stalled behind unread output while waiting for %r; status=%r" % (marker, bytes(status_content)))
-        ready, _, _ = select.select([status_read], [], [], 0.1)
-        if ready:
-            read_status()
-            if not status_open and marker not in status_content:
-                raise RuntimeError("status EOF before %r; status=%r" % (marker, bytes(status_content)))
+        read_status()
+        if marker not in status_content:
+            time.sleep(0.02)
 try:
     receive_until(b"PTY_SIZE=80x24 RAW_ACTIVE=true")
     fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))
@@ -241,7 +233,7 @@ try:
     elif mode == "output-backpressure":
         # Stop draining terminal output long enough for changing full-screen
         # frames to fill the PTY. Keyboard dispatch and cancellation must still
-        # finish, observed on a separate pipe without relieving backpressure.
+        # finish, observed through a file without relieving backpressure.
         time.sleep(0.7)
         os.write(master, b"k")
         receive_status(b"NATIVE_PTY_KEY_HANDLED")
@@ -258,13 +250,18 @@ try:
     for sequence in required:
         if sequence not in content:
             raise RuntimeError("missing terminal lifecycle sequence %r" % (sequence,))
+except Exception as error:
+    # Surface diagnostics before cleanup; a failed helper can be blocked writing
+    # its testing failure to the deliberately full terminal.
+    print("native PTY failure: %s" % error, file=sys.stderr, flush=True)
+    raise
 finally:
     if not reaped:
         try:
             os.kill(pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
-        os.waitpid(pid, 0)
     os.close(master)
-    os.close(status_read)
+    if not reaped:
+        os.waitpid(pid, 0)
 `
