@@ -149,7 +149,8 @@ func (p *nativeConsole) expectStatus(t *testing.T, name string) {
 		select {
 		case <-tick.C:
 		case <-deadline.C:
-			t.Fatalf("runtime did not report %s with terminal output paused:\n%s", name, p.text())
+			stacks, _ := os.ReadFile(filepath.Join(p.statusDir, "stacks"))
+			t.Fatalf("runtime did not report %s with terminal output paused:\n%s\nNative helper stacks:\n%s", name, p.text(), stacks)
 		}
 	}
 }

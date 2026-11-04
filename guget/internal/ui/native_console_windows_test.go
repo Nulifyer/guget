@@ -254,6 +254,22 @@ func runNativeConsoleChild(t *testing.T, scenario string) {
 	component := &nativeProbe{interactive: true}
 	if scenario == "output-backpressure" {
 		component.statusDir = os.Getenv("GUGET_CONPTY_STATUS_DIR")
+		// Diagnostics use a separate file: a stalled console cannot report its
+		// own stacks through stdout. Keep sampling until Run and cleanup finish.
+		go func() {
+			tick := time.NewTicker(250 * time.Millisecond)
+			defer tick.Stop()
+			buffer := make([]byte, 256*1024)
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-tick.C:
+					n := runtime.Stack(buffer, true)
+					_ = os.WriteFile(filepath.Join(component.statusDir, "stacks"), buffer[:n], 0o600)
+				}
+			}
+		}()
 	}
 	if scenario == "runtime-escape-cancel" {
 		// Bare Escape leaves KeyReader.pendingPeek waiting for the next console

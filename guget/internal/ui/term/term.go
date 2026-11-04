@@ -60,15 +60,6 @@ func (t *Terminal) Restore() {
 	t.oldState = nil
 }
 
-// RefreshSize re-reads the terminal size. Returns true if it changed.
-func (t *Terminal) RefreshSize() bool {
-	w, h, err := term.GetSize(t.OutFd)
-	if err != nil {
-		return false
-	}
-	if w == t.Width && h == t.Height {
-		return false
-	}
-	t.Width, t.Height = w, h
-	return true
-}
+// Size reads native dimensions without changing terminal state. Console APIs
+// can wait behind output, so callers query from a background worker.
+func (t *Terminal) Size() (int, int, error) { return term.GetSize(t.OutFd) }

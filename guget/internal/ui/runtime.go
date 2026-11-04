@@ -134,6 +134,7 @@ func (r *Runtime) Run() (err error) {
 	tick := time.NewTicker(16 * time.Millisecond)
 	defer tick.Stop()
 	dirty := false
+	resizePending := false
 	for {
 		select {
 		case <-r.ctx.Done():
@@ -146,13 +147,23 @@ func (r *Runtime) Run() (err error) {
 			}
 			frame = commit.frame
 		case <-resize:
-			if terminal.RefreshSize() {
-				r.schedule(r.root.HandleEvent(ResizeEvent{terminal.Width, terminal.Height}))
-				output.Invalidate()
-				dirty = true
+			if !resizePending {
+				resizePending = true
+				r.schedule(func() Event {
+					width, height, sizeErr := terminal.Size()
+					return terminalSizeResult{width, height, sizeErr}
+				})
 			}
 		case e := <-r.events:
 			switch e := e.(type) {
+			case terminalSizeResult:
+				resizePending = false
+				if e.err != nil || e.width == terminal.Width && e.height == terminal.Height {
+					continue
+				}
+				terminal.Width, terminal.Height = e.width, e.height
+				output.Invalidate()
+				r.schedule(r.root.HandleEvent(ResizeEvent{e.width, e.height}))
 			case QuitEvent:
 				return nil
 			case effectFailed:
@@ -202,6 +213,10 @@ func dispatchCommittedMouse(frame *Frame, commits <-chan outputCommit, event Mou
 
 type inputClosed struct{ err error }
 type effectFailed struct{ err error }
+type terminalSizeResult struct {
+	width, height int
+	err           error
+}
 
 func decodeInput(event term.InputMsg) Event {
 	switch e := event.(type) {

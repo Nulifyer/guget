@@ -10,7 +10,7 @@ const resizePollWindows = 250 * time.Millisecond
 // SIGWINCH equivalent that is usable alongside stream-based stdin
 // reads, so a short tick is the pragmatic cross-terminal approach
 // (Windows Terminal, ConHost, SSH-to-Windows). The consumer still
-// calls Terminal.RefreshSize() -- this tick just wakes the main
+// queries Terminal.Size in the background; this tick wakes the main
 // loop so the check runs without needing a key press.
 func WatchResize() (<-chan struct{}, func()) {
 	out := make(chan struct{}, 1)
