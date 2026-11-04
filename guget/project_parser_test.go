@@ -644,6 +644,10 @@ func TestUpdatePackageVersionSupportsUpdateOverrideAndChildMetadata(t *testing.T
 			if err := os.WriteFile(path, []byte(tt.content), 0o640); err != nil {
 				t.Fatal(err)
 			}
+			before, err := os.Stat(path)
+			if err != nil {
+				t.Fatal(err)
+			}
 			if err := UpdatePackageVersion(path, "example.core", "2.0.0"); err != nil {
 				t.Fatal(err)
 			}
@@ -658,8 +662,8 @@ func TestUpdatePackageVersionSupportsUpdateOverrideAndChildMetadata(t *testing.T
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got := info.Mode().Perm(); got != 0o640 {
-				t.Fatalf("mode = %o, want 640", got)
+			if got, want := info.Mode().Perm(), before.Mode().Perm(); got != want {
+				t.Fatalf("mode = %o, want preserved mode %o", got, want)
 			}
 		})
 	}

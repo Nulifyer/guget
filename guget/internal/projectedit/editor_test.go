@@ -37,6 +37,10 @@ func TestAddPreservesProjectStructure(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			path := writeProject(t, "App.csproj", tt.content)
+			before, err := os.Stat(path)
+			if err != nil {
+				t.Fatal(err)
+			}
 			if err := AddPackageReference(path, "New.Package", "2.0.0"); err != nil {
 				t.Fatal(err)
 			}
@@ -88,9 +92,12 @@ func TestAddPreservesProjectStructure(t *testing.T) {
 			if !bytes.Equal(after, beforeAgain) {
 				t.Fatal("repeated add changed project")
 			}
-			info, _ := os.Stat(path)
-			if info.Mode().Perm() != 0600 {
-				t.Fatal("permissions changed")
+			info, err := os.Stat(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got, want := info.Mode().Perm(), before.Mode().Perm(); got != want {
+				t.Fatalf("permissions changed: got %o, want preserved mode %o", got, want)
 			}
 		})
 	}
