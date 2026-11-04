@@ -20,6 +20,7 @@ import (
 
 func TestNativeConPTYTerminal(t *testing.T) {
 	if scenario := os.Getenv("GUGET_CONPTY_CHILD"); scenario != "" {
+		bindNativeConsoleHandles(t)
 		runNativeConsoleChild(t, scenario)
 		return
 	}
@@ -86,6 +87,37 @@ func TestNativeConPTYTerminal(t *testing.T) {
 			console.expect(t, "NATIVE-SCENARIO-PASSED")
 			console.wait(t, true)
 		})
+	}
+}
+
+func bindNativeConsoleHandles(t *testing.T) {
+	t.Helper()
+	// A runner launches this helper from redirected pipes. Attaching ConPTY
+	// does not replace those inherited standard handles; open the child's
+	// attached console explicitly before testing the production runtime.
+	for _, stream := range []struct {
+		name string
+		file **os.File
+		id   uint32
+	}{
+		{"CONIN$", &os.Stdin, windows.STD_INPUT_HANDLE},
+		{"CONOUT$", &os.Stdout, windows.STD_OUTPUT_HANDLE},
+		{"CONOUT$", &os.Stderr, windows.STD_ERROR_HANDLE},
+	} {
+		name, err := windows.UTF16PtrFromString(stream.name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		handle, err := windows.CreateFile(name, windows.GENERIC_READ|windows.GENERIC_WRITE, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE, nil, windows.OPEN_EXISTING, 0, 0)
+		if err != nil {
+			t.Fatalf("open attached %s: %v", stream.name, err)
+		}
+		file := os.NewFile(uintptr(handle), stream.name)
+		*stream.file = file
+		if err := windows.SetStdHandle(stream.id, handle); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = file.Close() })
 	}
 }
 
