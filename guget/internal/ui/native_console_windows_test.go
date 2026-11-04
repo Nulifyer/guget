@@ -24,11 +24,11 @@ func TestNativeConPTYTerminal(t *testing.T) {
 		runNativeConsoleChild(t, scenario)
 		return
 	}
-	for _, scenario := range []string{"reader-cancel", "runtime-cancel", "runtime-escape-cancel", "runtime-ctrl-c", "runtime-error", "runtime-input", "output-backpressure", "disconnect"} {
+	for _, scenario := range []string{"reader-cancel", "runtime-cancel", "runtime-escape-cancel", "runtime-ctrl-c", "runtime-error", "runtime-input", "output-backpressure", "output-backpressure-cancel", "disconnect"} {
 		t.Run(scenario, func(t *testing.T) {
 			console := startNativeConsole(t, scenario)
 			switch scenario {
-			case "output-backpressure":
+			case "output-backpressure", "output-backpressure-cancel":
 				console.expect(t, "INPUT-READY")
 				console.resize(t, 300, 120)
 				console.expect(t, "HIGH-OUTPUT-READY")
@@ -41,11 +41,30 @@ func TestNativeConPTYTerminal(t *testing.T) {
 					t.Fatal("could not pause ConPTY output")
 				}
 				console.expectStatus(t, "OUTPUT-BLOCKED")
-				console.send(t, "k")
-				console.expectStatus(t, "KEY-HANDLED")
-				console.send(t, "q")
-				console.expectStatus(t, "RUN-RETURNED")
+				// ConPTY hosts must keep draining both channels. Windows console
+				// input, size and mode calls can share the host's output lock;
+				// an undrained host can therefore delay native key delivery too.
+				// Prove the application loop itself still advances using IPC.
+				// https://learn.microsoft.com/windows/console/creating-a-pseudoconsole-session
+				// https://github.com/microsoft/terminal/blob/main/src/host/_stream.cpp
+				console.request(t, "ping")
+				console.expectStatus(t, "APP-EVENT-HANDLED")
+				if scenario == "output-backpressure-cancel" {
+					console.request(t, "cancel")
+					console.expectStatus(t, "CANCEL-REQUESTED")
+				} else {
+					console.send(t, "k") // Queued while output is still paused.
+					// Resume a deliberately slow consumer, so native keyboard
+					// delivery is checked while large changing frames continue.
+					console.drainDelay.Store(int64(5 * time.Millisecond))
+				}
 				console.resumeDraining()
+				if scenario == "output-backpressure" {
+					console.expectStatus(t, "KEY-HANDLED")
+					console.drainDelay.Store(0)
+					console.send(t, "q")
+				}
+				console.expectStatus(t, "RUN-RETURNED")
 			case "runtime-ctrl-c":
 				console.expect(t, "INPUT-READY")
 				console.send(t, "\x03")
@@ -252,11 +271,17 @@ func runNativeConsoleChild(t *testing.T, scenario string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	component := &nativeProbe{interactive: true}
-	if scenario == "output-backpressure" {
+	if strings.HasPrefix(scenario, "output-backpressure") {
 		component.statusDir = os.Getenv("GUGET_CONPTY_STATUS_DIR")
+	}
+	r := NewRuntime(ctx, component)
+	if component.statusDir != "" {
+		controlDone := make(chan struct{})
+		defer func() { cancel(); <-controlDone }()
 		// Diagnostics use a separate file: a stalled console cannot report its
 		// own stacks through stdout. Keep sampling until Run and cleanup finish.
 		go func() {
+			defer close(controlDone)
 			tick := time.NewTicker(250 * time.Millisecond)
 			defer tick.Stop()
 			buffer := make([]byte, 256*1024)
@@ -267,6 +292,15 @@ func runNativeConsoleChild(t *testing.T, scenario string) {
 				case <-tick.C:
 					n := runtime.Stack(buffer, true)
 					_ = os.WriteFile(filepath.Join(component.statusDir, "stacks"), buffer[:n], 0o600)
+					if err := os.Remove(filepath.Join(component.statusDir, "request-ping")); err == nil {
+						r.Send(nativeLoopPing{})
+					}
+					if err := os.Remove(filepath.Join(component.statusDir, "request-cancel")); err == nil {
+						cancel()
+						if err := writeNativeStatus(component.statusDir, "CANCEL-REQUESTED"); err != nil {
+							_ = os.WriteFile(filepath.Join(component.statusDir, "failure"), []byte(err.Error()), 0o600)
+						}
+					}
 				}
 			}
 		}()
@@ -276,7 +310,7 @@ func runNativeConsoleChild(t *testing.T, scenario string) {
 		// read. Cancel from its delivered key event without sending another key.
 		component.escapeCancel = cancel
 	}
-	err := NewRuntime(ctx, component).Run()
+	err := r.Run()
 	if scenario == "runtime-error" {
 		if err == nil || !strings.Contains(err.Error(), "native error exit") {
 			t.Fatalf("expected runtime effect failure, got %v", err)
@@ -290,7 +324,7 @@ func runNativeConsoleChild(t *testing.T, scenario string) {
 			t.Fatal("runtime did not disconnect exactly once")
 		}
 	}
-	if scenario == "output-backpressure" {
+	if component.statusDir != "" {
 		if err := writeNativeStatus(component.statusDir, "RUN-RETURNED"); err != nil {
 			t.Fatal(err)
 		}
@@ -300,6 +334,7 @@ func runNativeConsoleChild(t *testing.T, scenario string) {
 
 type nativeMouseObserved Mouse
 type nativeFloodTick struct{}
+type nativeLoopPing struct{}
 
 type nativeProbe struct {
 	connect       Effect
@@ -376,6 +411,10 @@ func (p *nativeProbe) HandleEvent(event Event) Effect {
 		if p.flood {
 			p.ticks++
 			return Tick(time.Millisecond, func(time.Time) Event { return nativeFloodTick{} })
+		}
+	case nativeLoopPing:
+		if err := writeNativeStatus(p.statusDir, "APP-EVENT-HANDLED"); err != nil {
+			return func() Event { return effectFailed{err} }
 		}
 	}
 	return nil

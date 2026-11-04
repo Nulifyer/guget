@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -32,6 +33,7 @@ type nativeConsole struct {
 	pause         chan chan struct{}
 	resume        chan struct{}
 	resumeOnce    sync.Once
+	drainDelay    atomic.Int64
 	statusDir     string
 	consoleClosed bool
 }
@@ -84,9 +86,13 @@ func startNativeConsole(t *testing.T, scenario string) *nativeConsole {
 			if err != nil {
 				return
 			}
+			if delay := time.Duration(p.drainDelay.Load()); delay > 0 {
+				time.Sleep(delay)
+			}
 		}
 	}()
 	t.Cleanup(func() {
+		p.drainDelay.Store(0)
 		p.resumeDraining()
 		if p.process != 0 {
 			_ = windows.TerminateProcess(p.process, 1)
@@ -132,6 +138,13 @@ func startNativeConsole(t *testing.T, scenario string) *nativeConsole {
 }
 
 func (p *nativeConsole) resumeDraining() { p.resumeOnce.Do(func() { close(p.resume) }) }
+
+func (p *nativeConsole) request(t *testing.T, command string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(p.statusDir, "request-"+command), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func (p *nativeConsole) expectStatus(t *testing.T, name string) {
 	t.Helper()
