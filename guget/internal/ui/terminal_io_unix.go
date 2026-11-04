@@ -4,6 +4,7 @@ package ui
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"sync"
@@ -72,29 +73,14 @@ func (t *unixTerminalIO) isStopped() bool {
 	defer t.mu.Unlock()
 	return t.stopped
 }
-func (t *unixTerminalIO) waitReady(event int16) error {
-	descriptors := []unix.PollFd{{Fd: int32(t.fd), Events: event}, {Fd: int32(t.wake[0]), Events: unix.POLLIN}}
-	for {
-		if t.isStopped() {
-			return os.ErrClosed
-		}
-		_, err := unix.Poll(descriptors, -1)
-		if err == unix.EINTR {
-			continue
-		}
-		if err != nil {
-			return os.NewSyscallError("poll", err)
-		}
-		if descriptors[1].Revents != 0 || t.isStopped() {
-			return os.ErrClosed
-		}
-		if descriptors[0].Revents&unix.POLLNVAL != 0 {
-			return os.ErrClosed
-		}
-		if descriptors[0].Revents&(event|unix.POLLHUP|unix.POLLERR) != 0 {
-			return nil
-		}
-	}
+
+// Preserve readiness failures as diagnostics rather than calling a valid but
+// unsupported descriptor closed. This distinguishes platform backend problems
+// from deliberate cancellation without logging terminal input/output content.
+func (t *unixTerminalIO) readinessError(backend string, event, dataEvents, wakeEvents int16, cause error) error {
+	_, dataErr := unix.FcntlInt(uintptr(t.fd), unix.F_GETFD, 0)
+	_, wakeErr := unix.FcntlInt(uintptr(t.wake[0]), unix.F_GETFD, 0)
+	return fmt.Errorf("%s %s (fd=%d valid=%t wakefd=%d valid=%t requested=%#x data=%#x wake=%#x): %w", backend, t.name, t.fd, dataErr == nil, t.wake[0], wakeErr == nil, event, dataEvents, wakeEvents, cause)
 }
 
 func (t *unixTerminalIO) Read(data []byte) (int, error) {

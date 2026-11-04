@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -234,5 +235,36 @@ func TestUnixTerminalOpenPreservesCallerDescriptorFlags(t *testing.T) {
 	}
 	if _, err := caller.WriteString("still open"); err != nil {
 		t.Fatalf("caller descriptor was closed: %v", err)
+	}
+}
+
+func TestUnixTerminalInterruptStopsReadWithoutClosingItsDescriptor(t *testing.T) {
+	adapter, _ := unixPipeAdapter(t, false)
+	result := make(chan error, 1)
+	go func() { _, err := adapter.Read(make([]byte, 1)); result <- err }()
+	select {
+	case err := <-result:
+		t.Fatalf("read returned before interrupt: %v", err)
+	case <-time.After(15 * time.Millisecond):
+	}
+	adapter.Interrupt()
+	select {
+	case err := <-result:
+		if !errors.Is(err, os.ErrClosed) {
+			t.Fatalf("interrupt error=%v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("interrupt did not wake readiness wait")
+	}
+	if _, err := unix.FcntlInt(uintptr(adapter.fd), unix.F_GETFD, 0); err != nil {
+		t.Fatalf("interrupt closed descriptor before Close's I/O barrier: %v", err)
+	}
+}
+
+func TestUnixTerminalReadinessDiagnosticKeepsValidFDAndFailureCause(t *testing.T) {
+	adapter, _ := unixPipeAdapter(t, false)
+	err := adapter.readinessError("poll", unix.POLLIN, unix.POLLNVAL, 0, unix.EBADF)
+	if !errors.Is(err, unix.EBADF) || errors.Is(err, os.ErrClosed) || !strings.Contains(err.Error(), "valid=true") || !strings.Contains(err.Error(), "requested=0x") || !strings.Contains(err.Error(), "data=0x") {
+		t.Fatalf("readiness failure lost cause or fd state: %v", err)
 	}
 }
