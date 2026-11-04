@@ -4,11 +4,11 @@ import (
 	"path/filepath"
 	"strings"
 
-	bubble_tea "charm.land/bubbletea/v2"
-	lipgloss "charm.land/lipgloss/v2"
+	ui "github.com/nulifyer/guget/internal/ui"
+	style "github.com/nulifyer/guget/internal/ui/style"
 )
 
-func (m *App) addPackageToProject(pkgName, version string, project *ParsedProject) bubble_tea.Cmd {
+func (m *App) addPackageToProject(pkgName, version string, project *ParsedProject) ui.Effect {
 	target := AddTarget{Kind: AddTargetProject, FilePath: project.FilePath}
 	return m.addPackageToLocation(pkgName, version, project, target)
 }
@@ -16,7 +16,7 @@ func (m *App) addPackageToProject(pkgName, version string, project *ParsedProjec
 // openLocationPickerOrAdd shows the location picker if the project has multiple
 // AddTargets (e.g. Directory.Build.props, CPM, imported props). If the project
 // is a .props file or has only one target, it adds directly.
-func (m *App) openLocationPickerOrAdd(pkgName, version string, project *ParsedProject) bubble_tea.Cmd {
+func (m *App) openLocationPickerOrAdd(pkgName, version string, project *ParsedProject) ui.Effect {
 	// Props files: add directly, no picker needed.
 	if strings.HasSuffix(strings.ToLower(project.FilePath), ".props") {
 		return m.addPackageToProject(pkgName, version, project)
@@ -44,7 +44,7 @@ func (s *locationPicker) FooterKeys() []kv {
 	return []kv{{"↑↓", "nav"}, {"enter", "select"}, {"esc", "cancel"}}
 }
 
-func (s *locationPicker) HandleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
+func (s *locationPicker) HandleKey(msg ui.KeyEvent) ui.Effect {
 	switch msg.String() {
 	case "[":
 		s.Resize(-4)
@@ -78,11 +78,11 @@ func (s *locationPicker) HandleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 // addPackageToLocation adds a package to the specified target location.
 // For CPM targets, it performs a dual write: PackageVersion to the CPM file
 // and a version-less PackageReference to the project file.
-func (m *App) addPackageToLocation(pkgName, version string, project *ParsedProject, target AddTarget) bubble_tea.Cmd {
+func (m *App) addPackageToLocation(pkgName, version string, project *ParsedProject, target AddTarget) ui.Effect {
 	return m.addPackageToTargets(pkgName, version, []mutationTarget{{project: project, addTarget: &target}})
 }
 
-func (m *App) addPackageToTargets(pkgName, version string, targets []mutationTarget) bubble_tea.Cmd {
+func (m *App) addPackageToTargets(pkgName, version string, targets []mutationTarget) ui.Effect {
 	if !m.canMutate() {
 		return nil
 	}
@@ -162,7 +162,7 @@ func (s *locationPicker) Render() string {
 		index := i
 		regions = append(regions, mouseRegion{
 			rect: mouseRect{x: overlayContentX, y: overlayContentY + rowStart + i - start, w: innerW, h: 1},
-			click: func(bubble_tea.MouseMsg) bubble_tea.Cmd {
+			click: func(ui.MouseEvent) ui.Effect {
 				s.cursor = index
 				return nil
 			},
@@ -172,8 +172,8 @@ func (s *locationPicker) Render() string {
 		lines = append(lines, "")
 	}
 	buttonLine, buttonRegions := renderOverlayButtons(innerW, len(lines), s.HandleKey,
-		overlayButton{label: "Cancel", code: bubble_tea.KeyEscape},
-		overlayButton{label: "Add", code: bubble_tea.KeyEnter},
+		overlayButton{label: "Cancel", code: ui.KeyEscape},
+		overlayButton{label: "Add", code: ui.KeyEnter},
 	)
 	lines = append(lines, buttonLine)
 	regions = append(regions, buttonRegions...)
@@ -182,7 +182,7 @@ func (s *locationPicker) Render() string {
 		Width(w).
 		Render(strings.Join(lines, "\n"))
 	regions = append(regions, mouseRegion{
-		rect:  mouseRect{x: 1, y: 1, w: w - 2, h: lipgloss.Height(box) - 2},
+		rect:  mouseRect{x: 1, y: 1, w: w - 2, h: style.Height(box) - 2},
 		wheel: verticalWheelHandler(s.HandleKey),
 	})
 	return s.centerOverlayInteractive(box, regions)

@@ -140,6 +140,9 @@ Your terminal may also support a mouse-bypass modifier such as Shift.
 | `?` | Show keyboard help. |
 | `Esc` / `q` | Quit the main screen or close most overlays; use `Esc` in search. |
 
+Below 20 terminal rows, logs fill the area above the footer. Use the arrow keys
+to scroll and press `l` to return to the package panels.
+
 Start with a theme or sort preference:
 
 ```bash
@@ -151,6 +154,10 @@ guget --project ./src --no-color
 Available themes include `auto`, `auto-light`, `auto-dark`, `dracula`,
 `catppuccin-mocha`, `catppuccin-macchiato`, `catppuccin-frappe`,
 `catppuccin-latte`, `nord`, `tokyo-night`, `everforest`, and `gruvbox`.
+
+The `auto` theme uses the terminal's `COLORFGBG` setting when available and
+defaults to dark otherwise. Select `--theme auto-light` for a light terminal
+that does not provide that setting.
 
 ## Read package status
 

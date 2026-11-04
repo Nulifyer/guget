@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	tea "charm.land/bubbletea/v2"
+	ui "github.com/nulifyer/guget/internal/ui"
 )
 
 func TestLoadWorkspaceAllowsRestoreOnlySources(t *testing.T) {
@@ -133,7 +133,7 @@ func TestDiffWatchedWorkspaceFiles_DetectsAddRemoveAndChange(t *testing.T) {
 func TestRequestReload_QueuesWhileReloading(t *testing.T) {
 	app := &App{
 		ctx:        &AppContext{Reloading: true},
-		send:       func(tea.Msg) {},
+		send:       func(ui.Event) {},
 		projectDir: t.TempDir(),
 	}
 
@@ -167,7 +167,7 @@ func TestRequestReload_DoesNotWaitForMetadata(t *testing.T) {
 func TestRequestReload_QueuedBurstCoalesces(t *testing.T) {
 	app := &App{
 		ctx:        &AppContext{Reloading: true},
-		send:       func(tea.Msg) {},
+		send:       func(ui.Event) {},
 		projectDir: t.TempDir(),
 	}
 
@@ -186,7 +186,7 @@ func TestRequestReload_QueuedBurstCoalesces(t *testing.T) {
 func TestHandleWorkspaceReloaded_IgnoresStaleGeneration(t *testing.T) {
 	app := &App{
 		ctx:                 &AppContext{Reloading: true},
-		send:                func(tea.Msg) {},
+		send:                func(ui.Event) {},
 		workspaceGeneration: 5,
 	}
 

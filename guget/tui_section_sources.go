@@ -3,15 +3,15 @@ package main
 import (
 	"strings"
 
-	bubble_tea "charm.land/bubbletea/v2"
-	lipgloss "charm.land/lipgloss/v2"
+	ui "github.com/nulifyer/guget/internal/ui"
+	style "github.com/nulifyer/guget/internal/ui/style"
 )
 
 func (s *sourcesOverlay) FooterKeys() []kv {
 	return []kv{{"↑↓", "scroll"}, {"esc", "close"}}
 }
 
-func (s *sourcesOverlay) HandleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
+func (s *sourcesOverlay) HandleKey(msg ui.KeyEvent) ui.Effect {
 	switch msg.String() {
 	case "[":
 		s.Resize(-4)
@@ -20,7 +20,7 @@ func (s *sourcesOverlay) HandleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 	case "esc", "s", "q":
 		s.closeOverlay()
 	default:
-		var cmd bubble_tea.Cmd
+		var cmd ui.Effect
 		s.vp, cmd = s.vp.Update(msg)
 		return cmd
 	}
@@ -53,7 +53,7 @@ func (s *sourcesOverlay) Render() string {
 			name := nameStyle.Render(truncate(src.Name, nameW))
 			auth := ""
 			if src.Username != "" {
-				auth = "  " + styleSubtle.Render(truncate("[auth] "+src.Username, max(1, innerW-lipgloss.Width(name)-2)))
+				auth = "  " + styleSubtle.Render(truncate("[auth] "+src.Username, max(1, innerW-style.Width(name)-2)))
 			}
 			lines = append(lines, name+auth)
 			lines = append(lines,
@@ -72,6 +72,6 @@ func (s *sourcesOverlay) Render() string {
 
 	return s.centerOverlayInteractive(box, []mouseRegion{
 		overlayCloseRegion(w, s.HandleKey),
-		{rect: mouseRect{x: 1, y: 1, w: w - 2, h: lipgloss.Height(box) - 2}, wheel: verticalWheelHandler(s.HandleKey)},
+		{rect: mouseRect{x: 1, y: 1, w: w - 2, h: style.Height(box) - 2}, wheel: verticalWheelHandler(s.HandleKey)},
 	})
 }

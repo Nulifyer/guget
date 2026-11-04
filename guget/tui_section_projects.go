@@ -1,10 +1,16 @@
 package main
 
 import (
+	"path/filepath"
 	"strings"
+
+	"github.com/nulifyer/guget/internal/ui"
+	"github.com/nulifyer/guget/internal/ui/style"
 )
 
-func (m *App) renderProjectPanel(w int) string {
+func (p *projectPanel) Draw(r ui.Rect) string {
+	m := p.app
+	w := r.W
 	focused := m.focus == focusProjects
 	innerW := w - 2 // border only, no padding
 	visibleH := m.projectListHeight()
@@ -26,10 +32,9 @@ func (m *App) renderProjectPanel(w int) string {
 		item := m.projects.items[i]
 		selected := i == m.projects.cursor
 
-		title := item.Title()
+		title := projectTitle(item, innerW-3)
 		desc := item.Description()
 
-		title = truncate(title, innerW-3)
 		desc = truncate(desc, innerW-5)
 
 		if selected {
@@ -50,5 +55,19 @@ func (m *App) renderProjectPanel(w int) string {
 	if focused {
 		s = s.BorderForeground(colorAccent)
 	}
-	return renderToPanel(s, w, m.bodyOuterHeight(), content)
+	return renderToPanel(s, w, r.H, content)
+}
+
+// Keep project identities distinguishable when a compact panel cannot fit the
+// extension. Middle truncation retains distinguishing suffixes such as Lib/Worker.
+func projectTitle(item projectItem, width int) string {
+	title := item.Title()
+	if style.Width(title) <= width {
+		return title
+	}
+	if item.project == nil {
+		return truncate("◈ All", width)
+	}
+	name := strings.TrimSuffix(item.name, filepath.Ext(item.name))
+	return "◦ " + truncateMiddle(name, max(0, width-2))
 }

@@ -8,11 +8,11 @@ import (
 	"runtime"
 	"strings"
 
-	bubble_tea "charm.land/bubbletea/v2"
+	ui "github.com/nulifyer/guget/internal/ui"
 )
 
-func openURLCmd(ctx context.Context, rawURL string) bubble_tea.Cmd {
-	return func() bubble_tea.Msg {
+func openURLCmd(ctx context.Context, rawURL string) ui.Effect {
+	return func() ui.Event {
 		return openURLResultMsg{url: rawURL, err: openExternalURL(ctx, rawURL)}
 	}
 }

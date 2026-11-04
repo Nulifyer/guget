@@ -14,8 +14,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	tea "charm.land/bubbletea/v2"
-	lipgloss "charm.land/lipgloss/v2"
+	ui "github.com/nulifyer/guget/internal/ui"
+	style "github.com/nulifyer/guget/internal/ui/style"
 )
 
 func TestHeldUpdatesDoNotWaitForUnrelatedMetadata(t *testing.T) {
@@ -33,7 +33,7 @@ func TestHeldUpdatesDoNotWaitForUnrelatedMetadata(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		_, cmd := m.Update(tea.KeyPressMsg(tea.Key{Code: 'u', IsRepeat: true}))
+		cmd := m.HandleEvent(ui.KeyPress(ui.Key{Code: 'u', IsRepeat: true}))
 		if cmd == nil || !m.ctx.Saving {
 			t.Fatal("ready package was blocked by metadata")
 		}
@@ -66,15 +66,15 @@ func TestLoadingKeepsPanelsAndHelpVisible(t *testing.T) {
 	m, _, _ := newActionTestApp(t, "")
 	m.ctx.Loading = true
 	m.ctx.LoadingTotal = 2
-	view := m.View()
+	view := m.Render()
 	for _, label := range []string{"Projects", "Package", "loading packages"} {
 		if !strings.Contains(view.Content, label) {
 			t.Fatalf("loading view omits %q", label)
 		}
 	}
-	_, cmd := m.Update(tea.KeyPressMsg(tea.Key{Code: '?'}))
+	cmd := m.HandleEvent(ui.KeyPress(ui.Key{Code: '?'}))
 	executeActionCmd(t, m, cmd)
-	if !m.help.active || !strings.Contains(m.View().Content, "Navigation") {
+	if !m.help.active || !strings.Contains(m.Render().Content, "Navigation") {
 		t.Fatal("help inaccessible during loading")
 	}
 }
@@ -83,23 +83,23 @@ func TestSearchCancellationAndSessionIsolation(t *testing.T) {
 	m, _, _ := newActionTestApp(t, "")
 	m.openSearch()
 	m.search.results = []SearchResult{{ID: "C"}}
-	cmd := m.search.HandleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	cmd := m.search.HandleKey(ui.KeyPress(ui.Key{Code: ui.KeyEnter}))
 	if cmd == nil || !m.search.fetchingVersion {
 		t.Fatal("fetch did not start")
 	}
 	msg := cmd()
-	m.search.HandleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEscape}))
-	m.Update(msg)
+	m.search.HandleKey(ui.KeyPress(ui.Key{Code: ui.KeyEscape}))
+	m.HandleEvent(msg)
 	if m.picker.active {
 		t.Fatal("canceled search opened a version picker")
 	}
 	m.openSearch()
 	m.search.fetchingVersion = true
-	m.Update(msg)
+	m.HandleEvent(msg)
 	if m.picker.active || !m.search.active || !m.search.fetchingVersion {
 		t.Fatal("old fetch affected reopened search")
 	}
-	m.Update(packageFetchedMsg{requestID: m.search.requestID, info: m.ctx.Results["C"].pkg})
+	m.HandleEvent(packageFetchedMsg{requestID: m.search.requestID, info: m.ctx.Results["C"].pkg})
 	if !m.picker.active || m.search.active {
 		t.Fatal("current fetch did not open picker")
 	}
@@ -113,14 +113,14 @@ func TestSearchIgnoresStaleResultsAndPendingEnter(t *testing.T) {
 	m.search.debounceID = 3
 	m.search.loading = true
 	m.search.results = []SearchResult{{ID: "A"}}
-	if cmd := m.search.HandleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter})); cmd != nil || m.search.fetchingVersion {
+	if cmd := m.search.HandleKey(ui.KeyPress(ui.Key{Code: ui.KeyEnter})); cmd != nil || m.search.fetchingVersion {
 		t.Fatal("enter selected hidden stale results")
 	}
-	m.Update(searchResultsMsg{requestID: m.search.requestID, id: 1, query: "C", results: []SearchResult{{ID: "A"}}})
+	m.HandleEvent(searchResultsMsg{requestID: m.search.requestID, id: 1, query: "C", results: []SearchResult{{ID: "A"}}})
 	if !m.search.loading {
 		t.Fatal("earlier identical query replaced current request")
 	}
-	m.Update(searchResultsMsg{requestID: m.search.requestID, id: 3, query: "C", results: []SearchResult{{ID: "C"}}})
+	m.HandleEvent(searchResultsMsg{requestID: m.search.requestID, id: 3, query: "C", results: []SearchResult{{ID: "C"}}})
 	if m.search.loading || m.search.results[0].ID != "C" {
 		t.Fatal("current results not applied")
 	}
@@ -128,7 +128,7 @@ func TestSearchIgnoresStaleResultsAndPendingEnter(t *testing.T) {
 	m.search.closeOverlay()
 	m.openSearch()
 	m.search.lastQuery = "C"
-	_, cmd := m.Update(searchDebounceMsg{requestID: id, id: m.search.debounceID, query: "C"})
+	cmd := m.HandleEvent(searchDebounceMsg{requestID: id, id: m.search.debounceID, query: "C"})
 	if cmd != nil {
 		t.Fatal("closed session started a search")
 	}
@@ -138,9 +138,9 @@ func TestReloadCancelsSearchAndRejectsLateFetch(t *testing.T) {
 	m, messages, _ := newActionTestApp(t, "")
 	m.openSearch()
 	m.search.results = []SearchResult{{ID: "C"}}
-	cmd := m.search.HandleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	cmd := m.search.HandleKey(ui.KeyPress(ui.Key{Code: ui.KeyEnter}))
 	m.requestReload(reloadRequestedMsg{reason: "test"})
-	m.Update(cmd())
+	m.HandleEvent(cmd())
 	if m.search.active || m.picker.active {
 		t.Fatal("reload left stale add flow active")
 	}
@@ -155,12 +155,12 @@ func TestOverlayRepliesCannotCrossOpenings(t *testing.T) {
 	m.releaseNotes.nsVersions = []string{"1.0.0"}
 	m.releaseNotes.ghReleases = []GitHubRelease{{TagName: "v1"}}
 	m.releaseNotes.nsLoading, m.releaseNotes.ghLoading = true, true
-	for _, msg := range []tea.Msg{
+	for _, msg := range []ui.Event{
 		releaseListReadyMsg{requestID: oldID, owner: "wrong", releases: []GitHubRelease{{TagName: "old"}}},
 		releaseNotesReadyMsg{requestID: oldID, tag: "v1", body: "wrong"},
 		nuspecVersionNotesReadyMsg{requestID: oldID, version: "1.0.0", notes: "wrong"},
 	} {
-		m.Update(msg)
+		m.HandleEvent(msg)
 	}
 	if m.releaseNotes.ghOwner != "" || m.releaseNotes.ghNotes != "" || len(m.releaseNotes.nsNotesCache) != 0 || !m.releaseNotes.nsLoading || !m.releaseNotes.ghLoading {
 		t.Fatal("old release reply changed new package")
@@ -168,7 +168,7 @@ func TestOverlayRepliesCannotCrossOpenings(t *testing.T) {
 	m.depTree = newDepTreeOverlay(m, "A", true)
 	oldID = m.depTree.requestID
 	m.depTree = newDepTreeOverlay(m, "B", true)
-	m.Update(depTreeReadyMsg{requestID: oldID, err: errors.New("old failure")})
+	m.HandleEvent(depTreeReadyMsg{requestID: oldID, err: errors.New("old failure")})
 	if !m.depTree.loading || m.depTree.err != nil {
 		t.Fatal("old tree reply changed new overlay")
 	}
@@ -192,23 +192,23 @@ func TestLogUpdatesAreBoundedBatchedAndPreserveScroll(t *testing.T) {
 	for i := range lines {
 		lines[i] = fmt.Sprintf("line %d", i)
 	}
-	_, cmd := m.Update(logBatchMsg{lines: lines})
+	cmd := m.HandleEvent(logBatchMsg{lines: lines})
 	if cmd != nil || m.log.vp.GetContent() != "" {
 		t.Fatal("hidden logs rebuilt viewport")
 	}
 	if len(m.ctx.LogLines) != maxLogLines || m.ctx.LogLines[0] != "line 100" {
 		t.Fatal("log retention is unbounded or dropped wrong lines")
 	}
-	m.handleKey(tea.KeyPressMsg(tea.Key{Code: 'l'}))
+	m.handleKey(ui.KeyPress(ui.Key{Code: 'l'}))
 	if !m.log.vp.AtBottom() {
 		t.Fatal("opening log did not follow tail")
 	}
 	m.log.vp.SetYOffset(10)
-	_, cmd = m.Update(logBatchMsg{lines: []string{"new line"}})
+	cmd = m.HandleEvent(logBatchMsg{lines: []string{"new line"}})
 	if cmd == nil {
 		t.Fatal("visible logs did not schedule refresh")
 	}
-	_, next := m.Update(logBatchMsg{lines: []string{"another line"}})
+	next := m.HandleEvent(logBatchMsg{lines: []string{"another line"}})
 	if next != nil {
 		t.Fatal("log burst scheduled duplicate refresh")
 	}
@@ -222,7 +222,7 @@ func TestLogForwarderDoesNotBlockWriters(t *testing.T) {
 	entered := make(chan struct{}, 1)
 	release := make(chan struct{})
 	messages := make(chan logBatchMsg, 2)
-	b := &logBuffer{send: func(msg tea.Msg) {
+	b := &logBuffer{send: func(msg ui.Event) {
 		select {
 		case entered <- struct{}{}:
 		default:
@@ -257,7 +257,7 @@ func TestLogForwarderDoesNotBlockWriters(t *testing.T) {
 func TestTinyTerminalDoesNotPanicOrApplyHiddenActions(t *testing.T) {
 	m, _, _ := newActionTestApp(t, "")
 	for _, size := range [][2]int{{1, 1}, {20, 2}, {79, 11}, {80, 12}} {
-		m.Update(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
+		m.HandleEvent(ui.ResizeEvent{Width: size[0], Height: size[1]})
 		for _, overlay := range []string{"main", "search", "help", "notes", "tree"} {
 			switch overlay {
 			case "search":
@@ -269,13 +269,13 @@ func TestTinyTerminalDoesNotPanicOrApplyHiddenActions(t *testing.T) {
 			case "tree":
 				m.depTree = newDepTreeOverlay(m, "A", true)
 			}
-			view := m.View()
-			if lipgloss.Height(view.Content) > size[1] {
-				t.Fatalf("%s height=%d, terminal=%v", overlay, lipgloss.Height(view.Content), size)
+			view := m.Render()
+			if style.Height(view.Content) > size[1] {
+				t.Fatalf("%s height=%d, terminal=%v", overlay, style.Height(view.Content), size)
 			}
 		}
 		if size[0] < 80 {
-			_, cmd := m.Update(tea.KeyPressMsg(tea.Key{Code: 'u'}))
+			cmd := m.HandleEvent(ui.KeyPress(ui.Key{Code: 'u'}))
 			if cmd != nil || m.ctx.Saving {
 				t.Fatal("small terminal applied hidden action")
 			}
@@ -286,7 +286,7 @@ func TestTinyTerminalDoesNotPanicOrApplyHiddenActions(t *testing.T) {
 func TestStatusTruncationPreservesUnicode(t *testing.T) {
 	m, _, _ := newActionTestApp(t, "")
 	m.setStatus(strings.Repeat("界", 100), false)
-	if !utf8.ValidString(m.ctx.StatusLine) || lipgloss.Width(m.ctx.StatusLine) > m.layoutWidth()-6 {
+	if !utf8.ValidString(m.ctx.StatusLine) || style.Width(m.ctx.StatusLine) > m.layoutWidth()-6 {
 		t.Fatal("status truncation damaged UTF-8 or exceeded width")
 	}
 }
@@ -303,7 +303,7 @@ func TestCanceledSearchStopsNetworkWork(t *testing.T) {
 	m.ctx.NugetServices = []*NugetService{{client: server.Client(), searchBase: server.URL, sourceName: "test"}}
 	m.openSearch()
 	cmd := m.search.doSearchCmd("C")
-	done := make(chan tea.Msg, 1)
+	done := make(chan ui.Event, 1)
 	go func() { done <- cmd() }()
 	select {
 	case <-started:
@@ -335,8 +335,8 @@ func TestSearchExactContextCancellation(t *testing.T) {
 
 func TestMetadataRepliesCoalesceRowRebuilds(t *testing.T) {
 	m, _, _ := newActionTestApp(t, "")
-	_, first := m.Update(packageReadyMsg{name: "A", result: m.ctx.Results["A"]})
-	_, second := m.Update(packageReadyMsg{name: "B", result: m.ctx.Results["B"]})
+	first := m.HandleEvent(packageReadyMsg{name: "A", result: m.ctx.Results["A"]})
+	second := m.HandleEvent(packageReadyMsg{name: "B", result: m.ctx.Results["B"]})
 	if first == nil || second != nil {
 		t.Fatal("metadata burst did not coalesce rebuilds")
 	}
@@ -351,7 +351,7 @@ func TestFailedReloadResumesPendingMetadata(t *testing.T) {
 	m, messages, _ := newActionTestApp(t, "")
 	m.ctx.Reloading = true
 	m.ctx.PendingPackages.Add("C")
-	m.Update(workspaceReloadedMsg{err: errors.New("injected scan failure")})
+	m.HandleEvent(workspaceReloadedMsg{err: errors.New("injected scan failure")})
 	if m.ctx.Reloading || !m.ctx.StatusIsErr {
 		t.Fatal("failed reload retained mutation guard")
 	}
@@ -361,7 +361,7 @@ func TestFailedReloadResumesPendingMetadata(t *testing.T) {
 		if !ok || ready.name != "C" {
 			t.Fatalf("unexpected retry: %#v", msg)
 		}
-		_, cmd := m.Update(msg)
+		cmd := m.HandleEvent(msg)
 		executeActionCmd(t, m, cmd)
 	case <-time.After(time.Second):
 		t.Fatal("failed reload stranded pending metadata")
@@ -426,7 +426,7 @@ func TestSourcesOverlayScrollsLongLists(t *testing.T) {
 		t.Fatal("fixture does not require scrolling")
 	}
 	for range 100 {
-		m.sources.HandleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
+		m.sources.HandleKey(ui.KeyPress(ui.Key{Code: ui.KeyDown}))
 	}
 	if !m.sources.vp.AtBottom() || !strings.Contains(m.sources.Render(), "source-19") {
 		t.Fatal("last source is inaccessible")
@@ -442,7 +442,7 @@ func TestShortPickerKeepsSelectedRowAndButtonsVisible(t *testing.T) {
 	}
 	m.picker = newVersionPicker(m, "A", versions, nil, m.selectedProject(), false)
 	m.picker.cursor = 29
-	view := m.View()
+	view := m.Render()
 	if !strings.Contains(view.Content, "1.0.29") || !strings.Contains(view.Content, "Apply") {
 		t.Fatal("short picker hides selection or action")
 	}
@@ -470,7 +470,7 @@ func TestHelpDescriptionsWrapInsideViewport(t *testing.T) {
 	m.help.active = true
 	m.help.refreshView()
 	for _, line := range strings.Split(m.help.vp.GetContent(), "\n") {
-		if lipgloss.Width(line) > m.help.vp.Width() {
+		if style.Width(line) > m.help.vp.Width() {
 			t.Fatalf("help line is clipped: %q", line)
 		}
 	}

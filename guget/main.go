@@ -10,7 +10,7 @@ import (
 	"strings"
 	"sync"
 
-	tea "charm.land/bubbletea/v2"
+	ui "github.com/nulifyer/guget/internal/ui"
 )
 
 var version = "dev"
@@ -22,7 +22,7 @@ func versionString() string {
 type logBuffer struct {
 	mu         sync.Mutex
 	lines      []string
-	send       func(tea.Msg)
+	send       func(ui.Event)
 	pending    []string
 	forwarding bool
 }
@@ -272,7 +272,7 @@ func main() {
 	m := NewApp(fullProjectPath, &workspaceSnapshot{}, buf.Lines(), builtFlags)
 	m.lifecycle = tuiCtx
 
-	p := tea.NewProgram(m, tea.WithContext(tuiCtx))
+	p := ui.NewRuntime(tuiCtx, m)
 
 	// Wire up live log forwarding to the TUI now that the program exists.
 	buf.mu.Lock()
@@ -284,7 +284,7 @@ func main() {
 	stopWatcher := watchWorkspaceFiles(fullProjectPath, p.Send, m.watchInputs)
 	defer stopWatcher()
 
-	if _, err := p.Run(); err != nil {
+	if err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "TUI error: %v\n", err)
 		os.Exit(1)
 	}

@@ -1,7 +1,8 @@
 package main
 
 import (
-	bubble_tea "charm.land/bubbletea/v2"
+	"fmt"
+	ui "github.com/nulifyer/guget/internal/ui"
 	"strings"
 )
 
@@ -19,7 +20,7 @@ func (r mouseRect) contains(x, y int) bool {
 		y >= r.y && y < r.y+r.h
 }
 
-type mouseHandler func(event bubble_tea.MouseMsg) bubble_tea.Cmd
+type mouseHandler func(event ui.MouseEvent) ui.Effect
 
 // mouseRegion describes one explicit interaction in the rendered frame.
 // Regions are checked in order, so links and buttons can take precedence over
@@ -30,7 +31,7 @@ type mouseRegion struct {
 	wheel mouseHandler
 }
 
-// mouseLayout is an immutable snapshot captured by View. Bubble Tea invokes
+// mouseLayout is an immutable snapshot captured by View. The terminal runtime invokes
 // OnMouse for that rendered view, so resize or overlay changes cannot make an
 // event use geometry from a different frame.
 type mouseLayout struct {
@@ -42,6 +43,8 @@ type mouseLayout struct {
 	projectPath         string
 	projectPaths        []string
 	packageNames        []string
+	modalKind           string
+	modalSession        int
 
 	projects mouseRect
 	packages mouseRect
@@ -54,7 +57,7 @@ type mouseLayout struct {
 }
 
 type mouseInputMsg struct {
-	event  bubble_tea.MouseMsg
+	event  ui.MouseEvent
 	layout mouseLayout
 }
 
@@ -69,7 +72,7 @@ func (m *App) activeMouseSessionID() int {
 	return 0
 }
 
-func (m *App) bindMouse(v *bubble_tea.View, layout mouseLayout) {
+func (m *App) bindMouse(v *ui.Frame, layout mouseLayout) {
 	if !m.mouse {
 		return
 	}
@@ -95,15 +98,24 @@ func (m *App) bindMouse(v *bubble_tea.View, layout mouseLayout) {
 	// OSC 8 links are discovered from the final rendered frame, after panel
 	// joins, viewport scrolling, centering, and safety trimming. This keeps link
 	// hit targets aligned without teaching every renderer about absolute cells.
+	if layout.modal {
+		if o := m.activeOverlay(); o != nil {
+			layout.modalKind = fmt.Sprintf("%T", o)
+			layout.modalSession = o.InstanceID()
+		}
+	}
 	layout.regions = append(linkMouseRegions(v.Content), layout.regions...)
-	v.MouseMode = bubble_tea.MouseModeCellMotion
-	v.OnMouse = func(event bubble_tea.MouseMsg) bubble_tea.Cmd {
+	v.MouseMode = ui.MouseModeCellMotion
+	v.OnMouse = func(event ui.MouseEvent) ui.Effect {
 		input := mouseInputMsg{event: event, layout: layout}
-		return func() bubble_tea.Msg { return input }
+		return func() ui.Event { return input }
 	}
 }
 
 func (m *App) mainMouseLayout(leftW, midW, rightW int) mouseLayout {
+	if m.compactLogs() {
+		return mouseLayout{log: mouseRect{w: m.layoutWidth(), h: m.logOuterHeight()}}
+	}
 	bodyH := m.bodyOuterHeight()
 	layout := mouseLayout{
 		projects:      mouseRect{x: 0, y: 0, w: leftW, h: bodyH},
@@ -125,7 +137,7 @@ func (m *App) mainMouseLayout(leftW, midW, rightW int) mouseLayout {
 	if directionX < headerX+packageHeaderW && directionX < panelEnd {
 		layout.regions = append(layout.regions, mouseRegion{
 			rect: mouseRect{x: directionX, y: 1, w: 1, h: 1},
-			click: func(bubble_tea.MouseMsg) bubble_tea.Cmd {
+			click: func(ui.MouseEvent) ui.Effect {
 				m.focus = focusPackages
 				m.reversePackageSort()
 				return nil
@@ -139,7 +151,7 @@ func (m *App) mainMouseLayout(leftW, midW, rightW int) mouseLayout {
 	if visiblePackageW > 0 {
 		layout.regions = append(layout.regions, mouseRegion{
 			rect: mouseRect{x: headerX, y: 1, w: visiblePackageW, h: 1},
-			click: func(bubble_tea.MouseMsg) bubble_tea.Cmd {
+			click: func(ui.MouseEvent) ui.Effect {
 				m.focus = focusPackages
 				m.cyclePackageSort()
 				return nil
@@ -156,7 +168,7 @@ func (m *App) mainMouseLayout(leftW, midW, rightW int) mouseLayout {
 		if visibleW > 0 {
 			layout.regions = append(layout.regions, mouseRegion{
 				rect: mouseRect{x: headerX, y: 1, w: visibleW, h: 1},
-				click: func(bubble_tea.MouseMsg) bubble_tea.Cmd {
+				click: func(ui.MouseEvent) ui.Effect {
 					m.focus = focusPackages
 					m.setPackageSort(mode)
 					return nil
@@ -218,7 +230,7 @@ func (l mouseLayout) packageIndexAt(x, y, total int) (int, bool) {
 	return index, index >= 0 && index < total
 }
 
-func (m *App) handleMouse(input mouseInputMsg) bubble_tea.Cmd {
+func (m *App) handleMouse(input mouseInputMsg) ui.Effect {
 	if input.layout.captured {
 		if input.layout.width != m.ctx.Width || input.layout.height != m.ctx.Height {
 			return nil
@@ -243,17 +255,23 @@ func (m *App) handleMouse(input mouseInputMsg) bubble_tea.Cmd {
 	if !input.layout.modal && m.anyOverlayActive() {
 		return nil
 	}
+	if input.layout.modalKind != "" {
+		o := m.activeOverlay()
+		if o == nil || fmt.Sprintf("%T", o) != input.layout.modalKind || o.InstanceID() != input.layout.modalSession {
+			return nil
+		}
+	}
 	for _, region := range input.layout.regions {
 		event := input.event.Mouse()
 		if !region.rect.contains(event.X, event.Y) {
 			continue
 		}
 		switch input.event.(type) {
-		case bubble_tea.MouseClickMsg:
-			if event.Button == bubble_tea.MouseLeft && region.click != nil {
+		case ui.MouseClick:
+			if event.Button == ui.MouseLeft && region.click != nil {
 				return region.click(input.event)
 			}
-		case bubble_tea.MouseWheelMsg:
+		case ui.MouseWheel:
 			if region.wheel != nil {
 				return region.wheel(input.event)
 			}
@@ -273,8 +291,8 @@ func (m *App) handleMouse(input mouseInputMsg) bubble_tea.Cmd {
 	}
 
 	switch input.event.(type) {
-	case bubble_tea.MouseClickMsg:
-		if event.Button != bubble_tea.MouseLeft {
+	case ui.MouseClick:
+		if event.Button != ui.MouseLeft {
 			return nil
 		}
 		m.focus = target
@@ -321,29 +339,29 @@ func (m *App) handleMouse(input mouseInputMsg) bubble_tea.Cmd {
 			}
 		}
 
-	case bubble_tea.MouseWheelMsg:
+	case ui.MouseWheel:
 		switch target {
 		case focusProjects:
 			switch event.Button {
-			case bubble_tea.MouseWheelUp:
+			case ui.MouseWheelUp:
 				m.moveProjectCursor(-1)
-			case bubble_tea.MouseWheelDown:
+			case ui.MouseWheelDown:
 				m.moveProjectCursor(1)
 			}
 		case focusPackages:
 			switch event.Button {
-			case bubble_tea.MouseWheelUp:
+			case ui.MouseWheelUp:
 				m.movePackageCursor(-3)
-			case bubble_tea.MouseWheelDown:
+			case ui.MouseWheelDown:
 				m.movePackageCursor(3)
 			}
 		case focusDetail:
-			var cmd bubble_tea.Cmd
+			var cmd ui.Effect
 			m.detail.vp, cmd = m.detail.vp.Update(input.event)
 			return cmd
 		case focusLog:
 			if m.ctx.ShowLogs {
-				var cmd bubble_tea.Cmd
+				var cmd ui.Effect
 				m.log.vp, cmd = m.log.vp.Update(input.event)
 				return cmd
 			}
@@ -352,24 +370,24 @@ func (m *App) handleMouse(input mouseInputMsg) bubble_tea.Cmd {
 	return nil
 }
 
-func keyMouseHandler(handle func(bubble_tea.KeyMsg) bubble_tea.Cmd, code rune) mouseHandler {
-	return func(bubble_tea.MouseMsg) bubble_tea.Cmd {
-		return handle(bubble_tea.KeyPressMsg(bubble_tea.Key{Code: code}))
+func keyMouseHandler(handle func(ui.KeyEvent) ui.Effect, code rune) mouseHandler {
+	return func(ui.MouseEvent) ui.Effect {
+		return handle(ui.KeyPress(ui.Key{Code: code}))
 	}
 }
 
-func verticalWheelHandler(handle func(bubble_tea.KeyMsg) bubble_tea.Cmd) mouseHandler {
-	return func(event bubble_tea.MouseMsg) bubble_tea.Cmd {
+func verticalWheelHandler(handle func(ui.KeyEvent) ui.Effect) mouseHandler {
+	return func(event ui.MouseEvent) ui.Effect {
 		var code rune
 		switch event.Mouse().Button {
-		case bubble_tea.MouseWheelUp:
-			code = bubble_tea.KeyUp
-		case bubble_tea.MouseWheelDown:
-			code = bubble_tea.KeyDown
+		case ui.MouseWheelUp:
+			code = ui.KeyUp
+		case ui.MouseWheelDown:
+			code = ui.KeyDown
 		default:
 			return nil
 		}
-		return handle(bubble_tea.KeyPressMsg(bubble_tea.Key{Code: code}))
+		return handle(ui.KeyPress(ui.Key{Code: code}))
 	}
 }
 

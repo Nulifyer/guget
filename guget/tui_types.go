@@ -6,9 +6,9 @@ import (
 	"slices"
 	"strings"
 
-	bubbles_textinpute "charm.land/bubbles/v2/textinput"
-	bubbles_viewport "charm.land/bubbles/v2/viewport"
-	lipgloss "charm.land/lipgloss/v2"
+	input "github.com/nulifyer/guget/internal/ui/input"
+	style "github.com/nulifyer/guget/internal/ui/style"
+	viewport "github.com/nulifyer/guget/internal/ui/viewport"
 )
 
 type focusPanel int
@@ -222,6 +222,7 @@ type projectPanel struct {
 }
 
 type packagePanel struct {
+	sectionBase
 	cursor   int
 	scroll   int
 	rows     []packageRow
@@ -231,11 +232,12 @@ type packagePanel struct {
 
 type detailPanel struct {
 	sectionBase // baseWidth=50, minWidth=10
-	vp          bubbles_viewport.Model
+	vp          viewport.Model
 }
 
 type logPanel struct {
-	vp bubbles_viewport.Model
+	sectionBase
+	vp viewport.Model
 }
 
 // --- Overlay state types ---
@@ -245,7 +247,7 @@ type depTreeOverlay struct {
 	loading        bool // true while dotnet list is running (T key)
 	content        string
 	err            error
-	vp             bubbles_viewport.Model
+	vp             viewport.Model
 	title          string
 	packageVersion *PackageVersion
 	dotnetProjects []dotnetListProject
@@ -263,7 +265,7 @@ type releaseNotesOverlay struct {
 	cancel      context.CancelFunc
 	sectionBase      // basePct=85, minWidth=60, maxMargin=4
 	focusRight  bool // false = left list, true = notes viewport
-	vp          bubbles_viewport.Model
+	vp          viewport.Model
 	title       string
 	activeTab   releaseNotesTab
 
@@ -294,12 +296,12 @@ type releaseNotesOverlay struct {
 
 type sourcesOverlay struct {
 	sectionBase // baseWidth=90, minWidth=40, maxMargin=4
-	vp          bubbles_viewport.Model
+	vp          viewport.Model
 }
 
 type helpOverlay struct {
 	sectionBase // basePct=60, minWidth=56, maxMargin=4
-	vp          bubbles_viewport.Model
+	vp          viewport.Model
 }
 
 // --- Data display types ---
@@ -385,7 +387,7 @@ func (r packageRow) statusIcon() string {
 	return "✓"
 }
 
-func (r packageRow) statusStyle() lipgloss.Style {
+func (r packageRow) statusStyle() style.Style {
 	if r.loading {
 		return styleAccent
 	}
@@ -434,7 +436,7 @@ func (vp *versionPicker) selectedVersion() *PackageVersion {
 
 type packageSearch struct {
 	sectionBase     // baseWidth=90, minWidth=56, maxMargin=4
-	input           bubbles_textinpute.Model
+	input           input.Model
 	debounceID      int
 	lastQuery       string
 	results         []SearchResult

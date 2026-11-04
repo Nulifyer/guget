@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	lipgloss "charm.land/lipgloss/v2"
+	style "github.com/nulifyer/guget/internal/ui/style"
 )
 
 func TestTruncateUsesTerminalCellWidth(t *testing.T) {
@@ -18,7 +18,7 @@ func TestTruncateUsesTerminalCellWidth(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			got := truncate(test.input, test.width)
-			if width := lipgloss.Width(got); width > test.width {
+			if width := style.Width(got); width > test.width {
 				t.Fatalf("truncate(%q) width = %d, want <= %d; output %q", test.input, width, test.width, got)
 			}
 		})
@@ -28,7 +28,7 @@ func TestTruncateUsesTerminalCellWidth(t *testing.T) {
 func TestTruncateStyledPreservesANSIAndWidth(t *testing.T) {
 	styled := "\x1b[31m包裹-package\x1b[0m"
 	got := truncateStyled(styled, 6)
-	if width := lipgloss.Width(got); width > 6 {
+	if width := style.Width(got); width > 6 {
 		t.Fatalf("width = %d; output %q", width, got)
 	}
 }

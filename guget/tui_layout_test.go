@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	tea "charm.land/bubbletea/v2"
-	lipgloss "charm.land/lipgloss/v2"
-	"github.com/charmbracelet/x/ansi"
+	ui "github.com/nulifyer/guget/internal/ui"
+	style "github.com/nulifyer/guget/internal/ui/style"
+	text "github.com/nulifyer/guget/internal/ui/text"
 )
 
 func TestCompactOverlaysKeepBordersAndMouseTargetsVisible(t *testing.T) {
@@ -67,11 +67,11 @@ func TestCompactOverlaysKeepBordersAndMouseTargetsVisible(t *testing.T) {
 					m.help.refreshView()
 					overlay = &m.help
 				}
-				view := m.View().Content
-				if lipgloss.Width(view) > m.ctx.Width || lipgloss.Height(view) > height || !strings.Contains(view, "╰") {
-					t.Fatalf("overlay exceeds terminal or loses its bottom border:\n%s", ansi.Strip(view))
+				view := m.Render().Content
+				if style.Width(view) > m.ctx.Width || style.Height(view) > height || !strings.Contains(view, "╰") {
+					t.Fatalf("overlay exceeds terminal or loses its bottom border:\n%s", text.Strip(view))
 				}
-				lines := strings.Split(ansi.Strip(view), "\n")
+				lines := strings.Split(text.Strip(view), "\n")
 				for _, region := range overlay.MouseRegions() {
 					if region.click == nil {
 						continue
@@ -81,7 +81,7 @@ func TestCompactOverlaysKeepBordersAndMouseTargetsVisible(t *testing.T) {
 						t.Fatalf("click target outside visible overlay: %+v", r)
 					}
 					if kind != "notes" && kind != "dependencies" && kind != "help" && r.h == 1 && r.w != 3 && r.w < 15 {
-						label := ansi.Cut(lines[r.y], r.x, r.x+r.w)
+						label := text.Strip(text.Cut(lines[r.y], r.x, r.x+r.w))
 						if !strings.HasPrefix(label, "[ ") || !strings.HasSuffix(label, " ]") {
 							t.Fatalf("button target misses rendered label: %+v, text=%q", r, label)
 						}
@@ -110,8 +110,8 @@ func TestResizeKeepsSelectedRowsVisibleAndReflowsDetails(t *testing.T) {
 	}
 	m.packages.cursor = len(m.packages.rows) - 1
 	m.projects.cursor = len(m.projects.items) - 1
-	m.Update(tea.WindowSizeMsg{Width: 80, Height: 16})
-	if !strings.Contains(m.View().Content, "Package-29") || !strings.Contains(m.View().Content, "P29") {
+	m.HandleEvent(ui.ResizeEvent{Width: 80, Height: 16})
+	if !strings.Contains(m.Render().Content, "Package-29") || !strings.Contains(m.Render().Content, "P29") {
 		t.Fatal("resizing hid a selected row")
 	}
 	m.packages.cursor = 0
@@ -119,8 +119,8 @@ func TestResizeKeepsSelectedRowsVisibleAndReflowsDetails(t *testing.T) {
 	info.Description = "This description should reflow after the package detail viewport expands to a wider terminal."
 	m.refreshDetail()
 	before := m.detail.vp.TotalLineCount()
-	m.Update(tea.WindowSizeMsg{Width: 180, Height: 40})
-	m.Update(resizeDebounceMsg{id: m.resizeDebounceID})
+	m.HandleEvent(ui.ResizeEvent{Width: 180, Height: 40})
+	m.HandleEvent(resizeDebounceMsg{id: m.resizeDebounceID})
 	if m.detail.vp.TotalLineCount() >= before {
 		t.Fatal("detail content kept its narrow wrapping after resize")
 	}
@@ -135,9 +135,9 @@ func TestLogsFollowLatestEntryWithoutClippingLastRow(t *testing.T) {
 	m.relayout()
 	m.ctx.LogLines = []string{"[INFO] First entry", "[ERROR] Latest entry"}
 	m.updateLogView()
-	view := m.View().Content
-	if !strings.Contains(view, "Latest entry") || strings.Count(view, "╰") != 4 {
-		t.Fatalf("log entry or panel border clipped:\n%s", ansi.Strip(view))
+	view := m.Render().Content
+	if !strings.Contains(view, "Latest entry") || strings.Count(view, "╰") != 1 {
+		t.Fatalf("log entry or panel border clipped:\n%s", text.Strip(view))
 	}
 	layout := m.mainMouseLayout(10, 40, 30)
 	if layout.log.h != m.logOuterHeight() {
@@ -165,18 +165,18 @@ func TestDependencyConstraintsSurviveLongNamesAndResize(t *testing.T) {
 	m.relayout()
 	m.depTree.refreshContent()
 	narrow := m.depTree.vp.GetContent()
-	if !strings.Contains(narrow, ">= 8.0.0") || lipgloss.Width(narrow) > m.depTree.vp.Width() {
-		t.Fatalf("constraint hidden: %s", ansi.Strip(narrow))
+	if !strings.Contains(narrow, ">= 8.0.0") || style.Width(narrow) > m.depTree.vp.Width() {
+		t.Fatalf("constraint hidden: %s", text.Strip(narrow))
 	}
 	for range 4 {
-		m.depTree.HandleKey(tea.KeyPressMsg(tea.Key{Code: '['}))
+		m.depTree.HandleKey(ui.KeyPress(ui.Key{Code: '['}))
 	}
 	if m.depTree.vp.Width() != m.depTree.Width()-6 || !strings.Contains(m.depTree.vp.GetContent(), ">= 8.0.0") {
 		t.Fatal("overlay width shortcut leaves stale dependency columns")
 	}
 
-	m.Update(tea.WindowSizeMsg{Width: 160, Height: 40})
-	m.Update(resizeDebounceMsg{id: m.resizeDebounceID})
+	m.HandleEvent(ui.ResizeEvent{Width: 160, Height: 40})
+	m.HandleEvent(resizeDebounceMsg{id: m.resizeDebounceID})
 	if !strings.Contains(m.depTree.vp.GetContent(), "Microsoft.Extensions.DependencyInjection.Abstractions") {
 		t.Fatal("expanded dependency view retains truncated names")
 	}
@@ -187,12 +187,12 @@ func TestDetailWrapsLongErrorsAndUnicodeWithoutLosingText(t *testing.T) {
 	m, _, _ := newActionTestApp(t, "")
 	m.detail.vp.SetWidth(18)
 	message := "Cannot reach https://packages.example.test/very/long/path/index.json"
-	text := m.renderDetail(packageRow{err: errors.New(message)})
-	if lipgloss.Width(text) > 18 || !strings.Contains(strings.ReplaceAll(ansi.Strip(text), "\n", ""), "index.json") {
+	rendered := m.renderDetail(packageRow{err: errors.New(message)})
+	if style.Width(rendered) > 18 || !strings.Contains(strings.ReplaceAll(text.Strip(rendered), "\n", ""), "index.json") {
 		t.Fatal("detail error loses its tail")
 	}
-	text = wordWrap("漢字の長い説明とバージョン情報", 10)
-	if lipgloss.Width(text) > 10 || strings.ReplaceAll(text, "\n", "") != "漢字の長い説明とバージョン情報" {
+	rendered = wordWrap("漢字の長い説明とバージョン情報", 10)
+	if style.Width(rendered) > 10 || strings.ReplaceAll(text.Strip(rendered), "\n", "") != "漢字の長い説明とバージョン情報" {
 		t.Fatal("Unicode wrapping loses text or exceeds cell width")
 	}
 }
@@ -208,29 +208,37 @@ func TestLogTailSurvivesOpeningAndFocusChanges(t *testing.T) {
 			for i := range 20 {
 				m.ctx.LogLines = append(m.ctx.LogLines, fmt.Sprintf("[INFO] Entry%d", i))
 			}
-			m.Update(tea.KeyPressMsg(tea.Key{Code: 'l'}))
+			m.HandleEvent(ui.KeyPress(ui.Key{Code: 'l'}))
 			for range 8 {
-				if !strings.Contains(m.View().Content, "Entry19") || !strings.Contains(m.View().Content, "1.0.0") || strings.Count(m.View().Content, "╰") != 4 {
-					t.Fatalf("latest log or border hidden at focus %v:\n%s", m.focus, ansi.Strip(m.View().Content))
+				view := m.Render().Content
+				// Compact logs occupy the full body; taller layouts retain all panels.
+				borders := 4
+				if m.compactLogs() {
+					borders = 1
+				} else if !strings.Contains(view, "1.0.0") {
+					t.Fatal("package version hidden beside logs")
+				}
+				if !strings.Contains(view, "Entry19") || strings.Count(view, "╰") != borders {
+					t.Fatalf("latest log or border hidden at focus %v:\n%s", m.focus, text.Strip(m.Render().Content))
 				}
 				if m.log.vp.Height() != m.logContentHeight() {
 					t.Fatal("viewport height differs from visible log rows")
 				}
-				m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyTab}))
+				m.HandleEvent(ui.KeyPress(ui.Key{Code: ui.KeyTab}))
 			}
 		})
 	}
 }
 
 func TestTinyTerminalQuitHintsWork(t *testing.T) {
-	for _, code := range []rune{'q', tea.KeyEscape} {
+	for _, code := range []rune{'q', ui.KeyEscape} {
 		m, _, _ := newActionTestApp(t, "")
 		m.ctx.Width, m.ctx.Height = 79, 11
-		_, cmd := m.Update(tea.KeyPressMsg(tea.Key{Code: code}))
+		cmd := m.HandleEvent(ui.KeyPress(ui.Key{Code: code}))
 		if cmd == nil {
 			t.Fatal("displayed quit shortcut does nothing")
 		}
-		if _, ok := cmd().(tea.QuitMsg); !ok {
+		if _, ok := cmd().(ui.QuitEvent); !ok {
 			t.Fatal("displayed quit shortcut does not quit")
 		}
 	}
@@ -247,17 +255,17 @@ func TestTransitiveDependencyVersionsSurviveNarrowLayouts(t *testing.T) {
  > Microsoft.Extensions.DependencyInjection.Abstractions 8.0.0 8.0.5
  Transitive Package Resolved
  > Microsoft.Extensions.Configuration.Abstractions 9.0.1`
-	m.Update(depTreeReadyMsg{requestID: m.depTree.requestID, content: raw})
+	m.HandleEvent(depTreeReadyMsg{requestID: m.depTree.requestID, content: raw})
 	for _, version := range []string{"8.0.0", "8.0.5", "9.0.1"} {
 		if !strings.Contains(m.depTree.vp.GetContent(), version) {
 			t.Fatalf("dependency table hides version %s", version)
 		}
 	}
-	if lipgloss.Width(m.depTree.vp.GetContent()) > m.depTree.vp.Width() {
+	if style.Width(m.depTree.vp.GetContent()) > m.depTree.vp.Width() {
 		t.Fatal("transitive table exceeds viewport width")
 	}
-	m.Update(tea.WindowSizeMsg{Width: 160, Height: 40})
-	m.Update(resizeDebounceMsg{id: m.resizeDebounceID})
+	m.HandleEvent(ui.ResizeEvent{Width: 160, Height: 40})
+	m.HandleEvent(resizeDebounceMsg{id: m.resizeDebounceID})
 	if !strings.Contains(m.depTree.vp.GetContent(), "Microsoft.Extensions.DependencyInjection.Abstractions") {
 		t.Fatal("expanded transitive view retains truncated names")
 	}
@@ -294,18 +302,18 @@ func TestResizeFramesStayWithinTerminalBeforeAndAfterDebounce(t *testing.T) {
 				m.sources.active = true
 				m.ctx.Sources = []NugetSource{{Name: strings.Repeat("Long source ", 10), URL: "https://example.test/feed"}}
 			}
-			m.View()
+			m.Render()
 			for _, size := range [][2]int{{120, 30}, {100, 20}, {80, 12}, {120, 18}, {80, 20}} {
-				m.Update(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
+				m.HandleEvent(ui.ResizeEvent{Width: size[0], Height: size[1]})
 				for phase := range 2 {
-					view := m.View().Content
-					if lipgloss.Width(view) > size[0] || lipgloss.Height(view) > size[1] || !strings.Contains(view, "╰") {
-						t.Fatalf("%v, phase%d: wrapped frame or missing bottom border:\n%s", size, phase, ansi.Strip(view))
+					view := m.Render().Content
+					if style.Width(view) > size[0] || style.Height(view) > size[1] || !strings.Contains(view, "╰") {
+						t.Fatalf("%v, phase%d: wrapped frame or missing bottom border:\n%s", size, phase, text.Strip(view))
 					}
-					if lipgloss.Height(m.renderFooter()) != m.footerLines()+1 {
+					if style.Height(m.renderFooter()) != m.footerLines()+1 {
 						t.Fatal("status wrapped into an unbudgeted footer row")
 					}
-					m.Update(resizeDebounceMsg{id: m.resizeDebounceID})
+					m.HandleEvent(resizeDebounceMsg{id: m.resizeDebounceID})
 				}
 			}
 		})
@@ -315,7 +323,7 @@ func TestResizeFramesStayWithinTerminalBeforeAndAfterDebounce(t *testing.T) {
 func TestNarrowPanelDoesNotWrapItsBorderOrHeading(t *testing.T) {
 	initTheme("auto-dark", false)
 	panel := renderToPanel(stylePanel, 10, 8, "Package Detail\n"+strings.Repeat("long content ", 20))
-	if lipgloss.Width(panel) != 10 || lipgloss.Height(panel) != 8 {
-		t.Fatalf("panel exceeded its frame: %dx%d", lipgloss.Width(panel), lipgloss.Height(panel))
+	if style.Width(panel) != 10 || style.Height(panel) != 8 {
+		t.Fatalf("panel exceeded its frame: %dx%d", style.Width(panel), style.Height(panel))
 	}
 }

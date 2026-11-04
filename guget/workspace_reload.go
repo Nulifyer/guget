@@ -12,7 +12,7 @@ import (
 	"strings"
 	"sync"
 
-	tea "charm.land/bubbletea/v2"
+	ui "github.com/nulifyer/guget/internal/ui"
 )
 
 type workspaceSnapshot struct {
@@ -362,7 +362,7 @@ func planPackageReload(snapshot *workspaceSnapshot, current map[string]nugetResu
 	return next, toFetch
 }
 
-func fetchPackageMetadataAsync(ctx context.Context, send func(tea.Msg), generation int, nugetServices []*NugetService, sourceMapping *PackageSourceMapping, packageNames []string) {
+func fetchPackageMetadataAsync(ctx context.Context, send func(ui.Event), generation int, nugetServices []*NugetService, sourceMapping *PackageSourceMapping, packageNames []string) {
 	if send == nil || len(packageNames) == 0 {
 		return
 	}

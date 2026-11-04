@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	tea "charm.land/bubbletea/v2"
+	ui "github.com/nulifyer/guget/internal/ui"
 )
 
 const (
@@ -202,7 +202,7 @@ func (b *workspaceWatchBatch) update(now time.Time, changed []string) []string {
 
 // watchWorkspaceFiles polls workspace and explicitly loaded external inputs.
 // Acknowledgements identify exact committed bytes, never suppression windows.
-func watchWorkspaceFiles(rootDir string, send func(tea.Msg), registries ...*workspaceWatchInputs) func() {
+func watchWorkspaceFiles(rootDir string, send func(ui.Event), registries ...*workspaceWatchInputs) func() {
 	if send == nil {
 		return func() {}
 	}

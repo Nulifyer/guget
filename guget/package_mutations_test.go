@@ -51,7 +51,7 @@ func TestBulkMutationPlanningFailureWritesNothing(t *testing.T) {
 	if result.err == nil || result.reload || result.written != 0 {
 		t.Fatalf("result=%+v", result)
 	}
-	m.Update(result)
+	m.HandleEvent(result)
 	after, _ := os.ReadFile(valid)
 	if string(after) != string(before) {
 		t.Fatal("partially applied bulk add")

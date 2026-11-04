@@ -2,12 +2,13 @@ package main
 
 import (
 	"fmt"
+	"github.com/nulifyer/guget/internal/ui"
+	text "github.com/nulifyer/guget/internal/ui/text"
 	"path/filepath"
 	"slices"
 	"strings"
 
-	lipgloss "charm.land/lipgloss/v2"
-	"github.com/charmbracelet/x/ansi"
+	style "github.com/nulifyer/guget/internal/ui/style"
 )
 
 // advisoryLabel extracts a short display label from an advisory URL.
@@ -19,10 +20,12 @@ func advisoryLabel(url string) string {
 }
 
 func wordWrap(s string, width int) string {
-	return ansi.Wrap(s, max(1, width), "")
+	return strings.Join(text.Wrap(s, max(1, width)), "\n")
 }
 
-func (m *App) renderDetailPanel(w int) string {
+func (p *detailPanel) Draw(r ui.Rect) string {
+	m := p.app
+	w := r.W
 	s := stylePanel
 	if m.focus == focusDetail {
 		s = s.BorderForeground(colorAccent)
@@ -31,9 +34,9 @@ func (m *App) renderDetailPanel(w int) string {
 	title := styleSubtleBold.Render("Package Detail")
 	divider := styleBorder.Render(strings.Repeat("─", w-4))
 
-	content := lipgloss.JoinVertical(lipgloss.Left, title, divider, m.detail.vp.View())
+	content := style.JoinVertical(style.Left, title, divider, m.detail.vp.View())
 
-	return renderToPanel(s, w, m.bodyOuterHeight(), content)
+	return renderToPanel(s, w, r.H, content)
 }
 
 func (m *App) renderDetail(row packageRow) string {
@@ -61,7 +64,7 @@ func (m *App) renderDetail(row packageRow) string {
 	s.WriteString(m.renderDetailProjectVersions(row))
 	s.WriteString(m.renderDetailVersionList(row, w))
 	s.WriteString(m.renderDetailFrameworks(row))
-	return ansi.Wrap(s.String(), max(1, m.detail.vp.Width()), "")
+	return strings.Join(text.Wrap(s.String(), max(1, m.detail.vp.Width())), "\n")
 }
 
 func (m *App) renderDetailHeader(row packageRow, w int) string {
@@ -122,7 +125,7 @@ func (m *App) renderDetailVulnerabilities(row packageRow) string {
 	s.WriteString(styleRedBold.Render("Vulnerabilities") + "\n")
 	for _, vuln := range vulns {
 		sev := vuln.SeverityLabel()
-		var sevStyle lipgloss.Style
+		var sevStyle style.Style
 		switch sev {
 		case "critical", "high":
 			sevStyle = styleRedBold
@@ -300,8 +303,8 @@ func (m *App) renderDetailVersionList(row packageRow, w int) string {
 		if isHighlighted {
 			if ago := versionAge(v); ago != "" {
 				agoRendered := vStyle.Render(ago)
-				leftW := lipgloss.Width(line)
-				agoW := lipgloss.Width(agoRendered)
+				leftW := style.Width(line)
+				agoW := style.Width(agoRendered)
 				if gap := w - leftW - agoW; gap > 0 {
 					line += strings.Repeat(" ", gap) + agoRendered
 				}

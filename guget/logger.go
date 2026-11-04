@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	lipgloss "charm.land/lipgloss/v2"
+	style "github.com/nulifyer/guget/internal/ui/style"
 )
 
 var logStartTime = time.Now()
@@ -63,23 +63,23 @@ func redactLogMessage(message string) string {
 
 // Log-level styles — default to auto-dark colors at init, rebuilt by rebuildStyles().
 var (
-	logStyleTrace = lipgloss.NewStyle().Foreground(lipgloss.Color("#8b949e"))
-	logStyleDebug = lipgloss.NewStyle().Foreground(lipgloss.Color("#56d7c2"))
-	logStyleInfo  = lipgloss.NewStyle().Foreground(lipgloss.Color("#3fb950"))
-	logStyleWarn  = lipgloss.NewStyle().Foreground(lipgloss.Color("#d29922"))
-	logStyleError = lipgloss.NewStyle().Foreground(lipgloss.Color("#f85149"))
-	logStyleFatal = lipgloss.NewStyle().Foreground(lipgloss.Color("#f85149"))
+	logStyleTrace = style.NewStyle().Foreground(style.Color("#8b949e"))
+	logStyleDebug = style.NewStyle().Foreground(style.Color("#56d7c2"))
+	logStyleInfo  = style.NewStyle().Foreground(style.Color("#3fb950"))
+	logStyleWarn  = style.NewStyle().Foreground(style.Color("#d29922"))
+	logStyleError = style.NewStyle().Foreground(style.Color("#f85149"))
+	logStyleFatal = style.NewStyle().Foreground(style.Color("#f85149"))
 )
 
 // rebuildLogStyles reassigns log styles from current color vars.
 // Called by rebuildStyles() in themes.go.
 func rebuildLogStyles() {
-	logStyleTrace = lipgloss.NewStyle().Foreground(colorSubtle)
-	logStyleDebug = lipgloss.NewStyle().Foreground(colorCyan)
-	logStyleInfo = lipgloss.NewStyle().Foreground(colorGreen)
-	logStyleWarn = lipgloss.NewStyle().Foreground(colorYellow)
-	logStyleError = lipgloss.NewStyle().Foreground(colorRed)
-	logStyleFatal = lipgloss.NewStyle().Foreground(colorRed)
+	logStyleTrace = style.NewStyle().Foreground(colorSubtle)
+	logStyleDebug = style.NewStyle().Foreground(colorCyan)
+	logStyleInfo = style.NewStyle().Foreground(colorGreen)
+	logStyleWarn = style.NewStyle().Foreground(colorYellow)
+	logStyleError = style.NewStyle().Foreground(colorRed)
+	logStyleFatal = style.NewStyle().Foreground(colorRed)
 }
 
 func logSetOutput(w io.Writer) {

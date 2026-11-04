@@ -4,9 +4,9 @@ import (
 	"strings"
 	"testing"
 
-	bubbles_textinput "charm.land/bubbles/v2/textinput"
-	bubbles_viewport "charm.land/bubbles/v2/viewport"
-	bubble_tea "charm.land/bubbletea/v2"
+	ui "github.com/nulifyer/guget/internal/ui"
+	input "github.com/nulifyer/guget/internal/ui/input"
+	viewport "github.com/nulifyer/guget/internal/ui/viewport"
 )
 
 func newMouseTestApp() *App {
@@ -32,10 +32,10 @@ func newMouseTestApp() *App {
 		},
 		detail: detailPanel{
 			sectionBase: sectionBase{baseWidth: 50, minWidth: 10},
-			vp:          bubbles_viewport.New(bubbles_viewport.WithWidth(40), bubbles_viewport.WithHeight(5)),
+			vp:          viewport.New(viewport.WithWidth(40), viewport.WithHeight(5)),
 		},
 		log: logPanel{
-			vp: bubbles_viewport.New(bubbles_viewport.WithWidth(80), bubbles_viewport.WithHeight(5)),
+			vp: viewport.New(viewport.WithWidth(80), viewport.WithHeight(5)),
 		},
 	}
 }
@@ -95,17 +95,17 @@ func TestMouseLayoutMapsPanelsAndRows(t *testing.T) {
 func TestBindMouseCapturesRenderedLayout(t *testing.T) {
 	app := newMouseTestApp()
 	wantLayout := mouseLayout{packages: mouseRect{x: 30, y: 0, w: 40, h: 20}, packageScroll: 2}
-	view := bubble_tea.NewView("")
+	view := ui.NewFrame("")
 	app.bindMouse(&view, wantLayout)
 
-	if view.MouseMode != bubble_tea.MouseModeCellMotion {
+	if view.MouseMode != ui.MouseModeCellMotion {
 		t.Fatalf("MouseMode = %v, want MouseModeCellMotion", view.MouseMode)
 	}
 	if view.OnMouse == nil {
 		t.Fatal("OnMouse was not installed")
 	}
 
-	cmd := view.OnMouse(bubble_tea.MouseClickMsg(bubble_tea.Mouse{X: 31, Y: 4, Button: bubble_tea.MouseLeft}))
+	cmd := view.OnMouse(ui.MouseClick(ui.Mouse{X: 31, Y: 4, Button: ui.MouseLeft}))
 	got, ok := cmd().(mouseInputMsg)
 	if !ok {
 		t.Fatalf("mouse command returned %T, want mouseInputMsg", cmd())
@@ -118,10 +118,10 @@ func TestBindMouseCapturesRenderedLayout(t *testing.T) {
 func TestBindMouseLeavesViewUnchangedWhenDisabled(t *testing.T) {
 	app := newMouseTestApp()
 	app.mouse = false
-	view := bubble_tea.NewView("")
+	view := ui.NewFrame("")
 	app.bindMouse(&view, mouseLayout{})
 
-	if view.MouseMode != bubble_tea.MouseModeNone {
+	if view.MouseMode != ui.MouseModeNone {
 		t.Fatalf("MouseMode = %v, want MouseModeNone", view.MouseMode)
 	}
 	if view.OnMouse != nil {
@@ -133,7 +133,7 @@ func TestMouseClickFocusesAndSelectsPackage(t *testing.T) {
 	app := newMouseTestApp()
 	layout := mouseLayout{packages: mouseRect{x: 30, y: 0, w: 40, h: 20}}
 	app.handleMouse(mouseInputMsg{
-		event:  bubble_tea.MouseClickMsg(bubble_tea.Mouse{X: 31, Y: 5, Button: bubble_tea.MouseLeft}),
+		event:  ui.MouseClick(ui.Mouse{X: 31, Y: 5, Button: ui.MouseLeft}),
 		layout: layout,
 	})
 
@@ -150,7 +150,7 @@ func TestMouseWheelUsesPanelUnderPointerWithoutChangingFocus(t *testing.T) {
 	app.focus = focusProjects
 	layout := mouseLayout{packages: mouseRect{x: 30, y: 0, w: 40, h: 20}}
 	app.handleMouse(mouseInputMsg{
-		event:  bubble_tea.MouseWheelMsg(bubble_tea.Mouse{X: 31, Y: 5, Button: bubble_tea.MouseWheelDown}),
+		event:  ui.MouseWheel(ui.Mouse{X: 31, Y: 5, Button: ui.MouseWheelDown}),
 		layout: layout,
 	})
 
@@ -167,7 +167,7 @@ func TestMouseWheelScrollsDetailViewport(t *testing.T) {
 	app.detail.vp.SetContent(strings.Repeat("line\n", 30))
 	layout := mouseLayout{detail: mouseRect{x: 70, y: 0, w: 50, h: 20}}
 	app.handleMouse(mouseInputMsg{
-		event:  bubble_tea.MouseWheelMsg(bubble_tea.Mouse{X: 71, Y: 5, Button: bubble_tea.MouseWheelDown}),
+		event:  ui.MouseWheel(ui.Mouse{X: 71, Y: 5, Button: ui.MouseWheelDown}),
 		layout: layout,
 	})
 
@@ -180,7 +180,7 @@ func TestModalMouseInputDoesNotReachMainPanels(t *testing.T) {
 	app := newMouseTestApp()
 	app.focus = focusProjects
 	app.handleMouse(mouseInputMsg{
-		event: bubble_tea.MouseClickMsg(bubble_tea.Mouse{X: 31, Y: 5, Button: bubble_tea.MouseLeft}),
+		event: ui.MouseClick(ui.Mouse{X: 31, Y: 5, Button: ui.MouseLeft}),
 		layout: mouseLayout{
 			modal:    true,
 			packages: mouseRect{x: 30, y: 0, w: 40, h: 20},
@@ -199,7 +199,7 @@ func TestModalMouseWheelRoutesToActiveOverlay(t *testing.T) {
 		versions:    []PackageVersion{{}, {}},
 	}
 	app.handleMouse(mouseInputMsg{
-		event: bubble_tea.MouseWheelMsg(bubble_tea.Mouse{X: 31, Y: 5, Button: bubble_tea.MouseWheelDown}),
+		event: ui.MouseWheel(ui.Mouse{X: 31, Y: 5, Button: ui.MouseWheelDown}),
 		layout: mouseLayout{modal: true, regions: []mouseRegion{{
 			rect:  mouseRect{x: 30, y: 0, w: 40, h: 20},
 			wheel: verticalWheelHandler(app.picker.HandleKey),
@@ -223,7 +223,7 @@ func TestLinkMouseRegionsOpenRenderedURL(t *testing.T) {
 	if regions[0].rect.x != 2 || regions[0].rect.w == 0 {
 		t.Fatalf("link rect = %+v, want x=2 and non-zero width", regions[0].rect)
 	}
-	cmd := regions[0].click(bubble_tea.MouseClickMsg(bubble_tea.Mouse{Button: bubble_tea.MouseLeft}))
+	cmd := regions[0].click(ui.MouseClick(ui.Mouse{Button: ui.MouseLeft}))
 	msg, ok := cmd().(openURLRequestedMsg)
 	if !ok || msg.url != "https://example.com/package" {
 		t.Fatalf("link click = %#v, want openURLRequestedMsg", msg)
@@ -236,8 +236,8 @@ func TestPackageModeHeaderCyclesAndArrowReverses(t *testing.T) {
 	app.packages.sortDir = sortByStatus.defaultDir()
 
 	layout := app.mainMouseLayout(30, 60, 30)
-	modeEvent := bubble_tea.MouseClickMsg(bubble_tea.Mouse{
-		X: 34, Y: 1, Button: bubble_tea.MouseLeft,
+	modeEvent := ui.MouseClick(ui.Mouse{
+		X: 34, Y: 1, Button: ui.MouseLeft,
 	})
 	app.handleMouse(mouseInputMsg{event: modeEvent, layout: layout})
 	if app.packages.sortMode != sortByName || !app.packages.sortDir {
@@ -252,8 +252,8 @@ func TestPackageModeHeaderCyclesAndArrowReverses(t *testing.T) {
 
 	layout = app.mainMouseLayout(30, 60, 30)
 	_, directionOffset := packageSortHeader(app.packages.sortMode, app.packages.sortDir)
-	directionEvent := bubble_tea.MouseClickMsg(bubble_tea.Mouse{
-		X: 30 + 2 + 2 + directionOffset, Y: 1, Button: bubble_tea.MouseLeft,
+	directionEvent := ui.MouseClick(ui.Mouse{
+		X: 30 + 2 + 2 + directionOffset, Y: 1, Button: ui.MouseLeft,
 	})
 	app.handleMouse(mouseInputMsg{event: directionEvent, layout: layout})
 	if app.packages.sortMode != sortBySource || app.packages.sortDir {
@@ -266,10 +266,10 @@ func TestNamedPackageHeadersSortDirectlyAndReverse(t *testing.T) {
 	layout := app.mainMouseLayout(30, 60, 30)
 	columns := app.packageColumns(60)
 	requestedX := 30 + 2 + 2 + columns.nameW
-	event := bubble_tea.MouseClickMsg(bubble_tea.Mouse{
+	event := ui.MouseClick(ui.Mouse{
 		X:      requestedX,
 		Y:      1,
-		Button: bubble_tea.MouseLeft,
+		Button: ui.MouseLeft,
 	})
 	app.handleMouse(mouseInputMsg{event: event, layout: layout})
 	if app.packages.sortMode != sortByCurrent || app.packages.sortDir {
@@ -293,8 +293,8 @@ func TestOverlayCloseRegionClosesSources(t *testing.T) {
 	}
 	closeRegion := regions[0]
 	app.handleMouse(mouseInputMsg{
-		event: bubble_tea.MouseClickMsg(bubble_tea.Mouse{
-			X: closeRegion.rect.x, Y: closeRegion.rect.y, Button: bubble_tea.MouseLeft,
+		event: ui.MouseClick(ui.Mouse{
+			X: closeRegion.rect.x, Y: closeRegion.rect.y, Button: ui.MouseLeft,
 		}),
 		layout: mouseLayout{modal: true, regions: regions},
 	})
@@ -313,7 +313,7 @@ func TestVersionPickerRowClickSelectsWithoutApplying(t *testing.T) {
 	regions := app.picker.MouseRegions()
 	row := regions[2] // close, first row, second row
 	cmd := app.handleMouse(mouseInputMsg{
-		event:  bubble_tea.MouseClickMsg(bubble_tea.Mouse{X: row.rect.x, Y: row.rect.y, Button: bubble_tea.MouseLeft}),
+		event:  ui.MouseClick(ui.Mouse{X: row.rect.x, Y: row.rect.y, Button: ui.MouseLeft}),
 		layout: mouseLayout{modal: true, regions: regions},
 	})
 	if cmd != nil {
@@ -337,7 +337,7 @@ func TestProjectPickerRowClickTogglesSelection(t *testing.T) {
 	regions := app.projectPick.MouseRegions()
 	row := regions[2]
 	app.handleMouse(mouseInputMsg{
-		event:  bubble_tea.MouseClickMsg(bubble_tea.Mouse{X: row.rect.x, Y: row.rect.y, Button: bubble_tea.MouseLeft}),
+		event:  ui.MouseClick(ui.Mouse{X: row.rect.x, Y: row.rect.y, Button: ui.MouseLeft}),
 		layout: mouseLayout{modal: true, regions: regions},
 	})
 	if app.projectPick.cursor != 1 || !app.projectPick.items[1].selected {
@@ -349,7 +349,7 @@ func TestSearchResultClickContinuesToVersionFetch(t *testing.T) {
 	app := newMouseTestApp()
 	app.search = packageSearch{
 		sectionBase: sectionBase{app: app, baseWidth: 90, minWidth: 56, maxMargin: 4, active: true},
-		input:       bubbles_textinput.New(),
+		input:       input.New(),
 		results:     []SearchResult{{ID: "Example", Version: "1.0.0", Source: "test"}},
 		lastQuery:   "Example",
 	}
@@ -358,7 +358,7 @@ func TestSearchResultClickContinuesToVersionFetch(t *testing.T) {
 	regions := app.search.MouseRegions()
 	row := regions[2] // close, input, first result
 	cmd := app.handleMouse(mouseInputMsg{
-		event:  bubble_tea.MouseClickMsg(bubble_tea.Mouse{X: row.rect.x, Y: row.rect.y, Button: bubble_tea.MouseLeft}),
+		event:  ui.MouseClick(ui.Mouse{X: row.rect.x, Y: row.rect.y, Button: ui.MouseLeft}),
 		layout: mouseLayout{modal: true, regions: regions},
 	})
 	if cmd == nil {
@@ -388,7 +388,7 @@ func TestLocationPickerRequiresAddButton(t *testing.T) {
 	regions := app.locationPick.MouseRegions()
 	secondRow := regions[2]
 	cmd := app.handleMouse(mouseInputMsg{
-		event:  bubble_tea.MouseClickMsg(bubble_tea.Mouse{X: secondRow.rect.x, Y: secondRow.rect.y, Button: bubble_tea.MouseLeft}),
+		event:  ui.MouseClick(ui.Mouse{X: secondRow.rect.x, Y: secondRow.rect.y, Button: ui.MouseLeft}),
 		layout: mouseLayout{modal: true, regions: regions},
 	})
 	if cmd != nil || app.locationPick.cursor != 1 || !app.locationPick.active {
@@ -397,7 +397,7 @@ func TestLocationPickerRequiresAddButton(t *testing.T) {
 
 	addButton := regions[4] // close, two rows, cancel, add
 	cmd = app.handleMouse(mouseInputMsg{
-		event:  bubble_tea.MouseClickMsg(bubble_tea.Mouse{X: addButton.rect.x, Y: addButton.rect.y, Button: bubble_tea.MouseLeft}),
+		event:  ui.MouseClick(ui.Mouse{X: addButton.rect.x, Y: addButton.rect.y, Button: ui.MouseLeft}),
 		layout: mouseLayout{modal: true, regions: regions},
 	})
 	if cmd == nil || app.locationPick.active {
@@ -415,7 +415,7 @@ func TestConfirmationButtonRequiresExplicitClick(t *testing.T) {
 	regions := app.confirmRemove.MouseRegions()
 	removeButton := regions[2] // close, cancel, remove
 	cmd := app.handleMouse(mouseInputMsg{
-		event:  bubble_tea.MouseClickMsg(bubble_tea.Mouse{X: removeButton.rect.x, Y: removeButton.rect.y, Button: bubble_tea.MouseLeft}),
+		event:  ui.MouseClick(ui.Mouse{X: removeButton.rect.x, Y: removeButton.rect.y, Button: ui.MouseLeft}),
 		layout: mouseLayout{modal: true, regions: regions},
 	})
 	if cmd == nil || app.confirmRemove.active {
@@ -448,7 +448,7 @@ func TestReleaseNotesWheelUsesPanelUnderPointer(t *testing.T) {
 	}
 
 	app.handleMouse(mouseInputMsg{
-		event:  bubble_tea.MouseWheelMsg(bubble_tea.Mouse{X: left.rect.x, Y: left.rect.y, Button: bubble_tea.MouseWheelDown}),
+		event:  ui.MouseWheel(ui.Mouse{X: left.rect.x, Y: left.rect.y, Button: ui.MouseWheelDown}),
 		layout: mouseLayout{modal: true, regions: regions},
 	})
 	if app.releaseNotes.ghCursor != 1 {
@@ -458,7 +458,7 @@ func TestReleaseNotesWheelUsesPanelUnderPointer(t *testing.T) {
 	app.releaseNotes.ghLoading = false
 	app.releaseNotes.vp.SetContent(strings.Repeat("line\n", 100))
 	app.handleMouse(mouseInputMsg{
-		event:  bubble_tea.MouseWheelMsg(bubble_tea.Mouse{X: right.rect.x, Y: right.rect.y, Button: bubble_tea.MouseWheelDown}),
+		event:  ui.MouseWheel(ui.Mouse{X: right.rect.x, Y: right.rect.y, Button: ui.MouseWheelDown}),
 		layout: mouseLayout{modal: true, regions: regions},
 	})
 	if !app.releaseNotes.focusRight || app.releaseNotes.vp.YOffset() == 0 {

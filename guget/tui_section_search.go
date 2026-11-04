@@ -7,11 +7,12 @@ import (
 	"strings"
 	"time"
 
-	bubble_tea "charm.land/bubbletea/v2"
-	lipgloss "charm.land/lipgloss/v2"
+	ui "github.com/nulifyer/guget/internal/ui"
+	style "github.com/nulifyer/guget/internal/ui/style"
+	text "github.com/nulifyer/guget/internal/ui/text"
 )
 
-func (m *App) openSearch() bubble_tea.Cmd {
+func (m *App) openSearch() ui.Effect {
 	if !m.canMutate() {
 		return m.setStatus("Wait for the save or workspace reload to finish", false)
 	}
@@ -40,7 +41,7 @@ func (s *packageSearch) FooterKeys() []kv {
 	return []kv{{"↑↓", "nav"}, {"enter", "select"}, {"esc", "close"}}
 }
 
-func (s *packageSearch) HandleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
+func (s *packageSearch) HandleKey(msg ui.KeyEvent) ui.Effect {
 	switch msg.String() {
 	case "[":
 		s.Resize(-4)
@@ -85,22 +86,22 @@ func (s *packageSearch) HandleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 		}
 		// Use cached info if we already fetched this package (e.g. it's in another project).
 		if cached, ok := s.app.ctx.Results[selected.ID]; ok && cached.pkg != nil && strings.EqualFold(cached.source, selected.Source) {
-			return func() bubble_tea.Msg {
+			return func() ui.Event {
 				return packageFetchedMsg{requestID: requestID, info: cached.pkg, source: cached.source}
 			}
 		}
 		return s.fetchPackageCmd(selected.ID, selected.Source)
 	}
-	return s.updateInput(msg)
+	return s.handleInput(msg)
 }
 
-func (s *packageSearch) updateInput(msg bubble_tea.Msg) bubble_tea.Cmd {
+func (s *packageSearch) handleInput(msg ui.Event) ui.Effect {
 	if s.fetchingVersion {
 		return nil
 	}
 
 	// Forward typing and bracketed paste to the same query/debounce path.
-	var cmd bubble_tea.Cmd
+	var cmd ui.Effect
 	s.input, cmd = s.input.Update(msg)
 	newQuery := s.input.Value()
 
@@ -126,27 +127,27 @@ func (s *packageSearch) updateInput(msg bubble_tea.Msg) bubble_tea.Cmd {
 		s.err = nil
 		s.lastQuery = newQuery
 		s.loading = true
-		return bubble_tea.Batch(cmd, s.debounceCmd(newQuery))
+		return ui.Batch(cmd, s.debounceCmd(newQuery))
 	}
 	return cmd
 }
 
-func (s *packageSearch) debounceCmd(query string) bubble_tea.Cmd {
+func (s *packageSearch) debounceCmd(query string) ui.Effect {
 	s.debounceID++
 	id := s.debounceID
 	requestID := s.requestID
-	return bubble_tea.Tick(500*time.Millisecond, func(t time.Time) bubble_tea.Msg {
+	return ui.Tick(500*time.Millisecond, func(t time.Time) ui.Event {
 		return searchDebounceMsg{requestID: requestID, id: id, query: query}
 	})
 }
 
-func (s *packageSearch) doSearchCmd(query string) bubble_tea.Cmd {
+func (s *packageSearch) doSearchCmd(query string) ui.Effect {
 	services := s.app.ctx.NugetServices
 	sourceMapping := s.app.ctx.SourceMapping
 	requestID, id := s.requestID, s.debounceID
 	ctx, cancel := context.WithCancel(s.app.lifecycle)
 	s.cancel = cancel
-	return func() bubble_tea.Msg {
+	return func() ui.Event {
 		defer cancel()
 		if len(services) == 0 {
 			return searchResultsMsg{requestID: requestID, id: id, query: query, err: fmt.Errorf("no metadata-capable NuGet sources are available")}
@@ -219,7 +220,7 @@ func (s *packageSearch) doSearchCmd(query string) bubble_tea.Cmd {
 	}
 }
 
-func (s *packageSearch) fetchPackageCmd(id, source string) bubble_tea.Cmd {
+func (s *packageSearch) fetchPackageCmd(id, source string) ui.Effect {
 	eligible := FilterServices(s.app.ctx.NugetServices, s.app.ctx.SourceMapping, id)
 	var services []*NugetService
 	for _, service := range eligible {
@@ -230,7 +231,7 @@ func (s *packageSearch) fetchPackageCmd(id, source string) bubble_tea.Cmd {
 	requestID := s.requestID
 	ctx, cancel := context.WithCancel(s.app.lifecycle)
 	s.cancel = cancel
-	return func() bubble_tea.Msg {
+	return func() ui.Event {
 		defer cancel()
 		if len(services) == 0 {
 			return packageFetchedMsg{requestID: requestID, err: fmt.Errorf("no metadata-capable NuGet source is available for %q", id)}
@@ -250,6 +251,7 @@ func (s *packageSearch) fetchPackageCmd(id, source string) bubble_tea.Cmd {
 func (s *packageSearch) Render() string {
 	w := s.Width()
 	innerW := w - 6 // border (2) + padding (2*2)
+	s.input.SetWidth(innerW)
 	regions := []mouseRegion{overlayCloseRegion(w, s.HandleKey)}
 
 	var lines []string
@@ -266,7 +268,7 @@ func (s *packageSearch) Render() string {
 	lines = append(lines, s.input.View())
 	regions = append(regions, mouseRegion{
 		rect: mouseRect{x: overlayContentX, y: overlayContentY + 1, w: innerW, h: 1},
-		click: func(bubble_tea.MouseMsg) bubble_tea.Cmd {
+		click: func(ui.MouseEvent) ui.Effect {
 			return s.input.Focus()
 		},
 	})
@@ -305,8 +307,14 @@ func (s *packageSearch) Render() string {
 				styleSubtle.Render("Searching..."))
 
 	case s.err != nil:
-		lines = append(lines,
-			styleRed.Render("✗ "+s.err.Error()))
+		errorLines := text.Wrap("✗ "+s.err.Error(), innerW)
+		if len(errorLines) > maxVisible {
+			errorLines = errorLines[:maxVisible]
+			errorLines[maxVisible-1] = truncateStyled(errorLines[maxVisible-1], max(0, innerW-3)) + "..."
+		}
+		for _, line := range errorLines {
+			lines = append(lines, styleRed.Render(line))
+		}
 
 	case len(s.results) == 0 && s.lastQuery != "":
 		lines = append(lines,
@@ -360,7 +368,7 @@ func (s *packageSearch) Render() string {
 			}
 
 			verText := truncate(r.Version, colVer-2)
-			verPad := colVer - 2 - lipgloss.Width(verText)
+			verPad := colVer - 2 - style.Width(verText)
 			if verPad < 0 {
 				verPad = 0
 			}
@@ -372,14 +380,14 @@ func (s *packageSearch) Render() string {
 			resultID, sourceID, version := r.ID, r.Source, r.Version
 			regions = append(regions, mouseRegion{
 				rect: mouseRect{x: overlayContentX, y: overlayContentY + len(lines) - 1, w: innerW, h: 1},
-				click: func(bubble_tea.MouseMsg) bubble_tea.Cmd {
+				click: func(ui.MouseEvent) ui.Effect {
 					if s.debounceID != queryID {
 						return nil
 					}
 					for index, current := range s.results {
 						if strings.EqualFold(current.ID, resultID) && strings.EqualFold(current.Source, sourceID) && current.Version == version {
 							s.cursor = index
-							return s.HandleKey(bubble_tea.KeyPressMsg(bubble_tea.Key{Code: bubble_tea.KeyEnter}))
+							return s.HandleKey(ui.KeyPress(ui.Key{Code: ui.KeyEnter}))
 						}
 					}
 					return nil
@@ -392,7 +400,7 @@ func (s *packageSearch) Render() string {
 		Width(w).
 		Render(strings.Join(lines, "\n"))
 	regions = append(regions, mouseRegion{
-		rect:  mouseRect{x: 1, y: 1, w: w - 2, h: lipgloss.Height(box) - 2},
+		rect:  mouseRect{x: 1, y: 1, w: w - 2, h: style.Height(box) - 2},
 		wheel: verticalWheelHandler(s.HandleKey),
 	})
 

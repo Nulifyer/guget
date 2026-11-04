@@ -3,15 +3,15 @@ package main
 import (
 	"strings"
 
-	bubble_tea "charm.land/bubbletea/v2"
-	lipgloss "charm.land/lipgloss/v2"
+	ui "github.com/nulifyer/guget/internal/ui"
+	style "github.com/nulifyer/guget/internal/ui/style"
 )
 
 func (s *helpOverlay) FooterKeys() []kv {
 	return []kv{{"↑↓", "scroll"}, {"esc", "close"}}
 }
 
-func (s *helpOverlay) HandleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
+func (s *helpOverlay) HandleKey(msg ui.KeyEvent) ui.Effect {
 	switch msg.String() {
 	case "[":
 		s.Resize(-4)
@@ -22,7 +22,7 @@ func (s *helpOverlay) HandleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 	case "esc", "?", "q":
 		s.closeOverlay()
 	default:
-		var cmd bubble_tea.Cmd
+		var cmd ui.Effect
 		s.vp, cmd = s.vp.Update(msg)
 		return cmd
 	}
@@ -77,7 +77,7 @@ func (s *helpOverlay) refreshView() {
 	maxKeyW := 0
 	for _, sec := range sections {
 		for _, row := range sec.rows {
-			if w := lipgloss.Width(row[0]); w > maxKeyW {
+			if w := style.Width(row[0]); w > maxKeyW {
 				maxKeyW = w
 			}
 		}
@@ -102,10 +102,13 @@ func (s *helpOverlay) refreshView() {
 		}
 	}
 
+	if s.app.overlayHeight() < 12 && len(lines) > 0 {
+		lines = lines[1:]
+	}
 	content := strings.Join(lines, "\n")
 	// Available height for scrollable content inside the overlay box after the
 	// fixed title and divider rows.
-	maxH := s.app.overlayHeight() - 6
+	maxH := s.app.overlayHeight() - s.boxStyle().GetVerticalFrameSize() - 2
 	if maxH < 1 {
 		maxH = 1
 	}
@@ -113,6 +116,13 @@ func (s *helpOverlay) refreshView() {
 	s.vp.SetWidth(innerW)
 	s.vp.SetHeight(maxH)
 	s.vp.SetContent(content)
+}
+
+func (s *helpOverlay) boxStyle() style.Style {
+	if s.app.overlayHeight() < 12 {
+		return styleOverlay.Padding(0, 2)
+	}
+	return styleOverlay
 }
 
 func (s *helpOverlay) Render() string {
@@ -127,13 +137,17 @@ func (s *helpOverlay) Render() string {
 		s.vp.View(),
 	}, "\n")
 
-	box := styleOverlay.
+	box := s.boxStyle().
 		Width(w).
 		Render(content)
+	close := overlayCloseRegion(w, s.HandleKey)
+	if s.app.overlayHeight() < 12 {
+		close.rect.y = 1
+	}
 	regions := []mouseRegion{
-		overlayCloseRegion(w, s.HandleKey),
+		close,
 		{
-			rect:  mouseRect{x: 1, y: 1, w: w - 2, h: lipgloss.Height(box) - 2},
+			rect:  mouseRect{x: 1, y: 1, w: w - 2, h: style.Height(box) - 2},
 			wheel: verticalWheelHandler(s.HandleKey),
 		},
 	}

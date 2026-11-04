@@ -6,9 +6,9 @@ import (
 	"strings"
 	"time"
 
-	bubbles_viewport "charm.land/bubbles/v2/viewport"
-	bubble_tea "charm.land/bubbletea/v2"
-	lipgloss "charm.land/lipgloss/v2"
+	ui "github.com/nulifyer/guget/internal/ui"
+	style "github.com/nulifyer/guget/internal/ui/style"
+	viewport "github.com/nulifyer/guget/internal/ui/viewport"
 )
 
 const releaseListWidth = 22 // width of the left release/version list panel
@@ -27,7 +27,7 @@ func newReleaseNotesOverlay(m *App, title string) releaseNotesOverlay {
 	_, rightW := rn.panelWidths()
 	_, overlayH := rn.overlaySize()
 	vpH := max(1, overlayH-rn.headerLines())
-	rn.vp = bubbles_viewport.New(bubbles_viewport.WithWidth(rightW), bubbles_viewport.WithHeight(vpH))
+	rn.vp = viewport.New(viewport.WithWidth(rightW), viewport.WithHeight(vpH))
 	return rn
 }
 
@@ -35,10 +35,12 @@ func (s *releaseNotesOverlay) closeOverlay() {
 	if s.cancel != nil {
 		s.cancel()
 	}
-	s.sectionBase.closeOverlay()
+	if s.app != nil {
+		s.sectionBase.closeOverlay()
+	}
 }
 
-func (m *App) openReleaseNotes() bubble_tea.Cmd {
+func (m *App) openReleaseNotes() ui.Effect {
 	if m.packages.cursor >= len(m.packages.rows) {
 		return nil
 	}
@@ -74,7 +76,7 @@ func (m *App) openReleaseNotes() bubble_tea.Cmd {
 	}
 	owner, repo := parseGitHubRepo(repoURL)
 
-	var cmds []bubble_tea.Cmd
+	var cmds []ui.Effect
 
 	// GitHub fetch
 	if owner != "" && repo != "" {
@@ -97,7 +99,7 @@ func (m *App) openReleaseNotes() bubble_tea.Cmd {
 			// No GitHub repo in metadata — fetch nuspec once, extract both repo
 			// URL (to discover GitHub releases) and inline release notes.
 			rn.ghLoading = true
-			cmds = append(cmds, func() bubble_tea.Msg {
+			cmds = append(cmds, func() ui.Event {
 				body := svc.FetchNuspecContext(rn.ctx, pkgID, latestVer)
 				notes := ExtractNuspecReleaseNotes(body)
 				nuspecRepo := ExtractNuspecRepoURL(body)
@@ -127,7 +129,7 @@ func (m *App) openReleaseNotes() bubble_tea.Cmd {
 		pkgID := rn.nsPkgID
 		version := row.info.LatestVersion
 		requestID := rn.requestID
-		cmds = append(cmds, func() bubble_tea.Msg {
+		cmds = append(cmds, func() ui.Event {
 			body := svc.FetchNuspecContext(rn.ctx, pkgID, version)
 			nuspecRepo := ExtractNuspecRepoURL(body)
 			if nuspecOwner, nuspecRepoName := parseGitHubRepo(nuspecRepo); nuspecOwner != "" && nuspecRepoName != "" {
@@ -152,27 +154,27 @@ func (m *App) openReleaseNotes() bubble_tea.Cmd {
 	}
 
 	m.releaseNotes = rn
-	return bubble_tea.Batch(cmds...)
+	return ui.Batch(cmds...)
 }
 
-func fetchGitHubReleasesCmd(ctx context.Context, owner, repo string, requestID int) bubble_tea.Cmd {
-	return func() bubble_tea.Msg {
+func fetchGitHubReleasesCmd(ctx context.Context, owner, repo string, requestID int) ui.Effect {
+	return func() ui.Event {
 		releases, err := FetchGitHubReleasesContext(ctx, owner, repo, 20)
 		return releaseListReadyMsg{requestID: requestID, releases: releases, err: err}
 	}
 }
 
-func fetchNuspecVersionNotesCmd(ctx context.Context, svc *NugetService, pkgID, version string, requestID int) bubble_tea.Cmd {
-	return func() bubble_tea.Msg {
+func fetchNuspecVersionNotesCmd(ctx context.Context, svc *NugetService, pkgID, version string, requestID int) ui.Effect {
+	return func() ui.Event {
 		body := svc.FetchNuspecContext(ctx, pkgID, version)
 		notes := ExtractNuspecReleaseNotes(body)
 		return nuspecVersionNotesReadyMsg{requestID: requestID, version: version, notes: notes}
 	}
 }
 
-func (s *releaseNotesOverlay) fetchReleaseNotesCmd(rel GitHubRelease) bubble_tea.Cmd {
+func (s *releaseNotesOverlay) fetchReleaseNotesCmd(rel GitHubRelease) ui.Effect {
 	requestID := s.requestID
-	return func() bubble_tea.Msg {
+	return func() ui.Event {
 		return releaseNotesReadyMsg{requestID: requestID, tag: rel.TagName, body: rel.Body, htmlURL: rel.HTMLURL}
 	}
 }
@@ -200,7 +202,7 @@ func (s *releaseNotesOverlay) FooterKeys() []kv {
 	}
 }
 
-func (s *releaseNotesOverlay) HandleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
+func (s *releaseNotesOverlay) HandleKey(msg ui.KeyEvent) ui.Effect {
 	switch msg.String() {
 	case "[":
 		s.Resize(-4)
@@ -230,26 +232,26 @@ func (s *releaseNotesOverlay) HandleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 		return nil
 	case "up", "k":
 		if s.focusRight {
-			var cmd bubble_tea.Cmd
+			var cmd ui.Effect
 			s.vp, cmd = s.vp.Update(msg)
 			return cmd
 		}
 		return s.moveCursor(-1)
 	case "down", "j":
 		if s.focusRight {
-			var cmd bubble_tea.Cmd
+			var cmd ui.Effect
 			s.vp, cmd = s.vp.Update(msg)
 			return cmd
 		}
 		return s.moveCursor(1)
 	default:
-		var cmd bubble_tea.Cmd
+		var cmd ui.Effect
 		s.vp, cmd = s.vp.Update(msg)
 		return cmd
 	}
 }
 
-func (s *releaseNotesOverlay) moveCursor(delta int) bubble_tea.Cmd {
+func (s *releaseNotesOverlay) moveCursor(delta int) ui.Effect {
 	switch s.activeTab {
 	case tabReleases:
 		return s.selectCursor(s.ghCursor + delta)
@@ -259,7 +261,7 @@ func (s *releaseNotesOverlay) moveCursor(delta int) bubble_tea.Cmd {
 	return nil
 }
 
-func (s *releaseNotesOverlay) selectCursor(index int) bubble_tea.Cmd {
+func (s *releaseNotesOverlay) selectCursor(index int) ui.Effect {
 	s.focusRight = false
 	switch s.activeTab {
 	case tabReleases:
@@ -301,18 +303,30 @@ func (s *releaseNotesOverlay) isLoading() bool {
 	return false
 }
 
-func (s *releaseNotesOverlay) overlaySize() (w, h int) {
-	w = s.Width()
-	h = s.app.overlayHeight() - 4
-	return
-}
-
+func (s *releaseNotesOverlay) compact() bool { return s.app.overlayHeight() < 12 }
 func (s *releaseNotesOverlay) headerLines() int {
-	_, contentHeight := s.overlaySize()
-	if contentHeight < 8 {
+	if s.compact() {
 		return 3
 	}
 	return 5
+}
+func (s *releaseNotesOverlay) contentY() int {
+	if s.compact() {
+		return 1
+	}
+	return overlayContentY
+}
+func (s *releaseNotesOverlay) boxStyle() style.Style {
+	if s.compact() {
+		return styleOverlay.Padding(0, 2)
+	}
+	return styleOverlay
+}
+
+func (s *releaseNotesOverlay) overlaySize() (w, h int) {
+	w = s.Width()
+	h = s.app.overlayHeight() - s.boxStyle().GetVerticalFrameSize()
+	return
 }
 
 func (s *releaseNotesOverlay) panelWidths() (listW, rightW int) {
@@ -396,7 +410,7 @@ func (s *releaseNotesOverlay) buildGitHubContent() string {
 		body = styleMuted.Render("(no release notes)")
 	}
 	if s.vp.Width() > 0 {
-		body = lipgloss.NewStyle().Width(s.vp.Width()).Render(body)
+		body = style.NewStyle().Width(s.vp.Width()).Render(body)
 	}
 	sb.WriteString(body)
 	return sb.String()
@@ -424,7 +438,7 @@ func (s *releaseNotesOverlay) buildNuSpecContent() string {
 		body = styleMuted.Render("(no release notes for this version)")
 	}
 	if s.vp.Width() > 0 {
-		body = lipgloss.NewStyle().Width(s.vp.Width()).Render(body)
+		body = style.NewStyle().Width(s.vp.Width()).Render(body)
 	}
 	sb.WriteString(body)
 	return sb.String()
@@ -483,20 +497,22 @@ func (s *releaseNotesOverlay) Render() string {
 		nsLabel = styleMuted.Render("[2] ") + styleAccentBold.Render(nsLabel)
 	}
 	tabBar := ghLabel + styleBorder.Render(" │ ") + nsLabel
-	regions := []mouseRegion{overlayCloseRegion(overlayW, s.HandleKey)}
-	ghWidth := lipgloss.Width(ghLabel)
-	nsWidth := lipgloss.Width(nsLabel)
+	close := overlayCloseRegion(overlayW, s.HandleKey)
+	close.rect.y = s.contentY()
+	regions := []mouseRegion{close}
+	ghWidth := style.Width(ghLabel)
+	nsWidth := style.Width(nsLabel)
 	regions = append(regions,
 		mouseRegion{
-			rect: mouseRect{x: overlayContentX, y: overlayContentY + 1, w: ghWidth, h: 1},
-			click: func(bubble_tea.MouseMsg) bubble_tea.Cmd {
-				return s.HandleKey(bubble_tea.KeyPressMsg(bubble_tea.Key{Code: '1'}))
+			rect: mouseRect{x: overlayContentX, y: s.contentY() + 1, w: ghWidth, h: 1},
+			click: func(ui.MouseEvent) ui.Effect {
+				return s.HandleKey(ui.KeyPress(ui.Key{Code: '1'}))
 			},
 		},
 		mouseRegion{
-			rect: mouseRect{x: overlayContentX + ghWidth + 3, y: overlayContentY + 1, w: nsWidth, h: 1},
-			click: func(bubble_tea.MouseMsg) bubble_tea.Cmd {
-				return s.HandleKey(bubble_tea.KeyPressMsg(bubble_tea.Key{Code: '2'}))
+			rect: mouseRect{x: overlayContentX + ghWidth + 3, y: s.contentY() + 1, w: nsWidth, h: 1},
+			click: func(ui.MouseEvent) ui.Effect {
+				return s.HandleKey(ui.KeyPress(ui.Key{Code: '2'}))
 			},
 		},
 	)
@@ -513,25 +529,25 @@ func (s *releaseNotesOverlay) Render() string {
 	rightHdr = " Notes"
 	if focusLeft {
 		leftHdr = styleAccentBold.Render(leftHdr)
-		rightHdr = lipgloss.NewStyle().Foreground(colorSubtle).Bold(true).Render(rightHdr)
+		rightHdr = style.NewStyle().Foreground(colorSubtle).Bold(true).Render(rightHdr)
 	} else {
-		leftHdr = lipgloss.NewStyle().Foreground(colorSubtle).Bold(true).Render(leftHdr)
+		leftHdr = style.NewStyle().Foreground(colorSubtle).Bold(true).Render(leftHdr)
 		rightHdr = styleAccentBold.Render(rightHdr)
 	}
 	headerLine := padRight(leftHdr, listW) + div + padRight(rightHdr, rightW+2)
 	headerDivider := styleBorder.Render(strings.Repeat("─", listW) + "┼" + strings.Repeat("─", rightW+2))
-	if headerH == 5 {
+	if !s.compact() {
 		regions = append(regions,
 			mouseRegion{
-				rect: mouseRect{x: overlayContentX, y: overlayContentY + 3, w: listW, h: 1},
-				click: func(bubble_tea.MouseMsg) bubble_tea.Cmd {
+				rect: mouseRect{x: overlayContentX, y: s.contentY() + 3, w: listW, h: 1},
+				click: func(ui.MouseEvent) ui.Effect {
 					s.focusRight = false
 					return nil
 				},
 			},
 			mouseRegion{
-				rect: mouseRect{x: overlayContentX + listW + 1, y: overlayContentY + 3, w: rightW + 2, h: 1},
-				click: func(bubble_tea.MouseMsg) bubble_tea.Cmd {
+				rect: mouseRect{x: overlayContentX + listW + 1, y: s.contentY() + 3, w: rightW + 2, h: 1},
+				click: func(ui.MouseEvent) ui.Effect {
 					s.focusRight = true
 					return nil
 				},
@@ -590,8 +606,8 @@ func (s *releaseNotesOverlay) Render() string {
 		leftLines = append(leftLines, padRight(allLeft[i], listW))
 		index := i
 		regions = append(regions, mouseRegion{
-			rect: mouseRect{x: overlayContentX, y: overlayContentY + headerH + i - scrollStart, w: listW, h: 1},
-			click: func(bubble_tea.MouseMsg) bubble_tea.Cmd {
+			rect: mouseRect{x: overlayContentX, y: s.contentY() + s.headerLines() + i - scrollStart, w: listW, h: 1},
+			click: func(ui.MouseEvent) ui.Effect {
 				return s.selectCursor(index)
 			},
 		})
@@ -627,25 +643,22 @@ func (s *releaseNotesOverlay) Render() string {
 		bodyLines = append(bodyLines, left+div+right)
 	}
 
-	header := []string{title, tabBar, titleDivider}
-	if headerH == 5 {
-		header = append(header, headerLine, headerDivider)
+	parts := []string{title, tabBar, titleDivider}
+	if !s.compact() {
+		parts = append(parts, headerLine, headerDivider)
 	}
-	header = append(header, strings.Join(bodyLines, "\n"))
-	content := lipgloss.JoinVertical(lipgloss.Left, header...)
-
-	box := styleOverlay.
-		Width(overlayW).
-		Render(content)
-	bodyY := overlayContentY + headerH
+	parts = append(parts, strings.Join(bodyLines, "\n"))
+	content := style.JoinVertical(style.Left, parts...)
+	box := s.boxStyle().Width(overlayW).Render(content)
+	bodyY := s.contentY() + s.headerLines()
 	regions = append(regions,
 		mouseRegion{
 			rect: mouseRect{x: overlayContentX, y: bodyY, w: listW, h: bodyH},
-			wheel: func(event bubble_tea.MouseMsg) bubble_tea.Cmd {
+			wheel: func(event ui.MouseEvent) ui.Effect {
 				switch event.Mouse().Button {
-				case bubble_tea.MouseWheelUp:
+				case ui.MouseWheelUp:
 					return s.moveCursor(-1)
-				case bubble_tea.MouseWheelDown:
+				case ui.MouseWheelDown:
 					return s.moveCursor(1)
 				default:
 					return nil
@@ -654,13 +667,13 @@ func (s *releaseNotesOverlay) Render() string {
 		},
 		mouseRegion{
 			rect: mouseRect{x: overlayContentX + listW + 1, y: bodyY, w: rightW + 2, h: bodyH},
-			click: func(bubble_tea.MouseMsg) bubble_tea.Cmd {
+			click: func(ui.MouseEvent) ui.Effect {
 				s.focusRight = true
 				return nil
 			},
-			wheel: func(event bubble_tea.MouseMsg) bubble_tea.Cmd {
+			wheel: func(event ui.MouseEvent) ui.Effect {
 				s.focusRight = true
-				var cmd bubble_tea.Cmd
+				var cmd ui.Effect
 				s.vp, cmd = s.vp.Update(event)
 				return cmd
 			},

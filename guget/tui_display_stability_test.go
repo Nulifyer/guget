@@ -1,6 +1,7 @@
 package main
 
 import (
+	"github.com/nulifyer/guget/internal/ui"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -23,7 +24,7 @@ func TestProjectFrameworkLabelsStayStableAcrossRedraws(t *testing.T) {
 		}
 		// Narrow panels show only the first framework. This is where a change
 		// in map iteration order looks like a framework version changing.
-		got := app.renderProjectPanel(30)
+		got := app.projects.Draw(ui.Rect{W: 30, H: app.bodyOuterHeight()})
 		if redraw == 0 {
 			firstPanel = got
 			if !strings.Contains(got, "netstandard2.0") {

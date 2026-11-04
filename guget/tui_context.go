@@ -1,7 +1,7 @@
 package main
 
 import (
-	bubbles_spinner "charm.land/bubbles/v2/spinner"
+	spinner "github.com/nulifyer/guget/internal/ui/spinner"
 )
 
 // AppContext holds shared state that all sections can read.
@@ -24,7 +24,7 @@ type AppContext struct {
 	LoadingDone     int
 	LoadingTotal    int
 	PendingPackages Set[string]
-	Spinner         bubbles_spinner.Model
+	Spinner         spinner.Model
 	Restoring       bool
 	Reloading       bool
 	Saving          bool

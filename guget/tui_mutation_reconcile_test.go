@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	tea "charm.land/bubbletea/v2"
+	ui "github.com/nulifyer/guget/internal/ui"
 )
 
 func TestMutationReconcilesWithoutScanningUnrelatedProject(t *testing.T) {
@@ -22,17 +22,17 @@ func TestMutationReconcilesWithoutScanningUnrelatedProject(t *testing.T) {
 	}
 	m.ctx.ParsedProjects = append(m.ctx.ParsedProjects, loaded)
 	mustWriteFile(t, unrelated, `<Project`)
-	executeActionCmd(t, m, m.handleKey(tea.KeyPressMsg(tea.Key{Code: 'u'})))
+	executeActionCmd(t, m, m.handleKey(ui.KeyPress(ui.Key{Code: 'u'})))
 	if m.ctx.Reloading || m.ctx.Saving || !m.canMutate() {
 		t.Fatal("save waited for unrelated rediscovery")
 	}
 	if m.ctx.ParsedProjects[1] != loaded {
 		t.Fatal("unrelated immutable project snapshot was replaced")
 	}
-	if !strings.Contains(m.View().Content, "2.0.0") {
+	if !strings.Contains(m.Render().Content, "2.0.0") {
 		t.Fatal("committed version is not visible")
 	}
-	if cmd := m.handleKey(tea.KeyPressMsg(tea.Key{Code: 'u'})); cmd == nil {
+	if cmd := m.handleKey(ui.KeyPress(ui.Key{Code: 'u'})); cmd == nil {
 		t.Fatal("next package update was dropped")
 	}
 }
@@ -65,7 +65,7 @@ func TestMutationUsesLifecycleCancellationBeforeWriting(t *testing.T) {
 	}
 	lifecycle, cancel := context.WithCancel(context.Background())
 	m.lifecycle = lifecycle
-	cmd := m.handleKey(tea.KeyPressMsg(tea.Key{Code: 'u'}))
+	cmd := m.handleKey(ui.KeyPress(ui.Key{Code: 'u'}))
 	cancel()
 	result := actionWriteResult(t, cmd())
 	if !errors.Is(result.err, context.Canceled) {
@@ -79,7 +79,7 @@ func TestMutationUsesLifecycleCancellationBeforeWriting(t *testing.T) {
 
 func TestOwnWatcherRevisionIsSkippedButOverlappingExternalRevisionReloads(t *testing.T) {
 	m, _, path := newActionTestApp(t, "")
-	executeActionCmd(t, m, m.handleKey(tea.KeyPressMsg(tea.Key{Code: 'u'})))
+	executeActionCmd(t, m, m.handleKey(ui.KeyPress(ui.Key{Code: 'u'})))
 	state, exists, err := readWatchedFileState(path)
 	if err != nil || !exists {
 		t.Fatal(err)
@@ -142,10 +142,10 @@ func TestIncompleteFullReloadRetainsViewAndBlocksMutationUntilRepaired(t *testin
 	if !m.workspaceStale || m.canMutate() || m.ctx.ParsedProjects[0] != selected {
 		t.Fatal("incomplete discovery did not preserve a read-only prior view")
 	}
-	if cmd := m.handleKey(tea.KeyPressMsg(tea.Key{Code: 'u'})); cmd != nil {
+	if cmd := m.handleKey(ui.KeyPress(ui.Key{Code: 'u'})); cmd != nil {
 		t.Fatal("mutation used incomplete discovery")
 	}
-	executeActionCmd(t, m, m.handleKey(tea.KeyPressMsg(tea.Key{Code: '?'})))
+	executeActionCmd(t, m, m.handleKey(ui.KeyPress(ui.Key{Code: '?'})))
 	if !m.help.active {
 		t.Fatal("help was blocked with stale workspace")
 	}
@@ -215,7 +215,7 @@ func TestMutationRejectsExternalEditBeforePlanningAndReloads(t *testing.T) {
 			if err := os.WriteFile(path, []byte(external), 0o644); err != nil {
 				t.Fatal(err)
 			}
-			cmd := m.handleKey(tea.KeyPressMsg(tea.Key{Code: 'u'}))
+			cmd := m.handleKey(ui.KeyPress(ui.Key{Code: 'u'}))
 			if cmd == nil {
 				t.Fatal("fixture did not schedule update")
 			}
@@ -228,7 +228,7 @@ func TestMutationRejectsExternalEditBeforePlanningAndReloads(t *testing.T) {
 			if string(after) != external {
 				t.Fatal("stale recommendation overwrote external edit")
 			}
-			m.Update(result)
+			m.HandleEvent(result)
 			if !m.ctx.Reloading {
 				t.Fatal("stale-input refusal did not reload")
 			}
@@ -244,7 +244,7 @@ func TestMutationRejectsSourceConfigurationChangedAfterRecommendation(t *testing
 	m, _, path := newActionTestApp(t, "")
 	config := filepath.Join(filepath.Dir(path), "NuGet.Config")
 	mustWriteFile(t, config, `<configuration><packageSources><clear/><add key="changed" value="./other-packages"/></packageSources></configuration>`)
-	cmd := m.handleKey(tea.KeyPressMsg(tea.Key{Code: 'u'}))
+	cmd := m.handleKey(ui.KeyPress(ui.Key{Code: 'u'}))
 	result := actionWriteResult(t, cmd())
 	if result.err == nil || !result.reload || result.written != 0 {
 		t.Fatalf("stale source result=%+v", result)
@@ -273,7 +273,7 @@ func TestConsecutiveSharedBuildPropsUpdatesKeepSourceRevisionsCurrent(t *testing
 	m.rebuildPackageRows()
 	for _, name := range []string{"A", "B"} {
 		m.selectPackageByName(name)
-		cmd := m.handleKey(tea.KeyPressMsg(tea.Key{Code: 'u'}))
+		cmd := m.handleKey(ui.KeyPress(ui.Key{Code: 'u'}))
 		if cmd == nil {
 			t.Fatalf("%s update was unavailable", name)
 		}
@@ -282,7 +282,7 @@ func TestConsecutiveSharedBuildPropsUpdatesKeepSourceRevisionsCurrent(t *testing
 		if !ok || delta.err != nil || delta.reload {
 			t.Fatalf("%s fell back to full reload: %+v", name, result)
 		}
-		m.Update(result)
+		m.HandleEvent(result)
 		if m.ctx.Saving || m.ctx.Reloading {
 			t.Fatalf("%s left update blocked", name)
 		}

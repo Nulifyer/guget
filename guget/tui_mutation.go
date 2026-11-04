@@ -7,7 +7,7 @@ import (
 	"slices"
 	"strings"
 
-	tea "charm.land/bubbletea/v2"
+	ui "github.com/nulifyer/guget/internal/ui"
 )
 
 // packageSelection describes the view in which an action began. A completion
@@ -54,7 +54,7 @@ type mutationReconciledMsg struct {
 	revisions  map[string]watchedFileState
 }
 
-func (m *App) startMutation(verb, packageID, version string, targets []mutationTarget, options mutationOptions, selection *reloadSelection) tea.Cmd {
+func (m *App) startMutation(verb, packageID, version string, targets []mutationTarget, options mutationOptions, selection *reloadSelection) ui.Effect {
 	if !m.canMutate() {
 		return nil
 	}
@@ -77,7 +77,7 @@ func (m *App) startMutation(verb, packageID, version string, targets []mutationT
 		PropsProjects:  append([]*ParsedProject(nil), m.ctx.PropsProjects...),
 		Sources:        m.ctx.Sources, SourceMapping: m.ctx.SourceMapping, NugetServices: m.ctx.NugetServices,
 	}
-	return func() tea.Msg {
+	return func() ui.Event {
 		if err := options.ctx.Err(); err != nil {
 			return writeResultMsg{err: err}
 		}
@@ -113,10 +113,10 @@ func (m *App) startMutation(verb, packageID, version string, targets []mutationT
 	}
 }
 
-func (m *App) handleMutationReconciled(msg mutationReconciledMsg) tea.Cmd {
+func (m *App) handleMutationReconciled(msg mutationReconciledMsg) ui.Effect {
 	if msg.generation != m.workspaceGeneration || m.ctx.Reloading {
 		msg.writeResultMsg.reload = true
-		_, cmd := m.Update(msg.writeResultMsg)
+		cmd := m.HandleEvent(msg.writeResultMsg)
 		return cmd
 	}
 	before := m.packageSelection()
@@ -133,7 +133,7 @@ func (m *App) handleMutationReconciled(msg mutationReconciledMsg) tea.Cmd {
 		m.detail.vp.SetYOffset(offset)
 	}
 	m.watchInputs.acknowledge(msg.revisions)
-	_, cmd := m.Update(msg.writeResultMsg)
+	cmd := m.HandleEvent(msg.writeResultMsg)
 	return cmd
 }
 

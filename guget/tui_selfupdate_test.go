@@ -8,15 +8,15 @@ import (
 	"testing"
 	"time"
 
-	tea "charm.land/bubbletea/v2"
-	lipgloss "charm.land/lipgloss/v2"
 	"github.com/nulifyer/guget/internal/selfupdate"
+	ui "github.com/nulifyer/guget/internal/ui"
+	style "github.com/nulifyer/guget/internal/ui/style"
 )
 
 func noticeTestApp(t *testing.T) *App {
 	t.Helper()
 	oldFooter := styleFooterBar
-	styleFooterBar = lipgloss.NewStyle().BorderTop(true).BorderStyle(lipgloss.NormalBorder()).Padding(0, 2)
+	styleFooterBar = style.NewStyle().BorderTop(true).BorderStyle(style.NormalBorder()).Padding(0, 2)
 	t.Cleanup(func() { styleFooterBar = oldFooter })
 	m := NewApp(".", &workspaceSnapshot{}, nil, BuiltFlags{})
 	m.ctx.Width, m.ctx.Height = 120, 30
@@ -40,7 +40,7 @@ func TestTUIUpdateNoticeIsAsynchronousCachedAndDismissible(t *testing.T) {
 	if cmd == nil || m.updateVersion != "" {
 		t.Fatal("check did not defer work to a command")
 	}
-	m.Update(cmd())
+	m.HandleEvent(cmd())
 	footer := m.renderFooter()
 	for _, text := range []string{"guget 1.3.0 available", "guget self-update", "ctrl+x dismiss"} {
 		if !strings.Contains(footer, text) {
@@ -50,7 +50,7 @@ func TestTUIUpdateNoticeIsAsynchronousCachedAndDismissible(t *testing.T) {
 	if m.footerLines() != before {
 		t.Fatal("notice changed footer height")
 	}
-	_, dismiss := m.Update(tea.KeyPressMsg(tea.Key{Code: 'x', Mod: tea.ModCtrl}))
+	dismiss := m.HandleEvent(ui.KeyPress(ui.Key{Code: 'x', Mod: ui.ModCtrl}))
 	if m.updateVersion != "" {
 		t.Fatal("dismiss did not immediately hide notice")
 	}
@@ -62,7 +62,7 @@ func TestTUIUpdateNoticeIsAsynchronousCachedAndDismissible(t *testing.T) {
 
 func TestTUIUpdateNoticeYieldsToOperationsAndFitsFooter(t *testing.T) {
 	m := noticeTestApp(t)
-	m.Update(selfUpdateNoticeMsg{version: "1.3.0"})
+	m.HandleEvent(selfUpdateNoticeMsg{version: "1.3.0"})
 	for _, state := range []string{"saving", "restoring", "reloading", "loading", "status"} {
 		m.ctx.Saving = state == "saving"
 		m.ctx.Restoring = state == "restoring"
@@ -85,11 +85,11 @@ func TestTUIUpdateNoticeYieldsToOperationsAndFitsFooter(t *testing.T) {
 	m.ctx.LoadingTotal = 0
 	for _, width := range []int{80, 100, 160} {
 		m.ctx.Width = width
-		if got := lipgloss.Height(m.renderFooter()); got != m.footerLines()+1 {
+		if got := style.Height(m.renderFooter()); got != m.footerLines()+1 {
 			t.Fatalf("width=%d rendered=%d calculated=%d", width, got, m.footerLines()+1)
 		}
 	}
-	m.Update(selfUpdateNoticeMsg{})
+	m.HandleEvent(selfUpdateNoticeMsg{})
 	if strings.Contains(m.renderFooter(), "available") {
 		t.Fatal("empty notice displayed")
 	}
@@ -116,7 +116,7 @@ func TestTUIUpdateNoticeSurvivesStartupSuccessStatus(t *testing.T) {
 	m := noticeTestApp(t)
 	m.activeReload = reloadRequestedMsg{reason: "initial load"}
 	m.finishReloadSuccess()
-	m.Update(selfUpdateNoticeMsg{version: "1.3.0"})
+	m.HandleEvent(selfUpdateNoticeMsg{version: "1.3.0"})
 	for _, width := range []int{80, 120} {
 		m.ctx.Width = width
 		footer := m.renderFooter()
@@ -125,7 +125,7 @@ func TestTUIUpdateNoticeSurvivesStartupSuccessStatus(t *testing.T) {
 				t.Fatalf("width=%d missing %q in %q", width, text, footer)
 			}
 		}
-		if lipgloss.Height(footer) != m.footerLines()+1 || lipgloss.Width(footer) > width {
+		if style.Height(footer) != m.footerLines()+1 || style.Width(footer) > width {
 			t.Fatalf("notice overflow at width %d", width)
 		}
 	}

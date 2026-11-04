@@ -5,9 +5,9 @@ import (
 	"strings"
 	"time"
 
-	bubble_tea "charm.land/bubbletea/v2"
-	lipgloss "charm.land/lipgloss/v2"
-	"github.com/charmbracelet/x/ansi"
+	ui "github.com/nulifyer/guget/internal/ui"
+	style "github.com/nulifyer/guget/internal/ui/style"
+	ansi "github.com/nulifyer/guget/internal/ui/text"
 )
 
 func timeAgo(t time.Time) string {
@@ -82,8 +82,10 @@ type Section interface {
 
 // Overlay is implemented by all overlay sections (search, picker, confirms, etc.).
 type Overlay interface {
+	ui.Element
+	InstanceID() int
 	IsActive() bool
-	HandleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd
+	HandleKey(msg ui.KeyEvent) ui.Effect
 	Render() string
 	FooterKeys() []kv
 }
@@ -117,6 +119,8 @@ func (s *sectionBase) Resize(delta int) bool {
 }
 
 // IsActive returns whether this section's overlay is currently shown.
+func (s *sectionBase) InstanceID() int { return s.requestID }
+
 func (s *sectionBase) IsActive() bool { return s.active }
 
 func (s *sectionBase) mouseSessionID() int { return s.requestID }
@@ -134,10 +138,10 @@ func (s *sectionBase) closeOverlay() {
 	s.app.ctx.StatusLine = ""
 }
 
-// centerOverlay wraps a rendered box in lipgloss.Place centered in the overlay area.
+// centerOverlay wraps a rendered box in style.Place centered in the overlay area.
 func (s *sectionBase) centerOverlay(box string) string {
 	s.mouseRegions = nil
-	return lipgloss.Place(s.app.ctx.Width, s.app.overlayHeight(), lipgloss.Center, lipgloss.Center, box)
+	return style.Place(s.app.ctx.Width, s.app.overlayHeight(), style.Center, style.Center, box)
 }
 
 const (
@@ -146,10 +150,10 @@ const (
 )
 
 // centerOverlayInteractive translates box-relative regions into terminal
-// coordinates using the same centering rule as lipgloss.Place.
+// coordinates using the same centering rule as style.Place.
 func (s *sectionBase) centerOverlayInteractive(box string, regions []mouseRegion) string {
-	boxW := lipgloss.Width(box)
-	boxH := lipgloss.Height(box)
+	boxW := style.Width(box)
+	boxH := style.Height(box)
 	left := imax(0, (s.app.ctx.Width-boxW)/2)
 	top := imax(0, (s.app.overlayHeight()-boxH)/2)
 
@@ -159,7 +163,7 @@ func (s *sectionBase) centerOverlayInteractive(box string, regions []mouseRegion
 		s.mouseRegions[i].rect.x += left
 		s.mouseRegions[i].rect.y += top
 	}
-	return lipgloss.Place(s.app.ctx.Width, s.app.overlayHeight(), lipgloss.Center, lipgloss.Center, box)
+	return style.Place(s.app.ctx.Width, s.app.overlayHeight(), style.Center, style.Center, box)
 }
 
 func (s *sectionBase) MouseRegions() []mouseRegion {
@@ -170,24 +174,24 @@ func (s *sectionBase) MouseRegions() []mouseRegion {
 
 func overlayPackageLine(name, version string, width int) string {
 	version = truncate(version, max(1, width-2))
-	name = truncate(name, max(1, width-lipgloss.Width(version)-1))
+	name = truncate(name, max(1, width-style.Width(version)-1))
 	return styleSubtle.Render(name + " " + version)
 }
 
 func overlayTitleLine(title string, innerW int) string {
 	const closeLabel = "[×]"
-	if innerW <= lipgloss.Width(closeLabel) {
+	if innerW <= style.Width(closeLabel) {
 		return styleSubtleBold.Render(closeLabel)
 	}
-	title = truncate(title, innerW-lipgloss.Width(closeLabel)-1)
-	gap := innerW - lipgloss.Width(title) - lipgloss.Width(closeLabel)
+	title = truncate(title, innerW-style.Width(closeLabel)-1)
+	gap := innerW - style.Width(title) - style.Width(closeLabel)
 	return styleAccentBold.Render(title) + strings.Repeat(" ", gap) + styleSubtleBold.Render(closeLabel)
 }
 
-func overlayCloseRegion(outerW int, handle func(bubble_tea.KeyMsg) bubble_tea.Cmd) mouseRegion {
+func overlayCloseRegion(outerW int, handle func(ui.KeyEvent) ui.Effect) mouseRegion {
 	return mouseRegion{
 		rect:  mouseRect{x: outerW - 6, y: overlayContentY, w: 3, h: 1},
-		click: keyMouseHandler(handle, bubble_tea.KeyEscape),
+		click: keyMouseHandler(handle, ui.KeyEscape),
 	}
 }
 
@@ -196,12 +200,12 @@ type overlayButton struct {
 	code  rune
 }
 
-func renderOverlayButtons(innerW, contentLine int, handle func(bubble_tea.KeyMsg) bubble_tea.Cmd, buttons ...overlayButton) (string, []mouseRegion) {
+func renderOverlayButtons(innerW, contentLine int, handle func(ui.KeyEvent) ui.Effect, buttons ...overlayButton) (string, []mouseRegion) {
 	plain := make([]string, len(buttons))
 	totalW := 0
 	for i, button := range buttons {
 		plain[i] = "[ " + button.label + " ]"
-		totalW += lipgloss.Width(plain[i])
+		totalW += style.Width(plain[i])
 		if i > 0 {
 			totalW += 2
 		}
@@ -218,7 +222,7 @@ func renderOverlayButtons(innerW, contentLine int, handle func(bubble_tea.KeyMsg
 		}
 		label := plain[i]
 		line.WriteString(styleAccentBold.Render(label))
-		width := lipgloss.Width(label)
+		width := style.Width(label)
 		regions = append(regions, mouseRegion{
 			rect: mouseRect{
 				x: overlayContentX + x,
@@ -257,7 +261,7 @@ func adjustOffset(offset *int, delta, base, minW, maxW int) {
 }
 
 func padRight(s string, width int) string {
-	visible := lipgloss.Width(s)
+	visible := style.Width(s)
 	if visible >= width {
 		return s
 	}
@@ -317,11 +321,8 @@ func imax(a, b int) int {
 }
 
 // renderToPanel finalizes pre-rendered content into a panel at exact outer
-// dimensions. Content lines are truncated or padded vertically to fit exactly
-// within the style's content area (outerH − vertical frame). This runs BEFORE
-// lipgloss Render so that alignTextVertical (which does not truncate) receives
-// content that already fits, producing deterministic panel heights.
-func renderToPanel(s lipgloss.Style, outerW, outerH int, content string) string {
+// dimensions. Content is clipped to the space inside borders and padding.
+func renderToPanel(s style.Style, outerW, outerH int, content string) string {
 	contentH := outerH - s.GetVerticalFrameSize()
 	if contentH < 1 {
 		contentH = 1
@@ -338,4 +339,17 @@ func renderToPanel(s lipgloss.Style, outerW, outerH int, content string) string 
 		lines = append(lines, "")
 	}
 	return s.Width(outerW).Height(outerH).Render(strings.Join(lines, "\n"))
+}
+
+func truncateMiddle(s string, width int) string {
+	if ansi.StringWidth(s) <= width {
+		return s
+	}
+	if width <= 3 {
+		return truncate(s, width)
+	}
+	head := (width - 3 + 1) / 2
+	tail := width - 3 - head
+	total := ansi.StringWidth(s)
+	return ansi.Strip(ansi.Cut(s, 0, head)) + "..." + ansi.Strip(ansi.Cut(s, total-tail, total))
 }

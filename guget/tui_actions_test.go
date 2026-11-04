@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
-	tea "charm.land/bubbletea/v2"
+	ui "github.com/nulifyer/guget/internal/ui"
 )
 
-func newActionTestApp(t *testing.T, content string) (*App, chan tea.Msg, string) {
+func newActionTestApp(t *testing.T, content string) (*App, chan ui.Event, string) {
 	t.Helper()
 	root := t.TempDir()
 	path := filepath.Join(root, "App.csproj")
@@ -41,35 +41,35 @@ func newActionTestApp(t *testing.T, content string) (*App, chan tea.Msg, string)
 	}
 	m.rebuildPackageRows()
 	m.refreshDetail()
-	messages := make(chan tea.Msg, 30)
-	m.SetSender(func(msg tea.Msg) { messages <- msg })
+	messages := make(chan ui.Event, 30)
+	m.SetSender(func(msg ui.Event) { messages <- msg })
 	return m, messages, path
 }
 
-func executeActionCmd(t *testing.T, m *App, cmd tea.Cmd) {
+func executeActionCmd(t *testing.T, m *App, cmd ui.Effect) {
 	t.Helper()
 	if cmd == nil {
 		return
 	}
 	msg := cmd()
-	if batch, ok := msg.(tea.BatchMsg); ok {
+	if batch, ok := msg.(ui.Effects); ok {
 		for _, cmd := range batch {
 			executeActionCmd(t, m, cmd)
 		}
 		return
 	}
-	_, next := m.Update(msg)
+	next := m.HandleEvent(msg)
 	executeActionCmd(t, m, next)
 }
 
-func finishActionReload(t *testing.T, m *App, messages <-chan tea.Msg) {
+func finishActionReload(t *testing.T, m *App, messages <-chan ui.Event) {
 	t.Helper()
 	deadline := time.NewTimer(5 * time.Second)
 	defer deadline.Stop()
 	for m.ctx.Reloading {
 		select {
 		case msg := <-messages:
-			_, cmd := m.Update(msg)
+			cmd := m.HandleEvent(msg)
 			executeActionCmd(t, m, cmd)
 		case <-deadline.C:
 			t.Fatal("reload did not finish")
@@ -91,11 +91,11 @@ func TestHeldQuickUpdatesProcessEveryPackage(t *testing.T) {
 				if selectedActionPackage(m) != name {
 					t.Fatalf("selected=%s, want %s", selectedActionPackage(m), name)
 				}
-				_, cmd := m.Update(tea.KeyPressMsg(tea.Key{Code: key, IsRepeat: true}))
+				cmd := m.HandleEvent(ui.KeyPress(ui.Key{Code: key, IsRepeat: true}))
 				if cmd == nil || !m.ctx.Saving {
 					t.Fatal("update did not start")
 				}
-				if m.handleKey(tea.KeyPressMsg(tea.Key{Code: key, IsRepeat: true})) != nil {
+				if m.handleKey(ui.KeyPress(ui.Key{Code: key, IsRepeat: true})) != nil {
 					t.Fatal("repeat scheduled an overlapping write")
 				}
 				executeActionCmd(t, m, cmd)
@@ -116,7 +116,7 @@ func TestHeldQuickUpdatesProcessEveryPackage(t *testing.T) {
 					t.Fatalf("%s=%s, want %s", ref.Name, ref.Version.String(), wantVersion)
 				}
 			}
-			if m.handleKey(tea.KeyPressMsg(tea.Key{Code: key, IsRepeat: true})) != nil || m.ctx.Saving || m.ctx.Reloading {
+			if m.handleKey(ui.KeyPress(ui.Key{Code: key, IsRepeat: true})) != nil || m.ctx.Saving || m.ctx.Reloading {
 				t.Fatal("up-to-date package triggered work")
 			}
 		})
@@ -152,7 +152,7 @@ func TestMutationSelectionPolicies(t *testing.T) {
 		m, messages, _ := newActionTestApp(t, "")
 		m.openVersionPicker()
 		m.picker.cursor = 1
-		executeActionCmd(t, m, m.picker.HandleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter})))
+		executeActionCmd(t, m, m.picker.HandleKey(ui.KeyPress(ui.Key{Code: ui.KeyEnter})))
 		finishActionReload(t, m, messages)
 		if selectedActionPackage(m) != "A" || m.packages.cursor != 1 {
 			t.Fatalf("selected=%s cursor=%d", selectedActionPackage(m), m.packages.cursor)
@@ -160,7 +160,7 @@ func TestMutationSelectionPolicies(t *testing.T) {
 	})
 	t.Run("navigation during save wins", func(t *testing.T) {
 		m, messages, _ := newActionTestApp(t, "")
-		cmd := m.handleKey(tea.KeyPressMsg(tea.Key{Code: 'u'}))
+		cmd := m.handleKey(ui.KeyPress(ui.Key{Code: 'u'}))
 		m.movePackageCursor(1)
 		executeActionCmd(t, m, cmd)
 		finishActionReload(t, m, messages)
@@ -201,7 +201,7 @@ func TestFailedOrNoOpWritesReleaseSavingState(t *testing.T) {
 	}
 	// A failed completion must also release a queued watcher reload.
 	m.ctx.Saving = true
-	m.Update(writeResultMsg{err: errors.New("injected save failure")})
+	m.HandleEvent(writeResultMsg{err: errors.New("injected save failure")})
 	if m.ctx.Saving || !strings.Contains(m.ctx.StatusLine, "injected save failure") {
 		t.Fatal("failure state not reported")
 	}
@@ -209,7 +209,7 @@ func TestFailedOrNoOpWritesReleaseSavingState(t *testing.T) {
 
 func TestWatcherReloadWaitsForMutation(t *testing.T) {
 	m, messages, _ := newActionTestApp(t, "")
-	cmd := m.handleKey(tea.KeyPressMsg(tea.Key{Code: 'u'}))
+	cmd := m.handleKey(ui.KeyPress(ui.Key{Code: 'u'}))
 	m.requestReload(reloadRequestedMsg{automatic: true, paths: []string{"App.csproj"}})
 	if m.ctx.Reloading || !m.hasPendingReload || m.workspaceGeneration != 0 {
 		t.Fatal("watcher reloaded during a write")
@@ -223,16 +223,16 @@ func TestWatcherReloadWaitsForMutation(t *testing.T) {
 
 func TestQuickUpdatePinnedVersionRequiresConfirmation(t *testing.T) {
 	m, messages, path := newActionTestApp(t, `<Project><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup><ItemGroup><PackageReference Include="A" Version="[1.0.0]"/><PackageReference Include="B" Version="1.0.0"/></ItemGroup></Project>`)
-	if cmd := m.handleKey(tea.KeyPressMsg(tea.Key{Code: 'u'})); cmd != nil || !m.confirmUpdate.active || m.ctx.Saving {
+	if cmd := m.handleKey(ui.KeyPress(ui.Key{Code: 'u'})); cmd != nil || !m.confirmUpdate.active || m.ctx.Saving {
 		t.Fatal("pinned update did not require confirmation")
 	}
 	// A repeated u cannot accept the pin confirmation.
-	_, cmd := m.Update(tea.KeyPressMsg(tea.Key{Code: 'u', IsRepeat: true}))
+	cmd := m.HandleEvent(ui.KeyPress(ui.Key{Code: 'u', IsRepeat: true}))
 	executeActionCmd(t, m, cmd)
 	if !m.confirmUpdate.active || m.ctx.Saving {
 		t.Fatal("repeat accepted confirmation")
 	}
-	_, cmd = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	cmd = m.HandleEvent(ui.KeyPress(ui.Key{Code: ui.KeyEnter}))
 	executeActionCmd(t, m, cmd)
 	finishActionReload(t, m, messages)
 	data, _ := os.ReadFile(path)
@@ -243,17 +243,17 @@ func TestQuickUpdatePinnedVersionRequiresConfirmation(t *testing.T) {
 
 func TestKeyReleasesDoNotNavigateOrMutate(t *testing.T) {
 	m, _, _ := newActionTestApp(t, "")
-	for _, key := range []tea.Key{{Code: tea.KeyDown}, {Code: 'u'}, {Code: 'o'}, {Code: tea.KeyTab}, {Code: 'd'}} {
+	for _, key := range []ui.Key{{Code: ui.KeyDown}, {Code: 'u'}, {Code: 'o'}, {Code: ui.KeyTab}, {Code: 'd'}} {
 		selection := m.packageSelection()
 		focus := m.focus
-		_, cmd := m.Update(tea.KeyReleaseMsg(key))
+		cmd := m.HandleEvent(ui.KeyRelease(key))
 		if cmd != nil || m.packageSelection() != selection || m.focus != focus || m.ctx.Saving || m.confirmRemove.active {
 			t.Fatalf("release caused action: %+v", key)
 		}
 	}
 	m.openVersionPicker()
 	m.picker.cursor = 1
-	_, cmd := m.Update(tea.KeyReleaseMsg(tea.Key{Code: tea.KeyEnter}))
+	cmd := m.HandleEvent(ui.KeyRelease(ui.Key{Code: ui.KeyEnter}))
 	if cmd != nil || !m.picker.active || m.ctx.Saving {
 		t.Fatal("release applied version picker")
 	}
@@ -273,14 +273,14 @@ func TestGlobalInterruptAndModalEscape(t *testing.T) {
 			case "confirm":
 				m.confirmRemove = newConfirmRemove(m, "A")
 			}
-			_, cmd := m.Update(tea.KeyPressMsg(tea.Key{Code: 'c', Mod: tea.ModCtrl}))
+			cmd := m.HandleEvent(ui.KeyPress(ui.Key{Code: 'c', Mod: ui.ModCtrl}))
 			if cmd == nil {
 				t.Fatal("ctrl+c swallowed by overlay")
 			}
-			if _, ok := cmd().(tea.QuitMsg); !ok {
+			if _, ok := cmd().(ui.QuitEvent); !ok {
 				t.Fatal("ctrl+c did not quit")
 			}
-			_, cmd = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEscape}))
+			cmd = m.HandleEvent(ui.KeyPress(ui.Key{Code: ui.KeyEscape}))
 			if cmd != nil || m.anyOverlayActive() {
 				t.Fatal("escape did not close modal")
 			}
@@ -290,20 +290,20 @@ func TestGlobalInterruptAndModalEscape(t *testing.T) {
 
 func TestSortAndNavigationAliases(t *testing.T) {
 	m, _, _ := newActionTestApp(t, "")
-	m.handleKey(tea.KeyPressMsg(tea.Key{Code: 'j'}))
+	m.handleKey(ui.KeyPress(ui.Key{Code: 'j'}))
 	if selectedActionPackage(m) != "B" {
 		t.Fatal("j did not navigate")
 	}
-	m.handleKey(tea.KeyPressMsg(tea.Key{Code: 'o'}))
+	m.handleKey(ui.KeyPress(ui.Key{Code: 'o'}))
 	if m.packages.sortMode != sortByName || m.packages.cursor != 0 {
 		t.Fatal("o did not reset name sort")
 	}
-	m.handleKey(tea.KeyPressMsg(tea.Key{Code: 'O'}))
+	m.handleKey(ui.KeyPress(ui.Key{Code: 'O'}))
 	if m.packages.sortDir || selectedActionPackage(m) != "B" {
 		t.Fatal("O did not reverse name sort")
 	}
-	m.handleKey(tea.KeyPressMsg(tea.Key{Code: 'j'}))
-	m.handleKey(tea.KeyPressMsg(tea.Key{Code: 'k'}))
+	m.handleKey(ui.KeyPress(ui.Key{Code: 'j'}))
+	m.handleKey(ui.KeyPress(ui.Key{Code: 'k'}))
 	if selectedActionPackage(m) != "B" {
 		t.Fatal("k did not navigate")
 	}
@@ -316,7 +316,7 @@ func TestSortAndNavigationAliases(t *testing.T) {
 func TestMetadataRepliesPreserveSelectedPackage(t *testing.T) {
 	m, _, _ := newActionTestApp(t, "")
 	m.movePackageCursor(1)
-	_, cmd := m.Update(packageReadyMsg{generation: m.workspaceGeneration, name: "A", result: nugetResult{pkg: &PackageInfo{ID: "A", Versions: []PackageVersion{{SemVer: ParseSemVer("1.0.0")}}}}})
+	cmd := m.HandleEvent(packageReadyMsg{generation: m.workspaceGeneration, name: "A", result: nugetResult{pkg: &PackageInfo{ID: "A", Versions: []PackageVersion{{SemVer: ParseSemVer("1.0.0")}}}}})
 	executeActionCmd(t, m, cmd)
 	if selectedActionPackage(m) != "B" || m.packages.cursor != 0 {
 		t.Fatalf("selected=%s cursor=%d", selectedActionPackage(m), m.packages.cursor)
@@ -350,7 +350,7 @@ func TestTUIBulkAddUsesOneCentralTransaction(t *testing.T) {
 	if result.err != nil || result.written != 3 {
 		t.Fatalf("bulk result=%+v", result)
 	}
-	m.Update(msg)
+	m.HandleEvent(msg)
 	finishActionReload(t, m, messages)
 	data, _ := os.ReadFile(central)
 	if strings.Count(string(data), "PackageVersion Include=") != 1 {
@@ -378,7 +378,7 @@ func TestBulkUpdateSkipsLockedProjects(t *testing.T) {
 	m.applyWorkspaceSnapshot(snapshot)
 	m.projects.cursor = 0
 	m.rebuildPackageRows()
-	cmd := m.handleKey(tea.KeyPressMsg(tea.Key{Code: 'U'}))
+	cmd := m.handleKey(ui.KeyPress(ui.Key{Code: 'U'}))
 	if cmd == nil {
 		t.Fatal("no workspace update command")
 	}
@@ -387,7 +387,7 @@ func TestBulkUpdateSkipsLockedProjects(t *testing.T) {
 	if result.err != nil || result.skipped != 1 {
 		t.Fatalf("result=%+v", result)
 	}
-	m.Update(msg)
+	m.HandleEvent(msg)
 	finishActionReload(t, m, messages)
 	data, _ := os.ReadFile(locked)
 	if !strings.Contains(string(data), `Version="[1.0.0]"`) {
@@ -411,14 +411,14 @@ func TestQuickUpdateScopesAndAllLockedWarning(t *testing.T) {
 		m.applyWorkspaceSnapshot(snapshot)
 		m.selectProjectByPath(path)
 		m.rebuildPackageRows()
-		executeActionCmd(t, m, m.handleKey(tea.KeyPressMsg(tea.Key{Code: 'u'})))
+		executeActionCmd(t, m, m.handleKey(ui.KeyPress(ui.Key{Code: 'u'})))
 		finishActionReload(t, m, messages)
 		data, _ := os.ReadFile(other)
 		if !strings.Contains(string(data), `Version="1.0.0"`) {
 			t.Fatal("lowercase u changed another project")
 		}
 		m.selectPackageByName("A")
-		executeActionCmd(t, m, m.handleKey(tea.KeyPressMsg(tea.Key{Code: 'U'})))
+		executeActionCmd(t, m, m.handleKey(ui.KeyPress(ui.Key{Code: 'U'})))
 		finishActionReload(t, m, messages)
 		data, _ = os.ReadFile(other)
 		if !strings.Contains(string(data), `Version="2.0.0"`) {
@@ -427,7 +427,7 @@ func TestQuickUpdateScopesAndAllLockedWarning(t *testing.T) {
 	})
 	t.Run("all locked", func(t *testing.T) {
 		m, _, _ := newActionTestApp(t, `<Project><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup><ItemGroup><PackageReference Include="A" Version="[1.0.0]"/></ItemGroup></Project>`)
-		if cmd := m.handleKey(tea.KeyPressMsg(tea.Key{Code: 'U'})); cmd != nil || m.ctx.Saving || !strings.Contains(m.ctx.StatusLine, "1 skipped") {
+		if cmd := m.handleKey(ui.KeyPress(ui.Key{Code: 'U'})); cmd != nil || m.ctx.Saving || !strings.Contains(m.ctx.StatusLine, "1 skipped") {
 			t.Fatalf("status=%q saving=%v", m.ctx.StatusLine, m.ctx.Saving)
 		}
 	})
@@ -435,8 +435,8 @@ func TestQuickUpdateScopesAndAllLockedWarning(t *testing.T) {
 
 func TestSortingDuringSavePreservesLaterSelection(t *testing.T) {
 	m, messages, _ := newActionTestApp(t, "")
-	cmd := m.handleKey(tea.KeyPressMsg(tea.Key{Code: 'u'}))
-	m.handleKey(tea.KeyPressMsg(tea.Key{Code: 'o'}))
+	cmd := m.handleKey(ui.KeyPress(ui.Key{Code: 'u'}))
+	m.handleKey(ui.KeyPress(ui.Key{Code: 'o'}))
 	executeActionCmd(t, m, cmd)
 	finishActionReload(t, m, messages)
 	if m.packages.sortMode != sortByName || selectedActionPackage(m) != "A" {
@@ -454,14 +454,14 @@ func TestFailedWriteReloadPreservesSelectionAndError(t *testing.T) {
 	}
 	m.ctx.Saving = true
 	m.requestReload(reloadRequestedMsg{automatic: true, paths: []string{path}})
-	m.Update(writeResultMsg{err: errors.New("injected rollback failure"), written: 1, reload: true, selection: selection})
+	m.HandleEvent(writeResultMsg{err: errors.New("injected rollback failure"), written: 1, reload: true, selection: selection})
 	finishActionReload(t, m, messages)
 	if selectedActionPackage(m) != "A" || !m.ctx.StatusIsErr || !strings.Contains(m.ctx.StatusLine, "rollback failure") {
 		t.Fatalf("selected=%s error=%v status=%q", selectedActionPackage(m), m.ctx.StatusIsErr, m.ctx.StatusLine)
 	}
 }
 
-func actionWriteResult(t *testing.T, msg tea.Msg) writeResultMsg {
+func actionWriteResult(t *testing.T, msg ui.Event) writeResultMsg {
 	t.Helper()
 	switch result := msg.(type) {
 	case writeResultMsg:

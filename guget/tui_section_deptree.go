@@ -6,13 +6,13 @@ import (
 	"os/exec"
 	"strings"
 
-	bubbles_viewport "charm.land/bubbles/v2/viewport"
-	bubble_tea "charm.land/bubbletea/v2"
-	lipgloss "charm.land/lipgloss/v2"
+	ui "github.com/nulifyer/guget/internal/ui"
+	style "github.com/nulifyer/guget/internal/ui/style"
+	viewport "github.com/nulifyer/guget/internal/ui/viewport"
 )
 
-func runDepTreeCmd(ctx context.Context, project *ParsedProject, requestID int) bubble_tea.Cmd {
-	return func() bubble_tea.Msg {
+func runDepTreeCmd(ctx context.Context, project *ParsedProject, requestID int) ui.Effect {
+	return func() ui.Event {
 		cmd := exec.CommandContext(ctx, "dotnet", "list", project.FilePath, "package", "--include-transitive")
 		out, err := cmd.CombinedOutput()
 		if err != nil {
@@ -30,11 +30,11 @@ func newDepTreeOverlay(m *App, title string, loading bool) depTreeOverlay {
 	}
 	m.depTree = dt // assign so depTreeOverlaySize() reads the correct Width()
 	overlayW, overlayH := m.depTreeOverlaySize()
-	dt.vp = bubbles_viewport.New(bubbles_viewport.WithWidth(overlayW-6), bubbles_viewport.WithHeight(max(1, overlayH-2)))
+	dt.vp = viewport.New(viewport.WithWidth(overlayW-6), viewport.WithHeight(max(1, overlayH-2)))
 	return dt
 }
 
-func (m *App) openDepTree() bubble_tea.Cmd {
+func (m *App) openDepTree() ui.Effect {
 	if m.packages.cursor >= len(m.packages.rows) {
 		return nil
 	}
@@ -59,7 +59,7 @@ func (m *App) openDepTree() bubble_tea.Cmd {
 	return nil
 }
 
-func (m *App) openTransitiveDepTree() bubble_tea.Cmd {
+func (m *App) openTransitiveDepTree() ui.Effect {
 	proj := m.selectedProject()
 	if proj == nil {
 		return m.setStatus("▲ Select a project first", true)
@@ -135,7 +135,7 @@ func (s *depTreeOverlay) formatDepGroups(v *PackageVersion) string {
 	maxNameW := 20
 	for _, dg := range v.DependencyGroups {
 		for _, dep := range dg.Dependencies {
-			if w := lipgloss.Width(dep.ID); w > maxNameW {
+			if w := style.Width(dep.ID); w > maxNameW {
 				maxNameW = w
 			}
 		}
@@ -159,7 +159,7 @@ func (s *depTreeOverlay) formatDepGroups(v *PackageVersion) string {
 				}
 				rangeStr := formatVersionRange(dep.Range)
 				sb.WriteString("  " + iconStyle.Render(icon) + " ")
-				rangeW := min(lipgloss.Width(rangeStr), max(1, s.vp.Width()/2))
+				rangeW := min(style.Width(rangeStr), max(1, s.vp.Width()/2))
 				nameW := max(1, min(maxNameW, s.vp.Width()-4-rangeW))
 				sb.WriteString(styleText.Render(padRight(truncate(dep.ID, max(1, nameW-1)), nameW)) +
 					styleSubtle.Render(truncate(rangeStr, rangeW)) + "\n")
@@ -308,10 +308,10 @@ func (s *depTreeOverlay) renderParsedDotnetList(projects []dotnetListProject) st
 		for _, fw := range proj.Frameworks {
 			for _, group := range [][]dotnetListPkg{fw.TopLevel, fw.Transitive} {
 				for _, pkg := range group {
-					maxNameW = max(maxNameW, lipgloss.Width(pkg.Name)+2)
-					maxResolvedW = max(maxResolvedW, lipgloss.Width(pkg.Resolved))
+					maxNameW = max(maxNameW, style.Width(pkg.Name)+2)
+					maxResolvedW = max(maxResolvedW, style.Width(pkg.Resolved))
 					if pkg.Requested != "" && !strings.ContainsAny(pkg.Requested, "[]()") && pkg.Requested != pkg.Resolved {
-						maxRequestedW = max(maxRequestedW, lipgloss.Width(pkg.Requested)+2)
+						maxRequestedW = max(maxRequestedW, style.Width(pkg.Requested)+2)
 					}
 				}
 			}
@@ -385,7 +385,7 @@ func (s *depTreeOverlay) FooterKeys() []kv {
 	return []kv{{"↑↓", "scroll"}, {"esc", "close"}}
 }
 
-func (s *depTreeOverlay) HandleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
+func (s *depTreeOverlay) HandleKey(msg ui.KeyEvent) ui.Effect {
 	switch msg.String() {
 	case "[":
 		if s.Resize(-4) {
@@ -403,7 +403,7 @@ func (s *depTreeOverlay) HandleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 		s.closeOverlay()
 		return nil
 	default:
-		var cmd bubble_tea.Cmd
+		var cmd ui.Effect
 		s.vp, cmd = s.vp.Update(msg)
 		return cmd
 	}
@@ -441,7 +441,7 @@ func (s *depTreeOverlay) Render() string {
 	regions := []mouseRegion{
 		overlayCloseRegion(overlayW, s.HandleKey),
 		{
-			rect:  mouseRect{x: 1, y: 1, w: overlayW - 2, h: lipgloss.Height(box) - 2},
+			rect:  mouseRect{x: 1, y: 1, w: overlayW - 2, h: style.Height(box) - 2},
 			wheel: verticalWheelHandler(s.HandleKey),
 		},
 	}

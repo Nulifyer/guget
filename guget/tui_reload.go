@@ -7,15 +7,15 @@ import (
 	"slices"
 	"strings"
 
-	tea "charm.land/bubbletea/v2"
+	ui "github.com/nulifyer/guget/internal/ui"
 )
 
-// SetSender wires the tea.Program's Send function into the App. It must be
+// SetSender wires the ui.Runtime's Send function into the App. It must be
 // called exactly once, before startInitialLoad or any requestReload, and
 // before the file watcher starts. After that, m.send is treated as read-only
-// by background goroutines; tea.Program.Send is itself goroutine-safe, so no
+// by background goroutines; ui.Runtime.Send is itself goroutine-safe, so no
 // further locking is required.
-func (m *App) SetSender(send func(tea.Msg)) {
+func (m *App) SetSender(send func(ui.Event)) {
 	m.send = send
 }
 

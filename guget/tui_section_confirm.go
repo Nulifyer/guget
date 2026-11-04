@@ -1,10 +1,10 @@
 package main
 
 import (
-	lipgloss "charm.land/lipgloss/v2"
+	style "github.com/nulifyer/guget/internal/ui/style"
 	"strings"
 
-	bubble_tea "charm.land/bubbletea/v2"
+	ui "github.com/nulifyer/guget/internal/ui"
 )
 
 func newConfirmRemove(m *App, pkgName string) confirmRemove {
@@ -27,7 +27,7 @@ func (s *confirmRemove) FooterKeys() []kv {
 	return []kv{{"enter/y", "confirm"}, {"esc", "cancel"}}
 }
 
-func (s *confirmRemove) HandleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
+func (s *confirmRemove) HandleKey(msg ui.KeyEvent) ui.Effect {
 	switch msg.String() {
 	case "[":
 		s.Resize(-4)
@@ -48,7 +48,7 @@ func (s *confirmUpdate) FooterKeys() []kv {
 	return []kv{{"enter/y", "confirm"}, {"esc", "cancel"}}
 }
 
-func (s *confirmUpdate) HandleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
+func (s *confirmUpdate) HandleKey(msg ui.KeyEvent) ui.Effect {
 	switch msg.String() {
 	case "[":
 		s.Resize(-4)
@@ -67,11 +67,11 @@ func (s *confirmUpdate) HandleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 
 // applyOrConfirmUpdate calls applyVersion directly, or opens the lock-confirm
 // overlay if the currently-installed version is pinned with [x.y.z].
-func (m *App) applyOrConfirmUpdate(pkgName, newVersion string, project *ParsedProject) bubble_tea.Cmd {
+func (m *App) applyOrConfirmUpdate(pkgName, newVersion string, project *ParsedProject) ui.Effect {
 	return m.applyOrConfirmUpdateWithSelection(pkgName, newVersion, project, nil)
 }
 
-func (m *App) applyOrConfirmUpdateWithSelection(pkgName, newVersion string, project *ParsedProject, selection *reloadSelection) bubble_tea.Cmd {
+func (m *App) applyOrConfirmUpdateWithSelection(pkgName, newVersion string, project *ParsedProject, selection *reloadSelection) ui.Effect {
 	if !m.canMutate() {
 		return nil
 	}
@@ -96,8 +96,8 @@ func (s *confirmRemove) Render() string {
 		"",
 	}
 	buttonLine, buttonRegions := renderOverlayButtons(innerW, len(lines), s.HandleKey,
-		overlayButton{label: "Cancel", code: bubble_tea.KeyEscape},
-		overlayButton{label: "Remove", code: bubble_tea.KeyEnter},
+		overlayButton{label: "Cancel", code: ui.KeyEscape},
+		overlayButton{label: "Remove", code: ui.KeyEnter},
 	)
 	lines = append(lines, buttonLine)
 	regions := []mouseRegion{overlayCloseRegion(w, s.HandleKey)}
@@ -121,7 +121,7 @@ func (s *confirmUpdate) Render() string {
 	pinnedVer = truncate(pinnedVer, max(1, innerW/2-2))
 	lines := []string{
 		overlayTitleLine("Version is pinned", innerW),
-		styleSubtle.Render(truncate(s.pkgName, max(1, innerW-lipgloss.Width(pinnedVer)-4))) + "  " + styleYellow.Render("["+pinnedVer+"]"),
+		styleSubtle.Render(truncate(s.pkgName, max(1, innerW-style.Width(pinnedVer)-4))) + "  " + styleYellow.Render("["+pinnedVer+"]"),
 		"",
 		styleSubtle.Render(truncate("Update to "+s.newVersion+" anyway?", innerW)),
 		"",
@@ -130,8 +130,8 @@ func (s *confirmUpdate) Render() string {
 		lines = []string{lines[0], lines[1], lines[3]}
 	}
 	buttonLine, buttonRegions := renderOverlayButtons(innerW, len(lines), s.HandleKey,
-		overlayButton{label: "Cancel", code: bubble_tea.KeyEscape},
-		overlayButton{label: "Update", code: bubble_tea.KeyEnter},
+		overlayButton{label: "Cancel", code: ui.KeyEscape},
+		overlayButton{label: "Update", code: ui.KeyEnter},
 	)
 	lines = append(lines, buttonLine)
 	regions := []mouseRegion{overlayCloseRegion(w, s.HandleKey)}

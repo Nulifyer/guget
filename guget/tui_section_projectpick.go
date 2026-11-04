@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	bubble_tea "charm.land/bubbletea/v2"
-	lipgloss "charm.land/lipgloss/v2"
+	ui "github.com/nulifyer/guget/internal/ui"
+	style "github.com/nulifyer/guget/internal/ui/style"
 )
 
 func (m *App) openProjectPicker(pkgName, version string) {
@@ -58,7 +58,7 @@ func (s *projectPicker) FooterKeys() []kv {
 	return []kv{{"↑↓", "nav"}, {"space", "toggle"}, {"a", "all"}, {"enter", "confirm"}, {"esc", "cancel"}}
 }
 
-func (s *projectPicker) HandleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
+func (s *projectPicker) HandleKey(msg ui.KeyEvent) ui.Effect {
 	switch msg.String() {
 	case "[":
 		s.Resize(-4)
@@ -72,7 +72,7 @@ func (s *projectPicker) HandleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 		s.moveCursor(-1)
 	case "down", "j":
 		s.moveCursor(1)
-	case "space":
+	case "space", " ":
 		if s.cursor < len(s.items) && s.items[s.cursor].selectable() {
 			s.items[s.cursor].selected = !s.items[s.cursor].selected
 		}
@@ -117,7 +117,7 @@ func (s *projectPicker) selectedCount() int {
 	return n
 }
 
-func (s *projectPicker) confirmSelection() bubble_tea.Cmd {
+func (s *projectPicker) confirmSelection() ui.Effect {
 	selected := make([]*ParsedProject, 0)
 	for _, it := range s.items {
 		if it.selected && it.selectable() {
@@ -239,12 +239,12 @@ func (s *projectPicker) Render() string {
 		}
 
 		suffix = truncateStyled(suffix, max(0, innerW-6))
-		name = truncate(name, max(1, innerW-4-lipgloss.Width(suffix)))
+		name = truncate(name, max(1, innerW-4-style.Width(suffix)))
 		lines = append(lines, cursor+check+nameStyle.Render(name)+suffix)
 		index := i
 		regions = append(regions, mouseRegion{
 			rect: mouseRect{x: overlayContentX, y: overlayContentY + rowStart + i - start, w: innerW, h: 1},
-			click: func(bubble_tea.MouseMsg) bubble_tea.Cmd {
+			click: func(ui.MouseEvent) ui.Effect {
 				s.cursor = index
 				if s.items[index].selectable() {
 					s.items[index].selected = !s.items[index].selected
@@ -273,8 +273,8 @@ func (s *projectPicker) Render() string {
 		lines = append(lines, "")
 	}
 	buttonLine, buttonRegions := renderOverlayButtons(innerW, len(lines), s.HandleKey,
-		overlayButton{label: "Cancel", code: bubble_tea.KeyEscape},
-		overlayButton{label: "Add", code: bubble_tea.KeyEnter},
+		overlayButton{label: "Cancel", code: ui.KeyEscape},
+		overlayButton{label: "Add", code: ui.KeyEnter},
 	)
 	lines = append(lines, buttonLine)
 	regions = append(regions, buttonRegions...)
@@ -283,7 +283,7 @@ func (s *projectPicker) Render() string {
 		Width(w).
 		Render(strings.Join(lines, "\n"))
 	regions = append(regions, mouseRegion{
-		rect:  mouseRect{x: 1, y: 1, w: w - 2, h: lipgloss.Height(box) - 2},
+		rect:  mouseRect{x: 1, y: 1, w: w - 2, h: style.Height(box) - 2},
 		wheel: verticalWheelHandler(s.HandleKey),
 	})
 	return s.centerOverlayInteractive(box, regions)

@@ -5,7 +5,7 @@ import (
 	"os"
 	"strings"
 
-	lipgloss "charm.land/lipgloss/v2"
+	style "github.com/nulifyer/guget/internal/ui/style"
 )
 
 var (
@@ -24,30 +24,30 @@ var (
 
 var (
 	// text styles
-	styleMuted      lipgloss.Style
-	styleSubtle     lipgloss.Style
-	styleSubtleBold lipgloss.Style
-	styleText       lipgloss.Style
-	styleTextBold   lipgloss.Style
-	styleAccent     lipgloss.Style
-	styleAccentBold lipgloss.Style
-	styleGreen      lipgloss.Style
-	styleYellow     lipgloss.Style
-	styleYellowBold lipgloss.Style
-	styleRed        lipgloss.Style
-	styleRedBold    lipgloss.Style
-	stylePurple     lipgloss.Style
-	styleCyan       lipgloss.Style
-	styleBorder     lipgloss.Style
+	styleMuted      style.Style
+	styleSubtle     style.Style
+	styleSubtleBold style.Style
+	styleText       style.Style
+	styleTextBold   style.Style
+	styleAccent     style.Style
+	styleAccentBold style.Style
+	styleGreen      style.Style
+	styleYellow     style.Style
+	styleYellowBold style.Style
+	styleRed        style.Style
+	styleRedBold    style.Style
+	stylePurple     style.Style
+	styleCyan       style.Style
+	styleBorder     style.Style
 
 	// Layout styles
-	styleHeaderTitle   lipgloss.Style
-	styleHeaderBar     lipgloss.Style
-	styleFooterBar     lipgloss.Style
-	styleOverlay       lipgloss.Style
-	styleOverlayDanger lipgloss.Style
-	stylePanel         lipgloss.Style
-	stylePanelNoPad    lipgloss.Style
+	styleHeaderTitle   style.Style
+	styleHeaderBar     style.Style
+	styleFooterBar     style.Style
+	styleOverlay       style.Style
+	styleOverlayDanger style.Style
+	stylePanel         style.Style
+	stylePanelNoPad    style.Style
 )
 
 type Theme struct {
@@ -72,136 +72,136 @@ var validThemeNames = []string{
 var themes = map[string]Theme{
 	// "auto" is resolved at runtime in initTheme via HasDarkBackground
 	"auto-light": {
-		Border: lipgloss.Color("#d0d7de"),
-		Muted:  lipgloss.Color("#8c959f"),
-		Text:   lipgloss.Color("#1f2328"),
-		Subtle: lipgloss.Color("#656d76"),
-		Accent: lipgloss.Color("#0969da"),
-		Green:  lipgloss.Color("#1a7f37"),
-		Yellow: lipgloss.Color("#9a6700"),
-		Red:    lipgloss.Color("#cf222e"),
-		Purple: lipgloss.Color("#8250df"),
-		Cyan:   lipgloss.Color("#0d7680"),
+		Border: style.Color("#d0d7de"),
+		Muted:  style.Color("#656d76"),
+		Text:   style.Color("#1f2328"),
+		Subtle: style.Color("#656d76"),
+		Accent: style.Color("#0969da"),
+		Green:  style.Color("#1a7f37"),
+		Yellow: style.Color("#9a6700"),
+		Red:    style.Color("#cf222e"),
+		Purple: style.Color("#8250df"),
+		Cyan:   style.Color("#0d7680"),
 	},
 	"auto-dark": {
-		Border: lipgloss.Color("#30363d"),
-		Muted:  lipgloss.Color("#484f58"),
-		Text:   lipgloss.Color("#e6edf3"),
-		Subtle: lipgloss.Color("#8b949e"),
-		Accent: lipgloss.Color("#58a6ff"),
-		Green:  lipgloss.Color("#3fb950"),
-		Yellow: lipgloss.Color("#d29922"),
-		Red:    lipgloss.Color("#f85149"),
-		Purple: lipgloss.Color("#bc8cff"),
-		Cyan:   lipgloss.Color("#56d7c2"),
+		Border: style.Color("#30363d"),
+		Muted:  style.Color("#8b949e"),
+		Text:   style.Color("#e6edf3"),
+		Subtle: style.Color("#8b949e"),
+		Accent: style.Color("#58a6ff"),
+		Green:  style.Color("#3fb950"),
+		Yellow: style.Color("#d29922"),
+		Red:    style.Color("#f85149"),
+		Purple: style.Color("#bc8cff"),
+		Cyan:   style.Color("#56d7c2"),
 	},
 	"dracula": {
-		Border: lipgloss.Color("#44475a"),
-		Muted:  lipgloss.Color("#6272a4"),
-		Text:   lipgloss.Color("#f8f8f2"),
-		Subtle: lipgloss.Color("#6272a4"),
-		Accent: lipgloss.Color("#8be9fd"),
-		Green:  lipgloss.Color("#50fa7b"),
-		Yellow: lipgloss.Color("#f1fa8c"),
-		Red:    lipgloss.Color("#ff5555"),
-		Purple: lipgloss.Color("#bd93f9"),
-		Cyan:   lipgloss.Color("#8be9fd"),
+		Border: style.Color("#44475a"),
+		Muted:  style.Color("#6272a4"),
+		Text:   style.Color("#f8f8f2"),
+		Subtle: style.Color("#6272a4"),
+		Accent: style.Color("#8be9fd"),
+		Green:  style.Color("#50fa7b"),
+		Yellow: style.Color("#f1fa8c"),
+		Red:    style.Color("#ff5555"),
+		Purple: style.Color("#bd93f9"),
+		Cyan:   style.Color("#8be9fd"),
 	},
 	"catppuccin-mocha": {
-		Border: lipgloss.Color("#313244"),
-		Muted:  lipgloss.Color("#585b70"),
-		Text:   lipgloss.Color("#cdd6f4"),
-		Subtle: lipgloss.Color("#a6adc8"),
-		Accent: lipgloss.Color("#89b4fa"),
-		Green:  lipgloss.Color("#a6e3a1"),
-		Yellow: lipgloss.Color("#f9e2af"),
-		Red:    lipgloss.Color("#f38ba8"),
-		Purple: lipgloss.Color("#cba6f7"),
-		Cyan:   lipgloss.Color("#94e2d5"),
+		Border: style.Color("#313244"),
+		Muted:  style.Color("#585b70"),
+		Text:   style.Color("#cdd6f4"),
+		Subtle: style.Color("#a6adc8"),
+		Accent: style.Color("#89b4fa"),
+		Green:  style.Color("#a6e3a1"),
+		Yellow: style.Color("#f9e2af"),
+		Red:    style.Color("#f38ba8"),
+		Purple: style.Color("#cba6f7"),
+		Cyan:   style.Color("#94e2d5"),
 	},
 	"catppuccin-macchiato": {
-		Border: lipgloss.Color("#5b6078"),
-		Muted:  lipgloss.Color("#6e738d"),
-		Text:   lipgloss.Color("#cad3f5"),
-		Subtle: lipgloss.Color("#a5adcb"),
-		Accent: lipgloss.Color("#8aadf4"),
-		Green:  lipgloss.Color("#a6da95"),
-		Yellow: lipgloss.Color("#eed49f"),
-		Red:    lipgloss.Color("#ed8796"),
-		Purple: lipgloss.Color("#c6a0f6"),
-		Cyan:   lipgloss.Color("#8bd5ca"),
+		Border: style.Color("#5b6078"),
+		Muted:  style.Color("#6e738d"),
+		Text:   style.Color("#cad3f5"),
+		Subtle: style.Color("#a5adcb"),
+		Accent: style.Color("#8aadf4"),
+		Green:  style.Color("#a6da95"),
+		Yellow: style.Color("#eed49f"),
+		Red:    style.Color("#ed8796"),
+		Purple: style.Color("#c6a0f6"),
+		Cyan:   style.Color("#8bd5ca"),
 	},
 	"catppuccin-frappe": {
-		Border: lipgloss.Color("#626880"),
-		Muted:  lipgloss.Color("#737994"),
-		Text:   lipgloss.Color("#c6d0f5"),
-		Subtle: lipgloss.Color("#a5adce"),
-		Accent: lipgloss.Color("#8caaee"),
-		Green:  lipgloss.Color("#a6d189"),
-		Yellow: lipgloss.Color("#e5c890"),
-		Red:    lipgloss.Color("#e78284"),
-		Purple: lipgloss.Color("#ca9ee6"),
-		Cyan:   lipgloss.Color("#81c8be"),
+		Border: style.Color("#626880"),
+		Muted:  style.Color("#737994"),
+		Text:   style.Color("#c6d0f5"),
+		Subtle: style.Color("#a5adce"),
+		Accent: style.Color("#8caaee"),
+		Green:  style.Color("#a6d189"),
+		Yellow: style.Color("#e5c890"),
+		Red:    style.Color("#e78284"),
+		Purple: style.Color("#ca9ee6"),
+		Cyan:   style.Color("#81c8be"),
 	},
 	"catppuccin-latte": {
-		Border: lipgloss.Color("#ccd0da"),
-		Muted:  lipgloss.Color("#9ca0b0"),
-		Text:   lipgloss.Color("#4c4f69"),
-		Subtle: lipgloss.Color("#6c6f85"),
-		Accent: lipgloss.Color("#1e66f5"),
-		Green:  lipgloss.Color("#40a02b"),
-		Yellow: lipgloss.Color("#df8e1d"),
-		Red:    lipgloss.Color("#d20f39"),
-		Purple: lipgloss.Color("#8839ef"),
-		Cyan:   lipgloss.Color("#179299"),
+		Border: style.Color("#ccd0da"),
+		Muted:  style.Color("#9ca0b0"),
+		Text:   style.Color("#4c4f69"),
+		Subtle: style.Color("#6c6f85"),
+		Accent: style.Color("#1e66f5"),
+		Green:  style.Color("#40a02b"),
+		Yellow: style.Color("#df8e1d"),
+		Red:    style.Color("#d20f39"),
+		Purple: style.Color("#8839ef"),
+		Cyan:   style.Color("#179299"),
 	},
 	"nord": {
-		Border: lipgloss.Color("#3b4252"),
-		Muted:  lipgloss.Color("#4c566a"),
-		Text:   lipgloss.Color("#eceff4"),
-		Subtle: lipgloss.Color("#d8dee9"),
-		Accent: lipgloss.Color("#88c0d0"),
-		Green:  lipgloss.Color("#a3be8c"),
-		Yellow: lipgloss.Color("#ebcb8b"),
-		Red:    lipgloss.Color("#bf616a"),
-		Purple: lipgloss.Color("#b48ead"),
-		Cyan:   lipgloss.Color("#8fbcbb"),
+		Border: style.Color("#3b4252"),
+		Muted:  style.Color("#4c566a"),
+		Text:   style.Color("#eceff4"),
+		Subtle: style.Color("#d8dee9"),
+		Accent: style.Color("#88c0d0"),
+		Green:  style.Color("#a3be8c"),
+		Yellow: style.Color("#ebcb8b"),
+		Red:    style.Color("#bf616a"),
+		Purple: style.Color("#b48ead"),
+		Cyan:   style.Color("#8fbcbb"),
 	},
 	"tokyo-night": {
-		Border: lipgloss.Color("#292e42"),
-		Muted:  lipgloss.Color("#565f89"),
-		Text:   lipgloss.Color("#c0caf5"),
-		Subtle: lipgloss.Color("#a9b1d6"),
-		Accent: lipgloss.Color("#7aa2f7"),
-		Green:  lipgloss.Color("#9ece6a"),
-		Yellow: lipgloss.Color("#e0af68"),
-		Red:    lipgloss.Color("#f7768e"),
-		Purple: lipgloss.Color("#bb9af7"),
-		Cyan:   lipgloss.Color("#7dcfff"),
+		Border: style.Color("#292e42"),
+		Muted:  style.Color("#565f89"),
+		Text:   style.Color("#c0caf5"),
+		Subtle: style.Color("#a9b1d6"),
+		Accent: style.Color("#7aa2f7"),
+		Green:  style.Color("#9ece6a"),
+		Yellow: style.Color("#e0af68"),
+		Red:    style.Color("#f7768e"),
+		Purple: style.Color("#bb9af7"),
+		Cyan:   style.Color("#7dcfff"),
 	},
 	"everforest": {
-		Border: lipgloss.Color("#475258"),
-		Muted:  lipgloss.Color("#7a8478"),
-		Text:   lipgloss.Color("#d3c6aa"),
-		Subtle: lipgloss.Color("#9da9a0"),
-		Accent: lipgloss.Color("#7fbbb3"),
-		Green:  lipgloss.Color("#a7c080"),
-		Yellow: lipgloss.Color("#dbbc7f"),
-		Red:    lipgloss.Color("#e67e80"),
-		Purple: lipgloss.Color("#d699b6"),
-		Cyan:   lipgloss.Color("#83c092"),
+		Border: style.Color("#475258"),
+		Muted:  style.Color("#7a8478"),
+		Text:   style.Color("#d3c6aa"),
+		Subtle: style.Color("#9da9a0"),
+		Accent: style.Color("#7fbbb3"),
+		Green:  style.Color("#a7c080"),
+		Yellow: style.Color("#dbbc7f"),
+		Red:    style.Color("#e67e80"),
+		Purple: style.Color("#d699b6"),
+		Cyan:   style.Color("#83c092"),
 	},
 	"gruvbox": {
-		Border: lipgloss.Color("#665c54"),
-		Muted:  lipgloss.Color("#a89984"),
-		Text:   lipgloss.Color("#ebdbb2"),
-		Subtle: lipgloss.Color("#bdae93"),
-		Accent: lipgloss.Color("#83a598"),
-		Green:  lipgloss.Color("#b8bb26"),
-		Yellow: lipgloss.Color("#fabd2f"),
-		Red:    lipgloss.Color("#fb4934"),
-		Purple: lipgloss.Color("#d3869b"),
-		Cyan:   lipgloss.Color("#8ec07c"),
+		Border: style.Color("#665c54"),
+		Muted:  style.Color("#a89984"),
+		Text:   style.Color("#ebdbb2"),
+		Subtle: style.Color("#bdae93"),
+		Accent: style.Color("#83a598"),
+		Green:  style.Color("#b8bb26"),
+		Yellow: style.Color("#fabd2f"),
+		Red:    style.Color("#fb4934"),
+		Purple: style.Color("#d3869b"),
+		Cyan:   style.Color("#8ec07c"),
 	},
 }
 
@@ -210,9 +210,9 @@ var themes = map[string]Theme{
 func initTheme(name string, noColor bool) {
 	hyperlinkEnabled = true
 	if noColor {
-		// In lipgloss v2, color downsampling is handled by bubbletea.
+		// NoColor omits foreground and background sequences.
 		// Setting all colors to NoColor effectively disables color output.
-		nc := lipgloss.NoColor{}
+		nc := style.NoColor{}
 		colorBorder = nc
 		colorMuted = nc
 		colorText = nc
@@ -231,7 +231,7 @@ func initTheme(name string, noColor bool) {
 
 	// "auto" resolves to auto-dark or auto-light based on terminal background.
 	if lower == "auto" {
-		if lipgloss.HasDarkBackground(os.Stdin, os.Stdout) {
+		if style.HasDarkBackground(os.Stdin, os.Stdout) {
 			lower = "auto-dark"
 		} else {
 			lower = "auto-light"
@@ -261,30 +261,30 @@ func initTheme(name string, noColor bool) {
 // rebuildStyles reassigns every style var from the current color vars.
 func rebuildStyles() {
 	// text styles
-	styleMuted = lipgloss.NewStyle().Foreground(colorMuted)
-	styleSubtle = lipgloss.NewStyle().Foreground(colorSubtle)
-	styleSubtleBold = lipgloss.NewStyle().Foreground(colorSubtle).Bold(true)
-	styleText = lipgloss.NewStyle().Foreground(colorText)
-	styleTextBold = lipgloss.NewStyle().Foreground(colorText).Bold(true)
-	styleAccent = lipgloss.NewStyle().Foreground(colorAccent)
-	styleAccentBold = lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
-	styleGreen = lipgloss.NewStyle().Foreground(colorGreen)
-	styleYellow = lipgloss.NewStyle().Foreground(colorYellow)
-	styleYellowBold = lipgloss.NewStyle().Foreground(colorYellow).Bold(true)
-	styleRed = lipgloss.NewStyle().Foreground(colorRed)
-	styleRedBold = lipgloss.NewStyle().Foreground(colorRed).Bold(true)
-	stylePurple = lipgloss.NewStyle().Foreground(colorPurple)
-	styleCyan = lipgloss.NewStyle().Foreground(colorCyan)
-	styleBorder = lipgloss.NewStyle().Foreground(colorBorder)
+	styleMuted = style.NewStyle().Foreground(colorMuted)
+	styleSubtle = style.NewStyle().Foreground(colorSubtle)
+	styleSubtleBold = style.NewStyle().Foreground(colorSubtle).Bold(true)
+	styleText = style.NewStyle().Foreground(colorText)
+	styleTextBold = style.NewStyle().Foreground(colorText).Bold(true)
+	styleAccent = style.NewStyle().Foreground(colorAccent)
+	styleAccentBold = style.NewStyle().Foreground(colorAccent).Bold(true)
+	styleGreen = style.NewStyle().Foreground(colorGreen)
+	styleYellow = style.NewStyle().Foreground(colorYellow)
+	styleYellowBold = style.NewStyle().Foreground(colorYellow).Bold(true)
+	styleRed = style.NewStyle().Foreground(colorRed)
+	styleRedBold = style.NewStyle().Foreground(colorRed).Bold(true)
+	stylePurple = style.NewStyle().Foreground(colorPurple)
+	styleCyan = style.NewStyle().Foreground(colorCyan)
+	styleBorder = style.NewStyle().Foreground(colorBorder)
 
 	// layout styles
 	styleHeaderTitle = styleAccentBold.Padding(0, 2)
-	styleHeaderBar = lipgloss.NewStyle().BorderBottom(true).BorderStyle(lipgloss.NormalBorder()).BorderBottomForeground(colorBorder)
-	styleFooterBar = lipgloss.NewStyle().BorderTop(true).BorderStyle(lipgloss.NormalBorder()).BorderTopForeground(colorBorder).Padding(0, 2)
-	styleOverlay = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colorAccent).Padding(1, 2)
-	styleOverlayDanger = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colorRed).Padding(1, 2)
-	stylePanel = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colorBorder).Padding(0, 1)
-	stylePanelNoPad = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colorBorder)
+	styleHeaderBar = style.NewStyle().BorderBottom(true).BorderStyle(style.NormalBorder()).BorderBottomForeground(colorBorder)
+	styleFooterBar = style.NewStyle().BorderTop(true).BorderStyle(style.NormalBorder()).BorderTopForeground(colorBorder).Padding(0, 2)
+	styleOverlay = style.NewStyle().Border(style.RoundedBorder()).BorderForeground(colorAccent).Padding(1, 2)
+	styleOverlayDanger = style.NewStyle().Border(style.RoundedBorder()).BorderForeground(colorRed).Padding(1, 2)
+	stylePanel = style.NewStyle().Border(style.RoundedBorder()).BorderForeground(colorBorder).Padding(0, 1)
+	stylePanelNoPad = style.NewStyle().Border(style.RoundedBorder()).BorderForeground(colorBorder)
 
 	// log styles
 	rebuildLogStyles()

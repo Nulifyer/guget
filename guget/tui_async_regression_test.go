@@ -1,8 +1,8 @@
 package main
 
 import (
-	tea "charm.land/bubbletea/v2"
 	"fmt"
+	ui "github.com/nulifyer/guget/internal/ui"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -15,7 +15,7 @@ import (
 func TestRegressionSearchPaste(t *testing.T) {
 	m, _, _ := newActionTestApp(t, "")
 	m.openSearch()
-	m.Update(tea.PasteMsg{Content: "Newtonsoft.Json"})
+	m.HandleEvent(ui.PasteEvent{Text: "Newtonsoft.Json"})
 	if m.search.input.Value() != "Newtonsoft.Json" {
 		t.Fatalf("pasted query was dropped: value=%q", m.search.input.Value())
 	}
@@ -30,7 +30,7 @@ func TestRegressionBackgroundMetadataPreservesDetailScroll(t *testing.T) {
 	if m.detail.vp.YOffset() != 10 {
 		t.Fatal("bad fixture")
 	}
-	_, cmd := m.Update(packageReadyMsg{name: "B", result: m.ctx.Results["B"]})
+	cmd := m.HandleEvent(packageReadyMsg{name: "B", result: m.ctx.Results["B"]})
 	executeActionCmd(t, m, cmd)
 	if m.detail.vp.YOffset() != 10 {
 		t.Fatalf("unrelated B metadata reset A detail scroll to %d", m.detail.vp.YOffset())
@@ -41,7 +41,7 @@ func TestRegressionDependencyOverlayWidthResize(t *testing.T) {
 	m, _, _ := newActionTestApp(t, "")
 	m.depTree = newDepTreeOverlay(m, "test", false)
 	old := m.depTree.vp.Width()
-	m.Update(tea.KeyPressMsg(tea.Key{Code: '['}))
+	m.HandleEvent(ui.KeyPress(ui.Key{Code: '['}))
 	w, _ := m.depTreeOverlaySize()
 	if m.depTree.vp.Width() != w-6 {
 		t.Fatalf("resized overlay width %d but viewport remains %d (old %d)", w, m.depTree.vp.Width(), old)
@@ -51,15 +51,15 @@ func TestRegressionDependencyOverlayWidthResize(t *testing.T) {
 func TestRegressionCanceledMouseRemove(t *testing.T) {
 	m, _, _ := newActionTestApp(t, "")
 	m.confirmRemove = newConfirmRemove(m, "A")
-	view := m.View()
+	view := m.Render()
 	regions := m.confirmRemove.MouseRegions()
 	button := regions[2]
-	queued := view.OnMouse(tea.MouseClickMsg(tea.Mouse{X: button.rect.x, Y: button.rect.y, Button: tea.MouseLeft}))
-	m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEscape}))
+	queued := view.OnMouse(ui.MouseClick(ui.Mouse{X: button.rect.x, Y: button.rect.y, Button: ui.MouseLeft}))
+	m.HandleEvent(ui.KeyPress(ui.Key{Code: ui.KeyEscape}))
 	if m.confirmRemove.active {
 		t.Fatal("cancel did not close overlay")
 	}
-	_, cmd := m.Update(queued())
+	cmd := m.HandleEvent(queued())
 	if cmd != nil || m.ctx.Saving {
 		t.Fatalf("canceled confirmation accepted delayed mouse input: saving=%v", m.ctx.Saving)
 	}
@@ -68,17 +68,17 @@ func TestRegressionCanceledMouseRemove(t *testing.T) {
 func TestRegressionReopenedProjectPickerRejectsOldMouseRow(t *testing.T) {
 	m, _, _ := newActionTestApp(t, "")
 	m.projectPick = projectPicker{sectionBase: sectionBase{app: m, baseWidth: 80, minWidth: 60, maxMargin: 4, active: true, requestID: m.nextRequestID()}, items: []projectPickItem{{project: &ParsedProject{FileName: "One.csproj"}}, {project: &ParsedProject{FileName: "Two.csproj"}}}}
-	view := m.View()
+	view := m.Render()
 	row := m.projectPick.MouseRegions()[2]
-	queued := view.OnMouse(tea.MouseClickMsg(tea.Mouse{X: row.rect.x, Y: row.rect.y, Button: tea.MouseLeft}))
-	m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEscape}))
+	queued := view.OnMouse(ui.MouseClick(ui.Mouse{X: row.rect.x, Y: row.rect.y, Button: ui.MouseLeft}))
+	m.HandleEvent(ui.KeyPress(ui.Key{Code: ui.KeyEscape}))
 	m.projectPick = projectPicker{sectionBase: sectionBase{app: m, baseWidth: 80, minWidth: 60, maxMargin: 4, active: true, requestID: m.nextRequestID()}, items: []projectPickItem{{project: &ParsedProject{FileName: "Other.csproj"}}}}
 	defer func() {
 		if err := recover(); err != nil {
 			t.Errorf("old mouse row panicked in reopened picker: %v", err)
 		}
 	}()
-	m.Update(queued())
+	m.HandleEvent(queued())
 	if m.projectPick.cursor != 0 || m.projectPick.items[0].selected {
 		t.Error("old mouse row changed reopened picker")
 	}
@@ -136,14 +136,14 @@ func TestRegressionClosedNuSpecOverlayCancelsHTTP(t *testing.T) {
 	m.releaseNotes.nsPkgID = "Example"
 	m.releaseNotes.nsVersions = []string{"2.0.0", "1.0.0"}
 	cmd := m.releaseNotes.selectCursor(1)
-	done := make(chan tea.Msg, 1)
+	done := make(chan ui.Event, 1)
 	go func() { done <- cmd() }()
 	select {
 	case <-started:
 	case <-time.After(time.Second):
 		t.Fatal("fetch did not start")
 	}
-	m.releaseNotes.HandleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEscape}))
+	m.releaseNotes.HandleKey(ui.KeyPress(ui.Key{Code: ui.KeyEscape}))
 	select {
 	case <-canceled:
 	case <-time.After(100 * time.Millisecond):
@@ -167,7 +167,7 @@ func TestRegressionSearchFetchHonorsSelectedResultSource(t *testing.T) {
 	m.openSearch()
 	m.search.results = []SearchResult{{ID: "Example", Version: "2.0.0", Source: "selected"}}
 	m.ctx.Results["Example"] = nugetResult{pkg: &PackageInfo{ID: "Example", LatestVersion: "9.0.0"}, source: "first"}
-	cmd := m.search.HandleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	cmd := m.search.HandleKey(ui.KeyPress(ui.Key{Code: ui.KeyEnter}))
 	msg, ok := cmd().(packageFetchedMsg)
 	if !ok || msg.err != nil || msg.info == nil {
 		t.Fatalf("bad fixture result: %#v", msg)
@@ -228,11 +228,11 @@ func TestRegressionAllProjectsShowsVulnerableMiddleVersion(t *testing.T) {
 func TestMouseCommandFromBeforeResizeIsIgnored(t *testing.T) {
 	m, _, _ := newActionTestApp(t, "")
 	m.confirmRemove = newConfirmRemove(m, "A")
-	view := m.View()
+	view := m.Render()
 	button := m.confirmRemove.MouseRegions()[2]
-	queued := view.OnMouse(tea.MouseClickMsg(tea.Mouse{X: button.rect.x, Y: button.rect.y, Button: tea.MouseLeft}))
-	m.Update(tea.WindowSizeMsg{Width: 100, Height: 20})
-	_, cmd := m.Update(queued())
+	queued := view.OnMouse(ui.MouseClick(ui.Mouse{X: button.rect.x, Y: button.rect.y, Button: ui.MouseLeft}))
+	m.HandleEvent(ui.ResizeEvent{Width: 100, Height: 20})
+	cmd := m.HandleEvent(queued())
 	if cmd != nil || m.ctx.Saving || !m.confirmRemove.active {
 		t.Fatal("pre-resize click accepted")
 	}
@@ -310,17 +310,17 @@ func TestDelayedSearchMouseRowKeepsResultIdentity(t *testing.T) {
 			m.search.results = []SearchResult{first, second}
 			m.ctx.Results[second.ID] = nugetResult{source: second.Source, pkg: &PackageInfo{ID: second.ID}}
 
-			view := m.View()
+			view := m.Render()
 			row := m.search.MouseRegions()[3] // Close, input, first result, second result.
-			queued := view.OnMouse(tea.MouseClickMsg(tea.Mouse{X: row.rect.x, Y: row.rect.y, Button: tea.MouseLeft}))
+			queued := view.OnMouse(ui.MouseClick(ui.Mouse{X: row.rect.x, Y: row.rect.y, Button: ui.MouseLeft}))
 			if test.changeQuery {
-				m.Update(tea.PasteMsg{Content: "Extra"})
+				m.HandleEvent(ui.PasteEvent{Text: "Extra"})
 			}
-			m.Update(searchResultsMsg{
+			m.HandleEvent(searchResultsMsg{
 				requestID: m.search.requestID, id: m.search.debounceID,
 				query: m.search.lastQuery, results: test.results,
 			})
-			_, cmd := m.Update(queued())
+			cmd := m.HandleEvent(queued())
 			if !test.wantSelected {
 				if cmd != nil || m.search.fetchingVersion {
 					t.Fatal("delayed mouse row selected a removed or changed search result")

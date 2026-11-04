@@ -3,8 +3,8 @@ package main
 import (
 	"strings"
 
-	bubble_tea "charm.land/bubbletea/v2"
-	lipgloss "charm.land/lipgloss/v2"
+	ui "github.com/nulifyer/guget/internal/ui"
+	style "github.com/nulifyer/guget/internal/ui/style"
 )
 
 func (s *versionPicker) FooterKeys() []kv {
@@ -14,7 +14,7 @@ func (s *versionPicker) FooterKeys() []kv {
 	return []kv{{"↑↓", "nav"}, {"enter", "select"}, {"u/U", "update/all"}, {"esc", "close"}}
 }
 
-func (s *versionPicker) HandleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
+func (s *versionPicker) HandleKey(msg ui.KeyEvent) ui.Effect {
 	switch msg.String() {
 	case "[":
 		s.Resize(-4)
@@ -55,7 +55,7 @@ func (s *versionPicker) HandleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 
 // routeAddVersion handles the add-mode flow after a version is selected:
 // single project goes to location picker, "All Projects" goes to project picker.
-func (s *versionPicker) routeAddVersion(version string) bubble_tea.Cmd {
+func (s *versionPicker) routeAddVersion(version string) ui.Effect {
 	if s.targetProject != nil {
 		return s.app.openLocationPickerOrAdd(s.pkgName, version, s.targetProject)
 	}
@@ -63,7 +63,7 @@ func (s *versionPicker) routeAddVersion(version string) bubble_tea.Cmd {
 	return nil
 }
 
-func (s *versionPicker) applyPickerVersion(scope actionScope) bubble_tea.Cmd {
+func (s *versionPicker) applyPickerVersion(scope actionScope) ui.Effect {
 	if !s.app.canMutate() {
 		return s.app.setStatus("Wait for the save or workspace reload to finish", false)
 	}
@@ -168,21 +168,21 @@ func (s *versionPicker) Render() string {
 			vulnStyle = styleRed // high / critical
 		}
 
-		var style lipgloss.Style
+		var rowStyle style.Style
 		prefix := "  "
 		if selected {
-			style = styleAccentBold
+			rowStyle = styleAccentBold
 			prefix = "▶ "
 		} else {
 			switch {
 			case isVulnerable:
-				style = vulnStyle
+				rowStyle = vulnStyle
 			case !compat:
-				style = styleRed
+				rowStyle = styleRed
 			case isPre:
-				style = styleYellow
+				rowStyle = styleYellow
 			default:
-				style = styleGreen
+				rowStyle = styleGreen
 			}
 		}
 
@@ -201,18 +201,18 @@ func (s *versionPicker) Render() string {
 			}
 		}
 
-		verStr := style.Render(v.SemVer.String())
+		verStr := rowStyle.Render(v.SemVer.String())
 		if strings.EqualFold(pkgSource, "nuget.org") || (pkgInfo != nil && pkgInfo.NugetOrgURL != "") {
 			verURL := "https://www.nuget.org/packages/" + s.pkgName + "/" + v.SemVer.String()
 			verStr += " " + hyperlinkBare(verURL, styleSubtle.Render("↗"))
 		}
-		verText := style.Render(prefix) + verStr + extras
+		verText := rowStyle.Render(prefix) + verStr + extras
 
 		ago := versionAge(v)
 		if ago != "" {
 			agoRendered := styleSubtle.Render(ago)
-			leftW := lipgloss.Width(verText)
-			agoW := lipgloss.Width(agoRendered)
+			leftW := style.Width(verText)
+			agoW := style.Width(agoRendered)
 			innerW := w - 6
 			gap := innerW - leftW - agoW
 			if gap > 0 {
@@ -223,7 +223,7 @@ func (s *versionPicker) Render() string {
 		index := i
 		regions = append(regions, mouseRegion{
 			rect: mouseRect{x: overlayContentX, y: overlayContentY + rowStart + i - start, w: innerW, h: 1},
-			click: func(bubble_tea.MouseMsg) bubble_tea.Cmd {
+			click: func(ui.MouseEvent) ui.Effect {
 				s.cursor = index
 				return nil
 			},
@@ -244,8 +244,8 @@ func (s *versionPicker) Render() string {
 		actionLabel = "Add"
 	}
 	buttonLine, buttonRegions := renderOverlayButtons(innerW, len(lines), s.HandleKey,
-		overlayButton{label: "Cancel", code: bubble_tea.KeyEscape},
-		overlayButton{label: actionLabel, code: bubble_tea.KeyEnter},
+		overlayButton{label: "Cancel", code: ui.KeyEscape},
+		overlayButton{label: actionLabel, code: ui.KeyEnter},
 	)
 	lines = append(lines, buttonLine)
 	regions = append(regions, buttonRegions...)
@@ -254,7 +254,7 @@ func (s *versionPicker) Render() string {
 		Width(w).
 		Render(strings.Join(lines, "\n"))
 	regions = append(regions, mouseRegion{
-		rect:  mouseRect{x: 1, y: 1, w: w - 2, h: lipgloss.Height(box) - 2},
+		rect:  mouseRect{x: 1, y: 1, w: w - 2, h: style.Height(box) - 2},
 		wheel: verticalWheelHandler(s.HandleKey),
 	})
 

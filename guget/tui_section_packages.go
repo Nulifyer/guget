@@ -2,11 +2,12 @@ package main
 
 import (
 	"cmp"
+	"github.com/nulifyer/guget/internal/ui"
 	"slices"
 	"strings"
 	"time"
 
-	lipgloss "charm.land/lipgloss/v2"
+	style "github.com/nulifyer/guget/internal/ui/style"
 )
 
 func currentVersionText(row packageRow) string {
@@ -37,7 +38,7 @@ func renderAvailableVersion(row packageRow) string {
 		return styleSubtle.Render("-")
 	}
 	compat := row.latestCompatible.SemVer.String()
-	var compStyle lipgloss.Style
+	var compStyle style.Style
 	switch {
 	case row.latestCompatible.SemVer.IsNewerThan(row.ref.Version):
 		compStyle = styleYellow
@@ -48,7 +49,7 @@ func renderAvailableVersion(row packageRow) string {
 	}
 	if row.latestStable != nil && row.latestStable.SemVer.String() != compat {
 		latest := row.latestStable.SemVer.String()
-		var latestStyle lipgloss.Style
+		var latestStyle style.Style
 		switch {
 		case row.latestStable.SemVer.IsNewerThan(row.ref.Version):
 			latestStyle = stylePurple
@@ -67,9 +68,9 @@ func renderCurrentVersion(row packageRow, width int) string {
 		low := styleSubtle.Render(row.oldest.String())
 		sep := styleMuted.Render("–")
 		high := styleYellow.Render(row.ref.Version.String())
-		return padRight(low+sep+high, width)
+		return padRight(truncate(low+sep+high, max(1, width-1)), width)
 	}
-	return padRight(styleSubtle.Render(currentVersionText(row)), width)
+	return padRight(styleSubtle.Render(truncate(currentVersionText(row), max(1, width-1))), width)
 }
 
 type packageColumnLayout struct {
@@ -89,23 +90,27 @@ func (m *App) packageColumns(w int) packageColumnLayout {
 		sourceColPad  = 2
 	)
 	header, _ := packageSortHeader(m.packages.sortMode, m.packages.sortDir)
-	minNameW := max(20, lipgloss.Width(header))
+	minNameW := max(20, style.Width(header))
 	innerW := w - 4
 	currentW := len("Requested")
 	availableW := len("Available")
 	sourceW := len("Source")
 	for _, row := range m.packages.rows {
-		if n := lipgloss.Width(currentVersionText(row)); n > currentW {
+		if n := style.Width(currentVersionText(row)); n > currentW {
 			currentW = n
 		}
-		if n := lipgloss.Width(availableVersionText(row)); n > availableW {
+		if n := style.Width(availableVersionText(row)); n > availableW {
 			availableW = n
 		}
-		if n := lipgloss.Width(row.source); n > sourceW {
+		if n := style.Width(row.source); n > sourceW {
 			sourceW = n
 		}
 	}
 	currentW += versionColPad
+	// Reserve the package column before expanding requested versions. A long
+	// range or preview version must show an ellipsis, never disappear at the
+	// right panel edge after the entire row is clipped.
+	currentW = min(currentW, max(1, innerW-colPrefix-minNameW))
 	availableW += versionColPad
 	sourceW += sourceColPad
 
@@ -163,10 +168,12 @@ func packageSortHeader(mode packageSortMode, ascending bool) (text string, direc
 		arrow = "▲"
 	}
 	prefix := "Package [" + mode.label() + "] "
-	return prefix + arrow, lipgloss.Width(prefix)
+	return prefix + arrow, style.Width(prefix)
 }
 
-func (m *App) renderPackagePanel(w int) string {
+func (p *packagePanel) Draw(r ui.Rect) string {
+	m := p.app
+	w := r.W
 	focused := m.focus == focusPackages
 
 	visibleH := m.packageListHeight()
@@ -245,7 +252,7 @@ func (m *App) renderPackagePanel(w int) string {
 	}
 
 	for i, line := range lines {
-		if lipgloss.Width(line) > innerW {
+		if style.Width(line) > innerW {
 			lines[i] = truncateStyled(line, innerW)
 		}
 	}
@@ -255,7 +262,7 @@ func (m *App) renderPackagePanel(w int) string {
 	if focused {
 		s = s.BorderForeground(colorAccent)
 	}
-	return renderToPanel(s, w, m.bodyOuterHeight(), content)
+	return renderToPanel(s, w, r.H, content)
 }
 
 // versionCompatible returns true when v is usable by all of the project's

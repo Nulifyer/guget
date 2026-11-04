@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	lipgloss "charm.land/lipgloss/v2"
+	style "github.com/nulifyer/guget/internal/ui/style"
 )
 
 func (m *App) footerKeys() []kv {
@@ -15,9 +15,8 @@ func (m *App) footerKeys() []kv {
 		}
 	}
 
-	// Leave enough space for a log entry and both panel borders on short terminals.
-	if m.ctx.ShowLogs && m.ctx.Height < 16 {
-		return []kv{{"tab", "focus"}, {"↑↓", "nav/scroll"}, {"l", "close logs"}, {"?", "help"}, {"esc/q", "quit"}}
+	if m.compactLogs() {
+		return []kv{{"↑↓", "scroll"}, {"l", "close logs"}, {"?", "help"}, {"esc/q", "quit"}}
 	}
 
 	// Main screen — varies by focused panel.
@@ -100,7 +99,7 @@ func (m *App) footerLines() int {
 	w := m.layoutWidth() - 4
 	lines, curW := 1, 0
 	for _, pair := range keys {
-		ew := lipgloss.Width(pair.k) + 1 + lipgloss.Width(pair.v)
+		ew := style.Width(pair.k) + 1 + style.Width(pair.v)
 		needed := ew
 		if curW > 0 {
 			needed += 3 // matches renderFooter() sepW
@@ -116,29 +115,15 @@ func (m *App) footerLines() int {
 }
 
 // bodyOuterHeight returns the outer height for each main panel.
-// In lipgloss v2, .Height(h) is the outer height (borders + padding + content).
-// alignTextVertical does NOT truncate overflow, so content must fit exactly.
+// Heights include borders and padding. Each component clips its content.
 func (m *App) bodyOuterHeight() int {
 	// footer is rendered without .Height(), so its rendered height is
 	// footerLines() content + 1 top border.
 	h := m.ctx.Height - m.footerLines() - 1
-	if m.ctx.ShowLogs {
+	if m.ctx.ShowLogs && !m.compactLogs() {
 		h -= m.logOuterHeight()
 	}
 	return imax(5, h)
-}
-
-// logOuterHeight keeps both the log border and the main panels on screen.
-func (m *App) logOuterHeight() int {
-	return min(logPanelOuterHeight, max(4, m.ctx.Height-m.footerLines()-1-5))
-}
-
-func (m *App) logContentHeight() int {
-	frame := 4 // two borders, title, divider
-	if m.logOuterHeight() < 5 {
-		frame = 3 // omit the divider to keep a log entry and a package row visible
-	}
-	return max(1, m.logOuterHeight()-frame)
 }
 
 // panelContentHeight returns the usable content lines inside a panel.
@@ -166,12 +151,34 @@ func (m *App) clampProjectOffset() {
 	clampListScroll(m.projects.cursor, &m.projects.scroll, m.projectListHeight(), len(m.projects.items), 0)
 }
 
+func (m *App) compactLogs() bool { return m.ctx.ShowLogs && m.ctx.Height < 20 }
+func (m *App) logOuterHeight() int {
+	if m.compactLogs() {
+		return max(4, m.ctx.Height-m.footerLines()-1)
+	}
+	return logPanelOuterHeight
+}
+
+func (m *App) logContentHeight() int { return max(1, m.logOuterHeight()-4) }
+
 func (m *App) relayout() {
+	if m.compactLogs() {
+		m.focus = focusLog
+	}
 	_, _, rightW := m.panelWidths()
 	// viewport height = panel content height - title(1) - divider(1)
 	innerH := m.panelContentHeight() - 2
+	oldDetailWidth := m.detail.vp.Width()
 	m.detail.vp.SetWidth(rightW - 4)
 	m.detail.vp.SetHeight(innerH)
+	if m.detail.vp.Width() != oldDetailWidth {
+		offset := m.detail.vp.YOffset()
+		m.refreshDetail()
+		m.detail.vp.SetYOffset(offset)
+	}
+	if m.releaseNotes.active {
+		m.releaseNotes.resizeViewport()
+	}
 	if m.depTree.active {
 		w, h := m.depTreeOverlaySize()
 		m.depTree.vp.SetWidth(max(1, w-6))
@@ -191,7 +198,7 @@ func (m *App) relayout() {
 
 func (m *App) panelWidths() (left, mid, right int) {
 	lw := m.layoutWidth()
-	// lipgloss v2 .Width(w) is outer (border-box) — border chars are inside w.
+	// Widths include borders.
 	// So the three panel widths must sum to exactly lw.
 
 	left = m.projects.baseWidth + m.projects.widthOffset
@@ -244,7 +251,7 @@ func (m *App) renderFooter() string {
 		k := styleAccentBold.Render(pair.k)
 		v := styleSubtle.Render(pair.v)
 		entry := k + " " + v
-		entryW := lipgloss.Width(pair.k) + 1 + lipgloss.Width(pair.v)
+		entryW := style.Width(pair.k) + 1 + style.Width(pair.v)
 
 		needed := entryW
 		if len(cur) > 0 {
@@ -294,7 +301,7 @@ func (m *App) renderFooter() string {
 		}
 		notice = truncate(notice, w)
 		if statusStr != "" {
-			remaining := w - lipgloss.Width(notice) - sepW
+			remaining := w - style.Width(notice) - sepW
 			if remaining > 0 {
 				statusStr = truncate(statusStr, remaining) + sep
 			} else {

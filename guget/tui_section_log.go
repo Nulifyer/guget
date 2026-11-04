@@ -1,9 +1,10 @@
 package main
 
 import (
+	"github.com/nulifyer/guget/internal/ui"
 	"strings"
 
-	lipgloss "charm.land/lipgloss/v2"
+	style "github.com/nulifyer/guget/internal/ui/style"
 )
 
 const maxLogLines = 2000
@@ -48,7 +49,8 @@ func colorizeLogLine(line string) string {
 	}
 }
 
-func (m *App) renderLogPanel() string {
+func (p *logPanel) Draw(r ui.Rect) string {
+	m := p.app
 	s := stylePanel
 	if m.focus == focusLog {
 		s = s.BorderForeground(colorAccent)
@@ -61,7 +63,7 @@ func (m *App) renderLogPanel() string {
 		parts = append(parts, div)
 	}
 	parts = append(parts, m.log.vp.View())
-	content := lipgloss.JoinVertical(lipgloss.Left, parts...)
+	content := style.JoinVertical(style.Left, parts...)
 
-	return renderToPanel(s, m.layoutWidth(), m.logOuterHeight(), content)
+	return renderToPanel(s, r.W, r.H, content)
 }

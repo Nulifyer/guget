@@ -6,11 +6,11 @@ import (
 	"strings"
 	"time"
 
-	bubbles_spinner "charm.land/bubbles/v2/spinner"
-	bubbles_textinpute "charm.land/bubbles/v2/textinput"
-	bubbles_viewport "charm.land/bubbles/v2/viewport"
-	bubble_tea "charm.land/bubbletea/v2"
-	lipgloss "charm.land/lipgloss/v2"
+	ui "github.com/nulifyer/guget/internal/ui"
+	input "github.com/nulifyer/guget/internal/ui/input"
+	spinner "github.com/nulifyer/guget/internal/ui/spinner"
+	style "github.com/nulifyer/guget/internal/ui/style"
+	viewport "github.com/nulifyer/guget/internal/ui/viewport"
 )
 
 const (
@@ -28,11 +28,12 @@ func (m *App) layoutWidth() int {
 }
 
 type App struct {
+	host      ui.Host
 	ctx       *AppContext
 	lifecycle context.Context
 
 	projectDir string
-	send       func(bubble_tea.Msg)
+	send       func(ui.Event)
 	mouse      bool
 
 	updateVersion        string
@@ -98,16 +99,16 @@ func (m *App) anyOverlayActive() bool {
 }
 
 func NewApp(projectDir string, snapshot *workspaceSnapshot, initialLogLines []string, flags BuiltFlags) *App {
-	sp := bubbles_spinner.New()
-	sp.Spinner = bubbles_spinner.Dot
+	sp := spinner.New()
+	sp.Spinner = spinner.Dot
 	sp.Style = styleAccent
 
 	projItems := buildProjectItems(snapshot.ParsedProjects, snapshot.PropsProjects)
 
-	dv := bubbles_viewport.New(bubbles_viewport.WithWidth(40), bubbles_viewport.WithHeight(20))
-	lv := bubbles_viewport.New(bubbles_viewport.WithWidth(80), bubbles_viewport.WithHeight(logPanelLines))
+	dv := viewport.New(viewport.WithWidth(40), viewport.WithHeight(20))
+	lv := viewport.New(viewport.WithWidth(80), viewport.WithHeight(logPanelLines))
 
-	ti := bubbles_textinpute.New()
+	ti := input.New()
 	ti.Placeholder = "Type a package name..."
 	ti.CharLimit = 100
 	ti.SetWidth(44)
@@ -153,15 +154,17 @@ func NewApp(projectDir string, snapshot *workspaceSnapshot, initialLogLines []st
 		},
 		sources: sourcesOverlay{
 			sectionBase: sectionBase{baseWidth: 90, minWidth: 40, maxMargin: 4},
-			vp:          bubbles_viewport.New(),
+			vp:          viewport.New(),
 		},
 		help: helpOverlay{
 			sectionBase: sectionBase{basePct: 60, minWidth: 56, maxMargin: 4},
-			vp:          bubbles_viewport.New(bubbles_viewport.WithWidth(60), bubbles_viewport.WithHeight(20)),
+			vp:          viewport.New(viewport.WithWidth(60), viewport.WithHeight(20)),
 		},
 	}
 	// Set back-pointers so sections can access the App.
 	m.projects.app = m
+	m.packages.app = m
+	m.log.app = m
 	m.detail.app = m
 	m.search.app = m
 	m.sources.app = m
@@ -169,33 +172,37 @@ func NewApp(projectDir string, snapshot *workspaceSnapshot, initialLogLines []st
 	return m
 }
 
-func (m *App) Init() bubble_tea.Cmd {
-	return bubble_tea.Batch(m.ctx.Spinner.Tick, m.checkForUpdate())
+func (m *App) Connect() ui.Effect {
+	return ui.Batch(m.ctx.Spinner.Tick, m.checkForUpdate())
 }
 
-func (m *App) Update(msg bubble_tea.Msg) (bubble_tea.Model, bubble_tea.Cmd) {
+func (m *App) HandleEvent(msg ui.Event) ui.Effect {
 	previousFooterLines := m.footerLines()
 	defer func() {
 		if m.footerLines() != previousFooterLines {
 			m.relayout()
 		}
 	}()
-	var cmds []bubble_tea.Cmd
+	var cmds []ui.Effect
 
 	switch msg := msg.(type) {
+	case ui.PasteEvent:
+		if m.search.active && m.ctx.Width >= 80 && m.ctx.Height >= 12 {
+			cmds = append(cmds, m.search.handleInput(msg))
+		}
+
 	case selfUpdateNoticeMsg:
 		m.updateVersion = msg.version
 
-	case bubble_tea.WindowSizeMsg:
+	case ui.ResizeEvent:
 		m.ctx.Width = msg.Width
 		m.ctx.Height = msg.Height
-		// relayout() is cheap (viewport dimension setters only) — call immediately
-		// so panels always render at the correct size. Expensive content rebuilds
-		// (help, release notes) are debounced.
+		// Resize allocations and reflow detail text immediately. Help content
+		// is rebuilt after the terminal size settles.
 		m.relayout()
 		m.resizeDebounceID++
 		id := m.resizeDebounceID
-		cmds = append(cmds, bubble_tea.Tick(50*time.Millisecond, func(t time.Time) bubble_tea.Msg {
+		cmds = append(cmds, ui.Tick(50*time.Millisecond, func(t time.Time) ui.Event {
 			return resizeDebounceMsg{id: id}
 		}))
 
@@ -215,8 +222,8 @@ func (m *App) Update(msg bubble_tea.Msg) (bubble_tea.Model, bubble_tea.Cmd) {
 			}
 		}
 
-	case bubbles_spinner.TickMsg:
-		var cmd bubble_tea.Cmd
+	case spinner.TickMsg:
+		var cmd ui.Effect
 		m.ctx.Spinner, cmd = m.ctx.Spinner.Update(msg)
 		cmds = append(cmds, cmd)
 
@@ -236,7 +243,7 @@ func (m *App) Update(msg bubble_tea.Msg) (bubble_tea.Model, bubble_tea.Cmd) {
 		}
 		if !m.packageRefreshPending {
 			m.packageRefreshPending = true
-			cmds = append(cmds, bubble_tea.Tick(25*time.Millisecond, func(time.Time) bubble_tea.Msg { return packageRowsRefreshMsg{} }))
+			cmds = append(cmds, ui.Tick(25*time.Millisecond, func(time.Time) ui.Event { return packageRowsRefreshMsg{} }))
 		}
 
 	case packageRowsRefreshMsg:
@@ -339,7 +346,7 @@ func (m *App) Update(msg bubble_tea.Msg) (bubble_tea.Model, bubble_tea.Cmd) {
 		}
 		if m.ctx.ShowLogs && !m.logRefreshPending {
 			m.logRefreshPending = true
-			cmds = append(cmds, bubble_tea.Tick(50*time.Millisecond, func(time.Time) bubble_tea.Msg { return logRefreshMsg{} }))
+			cmds = append(cmds, ui.Tick(50*time.Millisecond, func(time.Time) ui.Event { return logRefreshMsg{} }))
 		}
 
 	case logRefreshMsg:
@@ -448,79 +455,40 @@ func (m *App) Update(msg bubble_tea.Msg) (bubble_tea.Model, bubble_tea.Cmd) {
 	case mouseInputMsg:
 		cmds = append(cmds, m.handleMouse(msg))
 
-	case bubble_tea.PasteMsg:
-		if m.search.active {
-			cmds = append(cmds, m.search.updateInput(msg))
-		}
+	case ui.KeyRelease:
+		return nil
 
-	case bubble_tea.KeyReleaseMsg:
-		return m, nil
-
-	case bubble_tea.KeyPressMsg:
+	case ui.KeyPress:
 		if msg.String() == "ctrl+c" {
-			return m, bubble_tea.Quit
+			return ui.Quit
 		}
 		if m.ctx.Width > 0 && (m.ctx.Width < 80 || m.ctx.Height < 12) {
 			switch mainKey(msg.String()) {
 			case "ctrl+c", "esc", "q":
-				return m, bubble_tea.Quit
+				return ui.Quit
 			}
-			return m, nil
+			return nil
 		}
-		handled := false
-		for _, o := range m.overlays() {
-			if o.IsActive() {
-				cmds = append(cmds, o.HandleKey(msg))
-				handled = true
-				break
-			}
-		}
-		if !handled {
+		if o := m.activeOverlay(); o != nil {
+			// Reconcile before dispatch as a prior event may have opened a dialog.
+			footer := m.renderFooter()
+			m.host.Reconcile(m.componentNodes(footer, style.Height(footer)))
+			cmds = append(cmds, m.host.HandleKey(msg))
+		} else {
 			cmds = append(cmds, m.handleKey(msg))
 		}
 	}
 
-	if !m.anyOverlayActive() {
-		switch m.focus {
-		case focusProjects:
-			if keyMsg, ok := msg.(bubble_tea.KeyMsg); ok {
-				switch mainKey(keyMsg.String()) {
-				case "up":
-					m.moveProjectCursor(-1)
-				case "down":
-					m.moveProjectCursor(1)
-				}
-			}
-		case focusDetail:
-			if keyMsg, ok := msg.(bubble_tea.KeyMsg); ok && (keyMsg.String() == "v" || keyMsg.String() == "n") {
-				// handled by handleKey above
-				if keyMsg.String() == "v" {
-					m.openVersionPicker()
-				}
-			} else {
-				var cmd bubble_tea.Cmd
-				m.detail.vp, cmd = m.detail.vp.Update(msg)
-				cmds = append(cmds, cmd)
-			}
-		case focusLog:
-			if m.ctx.ShowLogs {
-				var cmd bubble_tea.Cmd
-				m.log.vp, cmd = m.log.vp.Update(msg)
-				cmds = append(cmds, cmd)
-			}
-		}
-	}
-
-	return m, bubble_tea.Batch(cmds...)
+	return ui.Batch(cmds...)
 }
 
-func (m *App) setStatus(text string, isErr bool) bubble_tea.Cmd {
+func (m *App) setStatus(text string, isErr bool) ui.Effect {
 	// Strip newlines and truncate to keep the status on a single line.
 	if i := strings.IndexByte(text, '\n'); i >= 0 {
 		text = text[:i]
 	}
 	maxW := m.layoutWidth() - 6 // padding + border
-	if lipgloss.Width(text) > maxW && maxW > 3 {
+	if style.Width(text) > maxW && maxW > 3 {
 		text = truncate(text, maxW)
 	}
 	m.ctx.StatusLine = text
@@ -528,17 +496,20 @@ func (m *App) setStatus(text string, isErr bool) bubble_tea.Cmd {
 	return nil
 }
 
-func (m *App) handleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
-	if _, pressed := msg.(bubble_tea.KeyPressMsg); !pressed {
+func (m *App) handleKey(msg ui.KeyEvent) ui.Effect {
+	if _, pressed := msg.(ui.KeyPress); !pressed {
 		return nil
 	}
 	switch mainKey(msg.String()) {
 	case "ctrl+x":
 		return m.dismissUpdateNotice()
 	case "ctrl+c":
-		return bubble_tea.Quit
+		return ui.Quit
 
 	case "tab":
+		if m.compactLogs() {
+			return nil
+		}
 		if m.ctx.ShowLogs {
 			m.focus = (m.focus + 1) % 4
 		} else {
@@ -546,6 +517,9 @@ func (m *App) handleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 		}
 
 	case "shift+tab":
+		if m.compactLogs() {
+			return nil
+		}
 		if m.ctx.ShowLogs {
 			m.focus = (m.focus + 3) % 4
 		} else {
@@ -577,41 +551,6 @@ func (m *App) handleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 			m.help.refreshView()
 		}
 
-	case "up":
-		if m.focus == focusPackages {
-			m.movePackageCursor(-1)
-		}
-
-	case "down":
-		if m.focus == focusPackages {
-			m.movePackageCursor(1)
-		}
-
-	case "u":
-		if m.focus == focusPackages {
-			return m.updatePackage(false, scopeSelected)
-		}
-
-	case "U":
-		if m.focus == focusPackages {
-			return m.updatePackage(false, scopeAll)
-		}
-
-	case "a":
-		if m.focus == focusPackages {
-			return m.updatePackage(true, scopeSelected)
-		}
-
-	case "A":
-		if m.focus == focusPackages {
-			return m.updatePackage(true, scopeAll)
-		}
-
-	case "v":
-		if m.focus == focusPackages {
-			m.openVersionPicker()
-		}
-
 	case "r":
 		if !m.ctx.Restoring {
 			return m.restore(scopeSelected)
@@ -625,34 +564,8 @@ func (m *App) handleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 	case "ctrl+r":
 		m.requestReload(reloadRequestedMsg{reason: "manual reload"})
 
-	case "n":
-		if m.focus == focusPackages || m.focus == focusDetail {
-			return m.openReleaseNotes()
-		}
-
-	case "t":
-		if m.focus == focusPackages {
-			return m.openDepTree()
-		}
-
 	case "T":
 		return m.openTransitiveDepTree()
-
-	case "o":
-		if m.focus == focusPackages {
-			m.cyclePackageSort()
-		}
-
-	case "O":
-		if m.focus == focusPackages {
-			m.reversePackageSort()
-		}
-
-	case "d":
-		if m.canMutate() && m.focus == focusPackages && m.packages.cursor < len(m.packages.rows) {
-			m.confirmRemove = newConfirmRemove(m, m.packages.rows[m.packages.cursor].ref.Name)
-			m.ctx.StatusLine = ""
-		}
 
 	case "/":
 		return m.openSearch()
@@ -666,10 +579,8 @@ func (m *App) handleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 		m.relayout()
 		return nil
 
-	case "enter":
-		if m.focus == focusProjects {
-			m.focus = focusPackages
-		}
+	default:
+		return m.focusedComponent().HandleKey(msg)
 	}
 	return nil
 }
@@ -711,9 +622,8 @@ func (m *App) rowByName(name string) *packageRow {
 	return nil
 }
 
-func (m *App) View() bubble_tea.View {
-	v := bubble_tea.NewView("")
-	v.AltScreen = true
+func (m *App) Render() ui.Frame {
+	v := ui.NewFrame("")
 
 	if m.ctx.Width == 0 {
 		v.SetContent("Initializing...")
@@ -729,61 +639,19 @@ func (m *App) View() bubble_tea.View {
 	}
 
 	footer := m.renderFooter()
-	footerH := lipgloss.Height(footer)
+	footerH := style.Height(footer)
 
-	// Overlay views — render in the space above the footer.
-	var overlay string
-	var overlayRegions []mouseRegion
-	for _, o := range m.overlays() {
-		if o.IsActive() {
-			overlay = o.Render()
-			if provider, ok := o.(interface{ MouseRegions() []mouseRegion }); ok {
-				overlayRegions = provider.MouseRegions()
-			}
-			break
+	m.host.Reconcile(m.componentNodes(footer, footerH))
+	v.SetContent(m.host.Draw(m.ctx.Width, m.ctx.Height))
+	if o := m.activeOverlay(); o != nil {
+		var regions []mouseRegion
+		if provider, ok := o.(interface{ MouseRegions() []mouseRegion }); ok {
+			regions = provider.MouseRegions()
 		}
+		m.bindMouse(&v, mouseLayout{modal: true, regions: regions})
+	} else {
+		left, mid, right := m.panelWidths()
+		m.bindMouse(&v, m.mainMouseLayout(left, mid, right))
 	}
-
-	if overlay != "" {
-		// Overlay renderers use overlayHeight() to fit above the footer.
-		// Safety trim in case the overlay output still exceeds the space.
-		overlayLines := strings.Split(overlay, "\n")
-		maxLines := max(0, m.ctx.Height-footerH)
-		if len(overlayLines) > maxLines {
-			overlayLines = overlayLines[:maxLines]
-		}
-		trimmed := strings.Join(overlayLines, "\n")
-		v.SetContent(trimmed + "\n" + footer)
-		m.bindMouse(&v, mouseLayout{modal: true, regions: overlayRegions})
-		return v
-	}
-
-	leftW, midW, rightW := m.panelWidths()
-
-	left := m.renderProjectPanel(leftW)
-	mid := m.renderPackagePanel(midW)
-	right := m.renderDetailPanel(rightW)
-
-	body := lipgloss.JoinHorizontal(lipgloss.Top, left, mid, right)
-
-	parts := []string{body}
-	if m.ctx.ShowLogs {
-		parts = append(parts, m.renderLogPanel())
-	}
-
-	// Safety trim: ensure body + log never exceed the space above the footer.
-	// alignTextVertical does NOT truncate, so panels can render taller than
-	// Height if content overflows. Clamp here using the actual measured
-	// footer height — the same pattern that makes overlays work.
-	joined := lipgloss.JoinVertical(lipgloss.Left, parts...)
-	bodyLines := strings.Split(joined, "\n")
-	maxBodyLines := max(0, m.ctx.Height-footerH)
-	if len(bodyLines) > maxBodyLines {
-		bodyLines = bodyLines[:maxBodyLines]
-	}
-	content := strings.Join(bodyLines, "\n") + "\n" + footer
-
-	v.SetContent(content)
-	m.bindMouse(&v, m.mainMouseLayout(leftW, midW, rightW))
 	return v
 }

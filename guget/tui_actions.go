@@ -6,10 +6,10 @@ import (
 	"os/exec"
 	"strings"
 
-	bubble_tea "charm.land/bubbletea/v2"
+	ui "github.com/nulifyer/guget/internal/ui"
 )
 
-func (m *App) updatePackage(useStable bool, scope actionScope) bubble_tea.Cmd {
+func (m *App) updatePackage(useStable bool, scope actionScope) ui.Effect {
 	if !m.canMutate() || m.packages.cursor < 0 || m.packages.cursor >= len(m.packages.rows) {
 		return nil
 	}
@@ -101,11 +101,11 @@ func (m *App) isPropsProject(p *ParsedProject) bool {
 	return false
 }
 
-func (m *App) applyVersion(pkgName, version string, targetProject *ParsedProject) bubble_tea.Cmd {
+func (m *App) applyVersion(pkgName, version string, targetProject *ParsedProject) ui.Effect {
 	return m.applyVersionWithSelection(pkgName, version, targetProject, nil)
 }
 
-func (m *App) applyVersionWithSelection(pkgName, version string, targetProject *ParsedProject, selection *reloadSelection) bubble_tea.Cmd {
+func (m *App) applyVersionWithSelection(pkgName, version string, targetProject *ParsedProject, selection *reloadSelection) ui.Effect {
 	projects := m.ctx.ParsedProjects
 	if targetProject != nil {
 		projects = []*ParsedProject{targetProject}
@@ -117,7 +117,7 @@ func (m *App) applyVersionWithSelection(pkgName, version string, targetProject *
 	return m.startMutation("update", pkgName, version, targets, mutationOptions{skipLocked: targetProject == nil}, selection)
 }
 
-func (m *App) restore(scope actionScope) bubble_tea.Cmd {
+func (m *App) restore(scope actionScope) ui.Effect {
 	m.ctx.Restoring = true
 	if scope == scopeSelected {
 		sel := m.selectedProject()
@@ -129,8 +129,8 @@ func (m *App) restore(scope actionScope) bubble_tea.Cmd {
 	return runDotnetRestore(m.lifecycle, m.ctx.ParsedProjects)
 }
 
-func runDotnetRestore(ctx context.Context, projects []*ParsedProject) bubble_tea.Cmd {
-	return func() bubble_tea.Msg {
+func runDotnetRestore(ctx context.Context, projects []*ParsedProject) ui.Effect {
+	return func() ui.Event {
 		var lastErr error
 		for _, p := range projects {
 			if p.FilePath == "" {
@@ -150,7 +150,7 @@ func runDotnetRestore(ctx context.Context, projects []*ParsedProject) bubble_tea
 	}
 }
 
-func (m *App) removePackage(pkgName string) bubble_tea.Cmd {
+func (m *App) removePackage(pkgName string) ui.Effect {
 	selected := m.selectedProject()
 	projects := m.ctx.ParsedProjects
 	if selected != nil {

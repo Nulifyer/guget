@@ -3,8 +3,8 @@ package main
 import (
 	"strings"
 
-	bubble_tea "charm.land/bubbletea/v2"
-	"github.com/charmbracelet/x/ansi"
+	ui "github.com/nulifyer/guget/internal/ui"
+	ansi "github.com/nulifyer/guget/internal/ui/text"
 )
 
 const (
@@ -51,8 +51,8 @@ func linkMouseRegions(content string) []mouseRegion {
 				linkURL := url
 				regions = append(regions, mouseRegion{
 					rect: mouseRect{x: x, y: y, w: w, h: 1},
-					click: func(bubble_tea.MouseMsg) bubble_tea.Cmd {
-						return func() bubble_tea.Msg { return openURLRequestedMsg{url: linkURL} }
+					click: func(ui.MouseEvent) ui.Effect {
+						return func() ui.Event { return openURLRequestedMsg{url: linkURL} }
 					},
 				})
 			}
