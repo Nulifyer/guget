@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
-	xterm "golang.org/x/term"
 )
 
 // Exercise the real raw-mode event loop in a separate controlling PTY. Python's
@@ -49,7 +48,7 @@ func TestRuntimeNativePTYLifecycle(t *testing.T) {
 }
 
 type nativePTYProbe struct {
-	before                  *xterm.State
+	before                  *unix.Termios
 	width, height           int
 	rawActive, disconnected bool
 	resized                 chan struct{}
@@ -60,6 +59,39 @@ type nativePTYProbe struct {
 }
 
 type nativePTYTick struct{}
+
+func TestNativeTerminalModeComparisonRejectsPolicyChanges(t *testing.T) {
+	before := unix.Termios{Iflag: unix.ICRNL, Oflag: unix.OPOST, Cflag: unix.CS8, Lflag: unix.ECHO | unix.ICANON | unix.ISIG}
+	if !nativeTerminalModeRestored(&before, &before) {
+		t.Fatal("identical terminal modes must compare equal")
+	}
+	changes := map[string]func(*unix.Termios){
+		"input flags":     func(mode *unix.Termios) { mode.Iflag ^= unix.ICRNL },
+		"output flags":    func(mode *unix.Termios) { mode.Oflag ^= unix.OPOST },
+		"control flags":   func(mode *unix.Termios) { mode.Cflag ^= unix.CS8 },
+		"echo":            func(mode *unix.Termios) { mode.Lflag ^= unix.ECHO },
+		"canonical input": func(mode *unix.Termios) { mode.Lflag ^= unix.ICANON },
+		"signals":         func(mode *unix.Termios) { mode.Lflag ^= unix.ISIG },
+		"input speed":     func(mode *unix.Termios) { mode.Ispeed++ },
+		"output speed":    func(mode *unix.Termios) { mode.Ospeed++ },
+	}
+	for name, change := range changes {
+		t.Run(name, func(t *testing.T) {
+			after := before
+			change(&after)
+			if nativeTerminalModeRestored(&before, &after) {
+				t.Fatal("changed terminal policy was accepted")
+			}
+		})
+	}
+	for index := range before.Cc {
+		after := before
+		after.Cc[index]++
+		if nativeTerminalModeRestored(&before, &after) {
+			t.Fatalf("changed control character %d was accepted", index)
+		}
+	}
+}
 
 func (p *nativePTYProbe) Connect() Effect {
 	if p.flood {
@@ -85,7 +117,7 @@ func (p *nativePTYProbe) HandleEvent(event Event) Effect {
 	return nil
 }
 func (p *nativePTYProbe) Render() Frame {
-	state, err := xterm.GetState(int(os.Stdin.Fd()))
+	state, err := readNativeTerminalMode(int(os.Stdin.Fd()))
 	p.rawActive = p.rawActive || err == nil && !reflect.DeepEqual(p.before, state)
 	if p.width == 100 && p.height == 30 {
 		p.resizedOnce.Do(func() { close(p.resized) })
@@ -123,7 +155,7 @@ func TestRuntimeNativePTYChild(t *testing.T) {
 		}
 		t.Fatal(message)
 	}
-	before, err := xterm.GetState(int(os.Stdin.Fd()))
+	before, err := readNativeTerminalMode(int(os.Stdin.Fd()))
 	if err != nil {
 		fail("%v", err)
 	}
@@ -156,11 +188,11 @@ func TestRuntimeNativePTYChild(t *testing.T) {
 	if err := runtime.Run(); err != nil {
 		fail("%v", err)
 	}
-	after, err := xterm.GetState(int(os.Stdin.Fd()))
+	after, err := readNativeTerminalMode(int(os.Stdin.Fd()))
 	if err != nil {
 		fail("%v", err)
 	}
-	if !reflect.DeepEqual(before, after) {
+	if !nativeTerminalModeRestored(before, after) {
 		fail("terminal mode was not restored: before=%#v after=%#v", before, after)
 	}
 	finalInputFlags, inputErr := unix.FcntlInt(os.Stdin.Fd(), unix.F_GETFL, 0)
