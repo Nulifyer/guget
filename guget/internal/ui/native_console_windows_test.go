@@ -275,6 +275,16 @@ func runNativeConsoleChild(t *testing.T, scenario string) {
 		component.statusDir = os.Getenv("GUGET_CONPTY_STATUS_DIR")
 	}
 	r := NewRuntime(ctx, component)
+	if scenario == "output-backpressure-cancel" {
+		// Acknowledge the runtime's cancellation channel independently of the
+		// thread requesting it and any ensuing native console cleanup.
+		go func() {
+			<-r.Context().Done()
+			if err := writeNativeStatus(component.statusDir, "CANCEL-REQUESTED"); err != nil {
+				_ = os.WriteFile(filepath.Join(component.statusDir, "failure"), []byte(err.Error()), 0o600)
+			}
+		}()
+	}
 	if component.statusDir != "" {
 		controlDone := make(chan struct{})
 		defer func() { cancel(); <-controlDone }()
@@ -297,9 +307,6 @@ func runNativeConsoleChild(t *testing.T, scenario string) {
 					}
 					if err := os.Remove(filepath.Join(component.statusDir, "request-cancel")); err == nil {
 						cancel()
-						if err := writeNativeStatus(component.statusDir, "CANCEL-REQUESTED"); err != nil {
-							_ = os.WriteFile(filepath.Join(component.statusDir, "failure"), []byte(err.Error()), 0o600)
-						}
 					}
 				}
 			}
