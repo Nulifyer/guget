@@ -1,0 +1,239 @@
+name: Verification
+
+on:
+  workflow_call:
+    inputs:
+      release-version:
+        description: Release tag to verify, or empty for a development build
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    name: Go and setup (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+      DOTNET_NOLOGO: "1"
+    defaults:
+      run:
+        shell: bash
+        working-directory: guget
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: guget/go.mod
+          cache-dependency-path: guget/go.sum
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v6.0.0
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Verify modules
+        run: go mod verify
+
+      - name: Check formatting
+        run: |
+          files=$(gofmt -l .)
+          if [ -n "$files" ]; then
+            printf 'Go files need formatting:\n%s\n' "$files"
+            exit 1
+          fi
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test -timeout=10m ./...
+
+      - name: Race test
+        run: go test -race -timeout=10m ./...
+
+      - name: Offline SDK restore integration
+        run: go test -tags=integration -run '^TestCLIRecognizesSuccessfulButIncompleteRestoreGraph$' -timeout=5m ./...
+
+      - name: Verify embedded version
+        env:
+          RELEASE_VERSION: ${{ inputs.release-version }}
+        run: |
+          version="${RELEASE_VERSION#v}"
+          version="${version:-dev}"
+          binary="$RUNNER_TEMP/guget-version-check"
+          if [ "$RUNNER_OS" = Windows ]; then binary="$binary.exe"; fi
+          go build -ldflags "-X main.version=$version" -o "$binary" .
+          test "$("$binary" version)" = "guget $version"
+
+      - name: Smoke test shell source installation
+        if: runner.os != 'Windows'
+        env:
+          GUGET_INSTALL: ${{ runner.temp }}/guget-shell-install
+        run: |
+          export PATH="$GUGET_INSTALL:$PATH"
+          ../.scripts/build-install.sh
+          "$GUGET_INSTALL/guget" version
+
+      - name: Parse PowerShell scripts
+        shell: pwsh
+        run: |
+          Get-ChildItem ../.scripts/*.ps1 | ForEach-Object {
+            $tokens = $null
+            $parseErrors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$parseErrors)
+            if ($parseErrors.Count) {
+              $parseErrors | ForEach-Object { Write-Error $_ }
+              throw "PowerShell syntax check failed: $($_.FullName)"
+            }
+          }
+
+      - name: Smoke test PowerShell source installation
+        shell: pwsh
+        env:
+          GUGET_INSTALL: ${{ runner.temp }}/guget-source-install
+        run: |
+          & ../.scripts/build-install.ps1
+          if ($LASTEXITCODE -ne 0) { throw "Source installation failed" }
+          $binaryName = if ($IsWindows) { "guget.exe" } else { "guget" }
+          $binary = Join-Path $env:GUGET_INSTALL $binaryName
+          if (-not (Test-Path -LiteralPath $binary -PathType Leaf)) { throw "Installed binary missing" }
+          $actual = & $binary version
+          if ($LASTEXITCODE -ne 0 -or $actual -notmatch '^guget ') { throw "Installed binary did not run: $actual" }
+          if (Get-ChildItem ../guget-build* -ErrorAction SilentlyContinue) { throw "Build artifact was not removed" }
+
+      - name: Verify Windows PowerShell 5.1 setup
+        if: runner.os == 'Windows'
+        shell: powershell
+        env:
+          GUGET_INSTALL: ${{ runner.temp }}/guget-windows-powershell-install
+        run: |
+          if ($PSVersionTable.PSVersion.Major -ne 5) { throw "Expected Windows PowerShell 5.1" }
+          Get-ChildItem ../.scripts/*.ps1 | ForEach-Object {
+            $tokens = $null
+            $parseErrors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$parseErrors)
+            if ($parseErrors.Count) {
+              $parseErrors | ForEach-Object { Write-Error $_ }
+              throw "Windows PowerShell syntax check failed: $($_.FullName)"
+            }
+          }
+          & ../.scripts/build-install.ps1
+          if ($LASTEXITCODE -ne 0) { throw "Windows PowerShell source installation failed" }
+          $binary = Join-Path $env:GUGET_INSTALL "guget.exe"
+          if (-not (Test-Path -LiteralPath $binary -PathType Leaf)) { throw "Installed binary missing" }
+          $actual = & $binary version
+          if ($LASTEXITCODE -ne 0 -or $actual -notmatch '^guget ') { throw "Installed binary did not run: $actual" }
+          if (Get-ChildItem ../guget-build* -ErrorAction SilentlyContinue) { throw "Build artifact was not removed" }
+
+  vscode:
+    name: Extension (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+        working-directory: vscode-guget
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+
+      - name: Set up Node
+        uses: actions/setup-node@v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: vscode-guget/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type-check supported VS Code APIs
+        run: npm run typecheck
+
+      - name: Test extension lifecycle and binary discovery
+        run: npm test
+
+      - name: Audit dependencies
+        run: npm audit --audit-level=moderate
+
+      - name: Package VSIX
+        run: npm run package -- --out "$RUNNER_TEMP/guget-verification.vsix"
+
+      - name: Inspect packaged files
+        env:
+          VSIX_PATH: ${{ runner.temp }}/guget-verification.vsix
+        run: |
+          python - <<'PY'
+          import os, zipfile
+          with zipfile.ZipFile(os.environ["VSIX_PATH"]) as package:
+              names = set(package.namelist())
+          assert "extension/dist/extension.js" in names, "Bundled extension missing"
+          assert "extension/package.json" in names, "Extension manifest missing"
+          forbidden = ("extension/src/", "extension/test/", "extension/node_modules/")
+          assert not any(name.startswith(forbidden) for name in names), "Development files leaked into VSIX"
+          PY
+
+  vscode-host:
+    name: VS Code host (${{ matrix.version }})
+    strategy:
+      fail-fast: false
+      matrix:
+        version: ["1.85.0", latest]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+        working-directory: vscode-guget
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+
+      - name: Set up Node
+        uses: actions/setup-node@v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: vscode-guget/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Download VS Code
+        env:
+          VSCODE_VERSION: ${{ matrix.version }}
+        run: |
+          destination="$RUNNER_TEMP/vscode-$VSCODE_VERSION"
+          mkdir -p "$destination"
+          curl --fail --location --retry 3 "https://update.code.visualstudio.com/$VSCODE_VERSION/linux-x64/stable" -o "$destination/vscode.tar.gz"
+          tar -xzf "$destination/vscode.tar.gz" -C "$destination"
+          echo "VSCODE_EXECUTABLE_PATH=$destination/VSCode-linux-x64/bin/code" >> "$GITHUB_ENV"
+
+      - name: Verify extension in a real VS Code host
+        run: xvfb-run -a npm run test:host
+
+  scripts:
+    name: Shell scripts
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+
+      - name: ShellCheck
+        run: shellcheck .scripts/*.sh

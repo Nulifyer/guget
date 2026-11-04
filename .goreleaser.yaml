@@ -37,8 +37,9 @@ changelog:
   format: "{{ .SHA }} {{ .Message }}{{ if .Logins }} ({{ .Logins | englishJoin }}){{ end }}"
   filters:
     exclude:
-      - "^docs:"
-      - "^test:"
-      - "^chore:"
+      - '^docs(\([^)]*\))?:'
+      - '^test(\([^)]*\))?:'
+      - '^chore(\([^)]*\))?:'
+      - '^ci(\([^)]*\))?:'
       - Merge pull request
       - Merge branch

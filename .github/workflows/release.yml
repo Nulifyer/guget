@@ -5,35 +5,60 @@ on:
     tags:
       - "v*"
 
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
   verify:
     name: Verify release
+    uses: ./.github/workflows/verify.yml
+    with:
+      release-version: ${{ github.ref_name }}
+
+  marketplace-preflight:
+    name: Verify Marketplace publication
+    needs: verify
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: guget
+    outputs:
+      changed: ${{ steps.changes.outputs.changed }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7.0.1
-
-      - name: Set up Go
-        uses: actions/setup-go@v7.0.0
         with:
-          go-version-file: guget/go.mod
-          cache-dependency-path: guget/go.sum
+          fetch-depth: 0
 
-      - name: Verify
+      - name: Check for extension changes
+        id: changes
         run: |
-          go mod verify
-          gofmt -w .
-          git diff --exit-code
-          go vet ./...
-          go test ./...
-          go test -race ./...
+          PREV_TAG=$(git describe --tags --abbrev=0 --match 'v[0-9]*' "${GITHUB_SHA}^" 2>/dev/null || true)
+          if [ -z "$PREV_TAG" ] || ! git diff --quiet "$PREV_TAG" HEAD -- vscode-guget/; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Node
+        if: steps.changes.outputs.changed == 'true'
+        uses: actions/setup-node@v7.1.0
+        with:
+          node-version: 22
+
+      - name: Verify Marketplace credentials
+        if: steps.changes.outputs.changed == 'true'
+        working-directory: vscode-guget
+        run: |
+          npm ci
+          npx @vscode/vsce verify-pat nulifyer -p "$VSCE_PAT"
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
 
   release:
     name: Release
-    needs: verify
+    needs: [verify, marketplace-preflight]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -66,7 +91,7 @@ jobs:
 
   vscode-extension:
     name: Publish VSCode Extension
-    needs: verify
+    needs: [verify, marketplace-preflight, release]
     runs-on: ubuntu-latest
 
     steps:
@@ -75,55 +100,46 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Check for vscode-guget changes
-        id: changes
-        run: |
-          PREV_TAG=$(git tag --sort=-v:refname | sed -n '2p')
-          if [ -z "$PREV_TAG" ]; then
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-          elif git diff --quiet "$PREV_TAG" HEAD -- vscode-guget/; then
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Set up Node
-        if: steps.changes.outputs.changed == 'true'
+        if: needs.marketplace-preflight.outputs.changed == 'true'
         uses: actions/setup-node@v7.1.0
         with:
           node-version: 22
 
       - name: Stamp version from tag
-        if: steps.changes.outputs.changed == 'true'
+        if: needs.marketplace-preflight.outputs.changed == 'true'
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           cd vscode-guget
-          npm pkg set version="$VERSION"
+          npm version "$VERSION" --no-git-tag-version --allow-same-version
 
       - name: Install dependencies
-        if: steps.changes.outputs.changed == 'true'
+        if: needs.marketplace-preflight.outputs.changed == 'true'
         run: |
           cd vscode-guget
           npm ci
 
       - name: Verify Marketplace PAT
-        if: steps.changes.outputs.changed == 'true'
+        if: needs.marketplace-preflight.outputs.changed == 'true'
         run: |
           cd vscode-guget
           npx @vscode/vsce verify-pat nulifyer -p "$VSCE_PAT"
         env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
 
-      - name: Build extension
-        if: steps.changes.outputs.changed == 'true'
+      - name: Verify and package release extension
+        if: needs.marketplace-preflight.outputs.changed == 'true'
         run: |
           cd vscode-guget
-          npm run build
+          npm run typecheck
+          npm test
+          npm audit --audit-level=moderate
+          npm run package -- --out "$RUNNER_TEMP/guget-release.vsix"
 
       - name: Publish to Marketplace
-        if: steps.changes.outputs.changed == 'true'
+        if: needs.marketplace-preflight.outputs.changed == 'true'
         run: |
           cd vscode-guget
-          npx @vscode/vsce publish -p "$VSCE_PAT"
+          npx @vscode/vsce publish --packagePath "$RUNNER_TEMP/guget-release.vsix" -p "$VSCE_PAT"
         env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
