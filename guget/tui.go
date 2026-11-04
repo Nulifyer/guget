@@ -72,6 +72,9 @@ type App struct {
 	logRefreshPending     bool
 	metadataCancel        context.CancelFunc
 	packageRefreshPending bool
+	lastWriteNotice       string
+	lastWriteNoticeUntil  time.Time
+	queuedRestore         []*ParsedProject
 }
 
 func (m *App) nextRequestID() int {
@@ -272,6 +275,7 @@ func (m *App) HandleEvent(msg ui.Event) ui.Effect {
 	case writeResultMsg:
 		m.ctx.Saving = false
 		if msg.err != nil {
+			m.queuedRestore = nil
 			msg.selection = nil
 			cmds = append(cmds, m.setStatus("▲ Save failed: "+msg.err.Error(), true))
 		} else {
@@ -281,7 +285,12 @@ func (m *App) HandleEvent(msg ui.Event) ui.Effect {
 			} else if msg.skipped > 0 {
 				status = fmt.Sprintf("%d skipped (version locked)", msg.skipped)
 			}
+			if msg.summary != "" {
+				status = msg.summary
+			}
 			cmds = append(cmds, m.setStatus(status, false))
+			m.lastWriteNotice = m.ctx.StatusLine
+			m.lastWriteNoticeUntil = time.Now().Add(5 * time.Second)
 		}
 		if msg.reload {
 			m.requestReload(reloadRequestedMsg{reason: "package files changed", selection: msg.selection, saveError: msg.err})
@@ -479,6 +488,12 @@ func (m *App) HandleEvent(msg ui.Event) ui.Effect {
 		}
 	}
 
+	if len(m.queuedRestore) > 0 && !m.ctx.Saving && !m.ctx.Reloading && !m.ctx.Restoring && !m.workspaceStale {
+		projects := m.queuedRestore
+		m.queuedRestore = nil
+		m.ctx.Restoring = true
+		cmds = append(cmds, runDotnetRestore(m.lifecycle, projects))
+	}
 	return ui.Batch(cmds...)
 }
 

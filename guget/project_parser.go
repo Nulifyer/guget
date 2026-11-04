@@ -605,6 +605,13 @@ func resolveImportPath(rawPath, referringFileDir, projectDir string) (string, er
 	resolved := rawPath
 	resolved = strings.ReplaceAll(resolved, "$(MSBuildThisFileDirectory)", referringFileDir+string(os.PathSeparator))
 	resolved = strings.ReplaceAll(resolved, "$(ProjectDir)", projectDir+string(os.PathSeparator))
+	if strings.Contains(resolved, "$(MSBuildProjectDirectory)") {
+		absoluteProjectDir, err := filepath.Abs(projectDir)
+		if err != nil {
+			return "", fmt.Errorf("resolve project directory: %w", err)
+		}
+		resolved = strings.ReplaceAll(resolved, "$(MSBuildProjectDirectory)", absoluteProjectDir)
+	}
 
 	if strings.Contains(resolved, "$(") {
 		return "", fmt.Errorf("unresolved MSBuild variable in import path: %s", rawPath)

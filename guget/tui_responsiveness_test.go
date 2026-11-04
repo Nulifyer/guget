@@ -387,6 +387,16 @@ func TestPackageSavesReuseFeedDiscovery(t *testing.T) {
 	}
 	m.ctx.Sources, m.ctx.NugetServices = snapshot.Sources, snapshot.NugetServices
 	m.sourceSignature = workspaceSourceSignature(snapshot.Sources, snapshot.SourceMapping)
+	resolveFeed := func() {
+		t.Helper()
+		if _, err := m.ctx.NugetServices[0].deferred.resolve(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if hits.Load() != 0 {
+		t.Fatal("workspace discovery waited for feed discovery")
+	}
+	resolveFeed()
 	if hits.Load() != 1 {
 		t.Fatalf("initial discovery requests=%d", hits.Load())
 	}
@@ -402,6 +412,7 @@ func TestPackageSavesReuseFeedDiscovery(t *testing.T) {
 	}
 	m.requestReload(reloadRequestedMsg{reason: "manual reload"})
 	finishActionReload(t, m, messages)
+	resolveFeed()
 	if hits.Load() != 2 {
 		t.Fatal("manual reload did not refresh feeds")
 	}
@@ -409,6 +420,7 @@ func TestPackageSavesReuseFeedDiscovery(t *testing.T) {
 	mustWriteFile(t, config, fmt.Sprintf(`<configuration><packageSources><clear/><add key="renamed" value="%s"/></packageSources></configuration>`, server.URL))
 	m.requestReload(reloadRequestedMsg{automatic: true, paths: []string{config}})
 	finishActionReload(t, m, messages)
+	resolveFeed()
 	if hits.Load() != 3 || m.ctx.NugetServices[0].SourceName() != "renamed" {
 		t.Fatal("NuGet.Config change retained old service")
 	}

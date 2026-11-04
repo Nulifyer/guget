@@ -23,7 +23,14 @@ func runDepTreeCmd(ctx context.Context, project *ParsedProject, requestID int) u
 }
 
 func newDepTreeOverlay(m *App, title string, loading bool) depTreeOverlay {
+	m.depTree.closeOverlay()
+	parent := m.lifecycle
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithCancel(parent)
 	dt := depTreeOverlay{
+		ctx: ctx, cancel: cancel,
 		sectionBase: sectionBase{app: m, basePct: 80, minWidth: 40, maxMargin: 4, active: true, requestID: m.nextRequestID()},
 		title:       title,
 		loading:     loading,
@@ -32,6 +39,15 @@ func newDepTreeOverlay(m *App, title string, loading bool) depTreeOverlay {
 	overlayW, overlayH := m.depTreeOverlaySize()
 	dt.vp = viewport.New(viewport.WithWidth(overlayW-6), viewport.WithHeight(max(1, overlayH-2)))
 	return dt
+}
+
+func (s *depTreeOverlay) closeOverlay() {
+	if s.cancel != nil {
+		s.cancel()
+	}
+	if s.app != nil {
+		s.sectionBase.closeOverlay()
+	}
 }
 
 func (m *App) openDepTree() ui.Effect {
@@ -66,7 +82,7 @@ func (m *App) openTransitiveDepTree() ui.Effect {
 	}
 	m.ctx.StatusLine = ""
 	m.depTree = newDepTreeOverlay(m, proj.FileName+" (transitive packages)", true)
-	return runDepTreeCmd(m.lifecycle, proj, m.depTree.requestID)
+	return runDepTreeCmd(m.depTree.ctx, proj, m.depTree.requestID)
 }
 
 func (m *App) depTreeOverlaySize() (w, h int) {

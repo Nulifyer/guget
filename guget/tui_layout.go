@@ -281,16 +281,22 @@ func (m *App) renderFooter() string {
 		statusStr = m.ctx.Spinner.View() + styleAccent.Render(" saving...")
 	} else if m.ctx.Reloading {
 		statusStr = m.ctx.Spinner.View() + styleAccent.Render(" reloading...")
-	} else if m.ctx.LoadingDone < m.ctx.LoadingTotal {
-		statusStr = m.ctx.Spinner.View() + styleAccent.Render(
-			fmt.Sprintf(" loading packages... (%d/%d)", m.ctx.LoadingDone, m.ctx.LoadingTotal),
-		)
 	} else if m.ctx.StatusLine != "" {
 		s := styleGreen
 		if m.ctx.StatusIsErr {
 			s = styleRed
 		}
 		statusStr = s.Render(m.ctx.StatusLine)
+		if m.ctx.LoadingDone < m.ctx.LoadingTotal {
+			progress := fmt.Sprintf(" (%d/%d packages loaded)", m.ctx.LoadingDone, m.ctx.LoadingTotal)
+			if style.Width(statusStr)+style.Width(progress) <= w {
+				statusStr += styleSubtle.Render(progress)
+			}
+		}
+	} else if m.ctx.LoadingDone < m.ctx.LoadingTotal {
+		statusStr = m.ctx.Spinner.View() + styleAccent.Render(
+			fmt.Sprintf(" loading packages... (%d/%d)", m.ctx.LoadingDone, m.ctx.LoadingTotal),
+		)
 	}
 
 	busy := m.ctx.Restoring || m.ctx.Saving || m.ctx.Reloading || m.ctx.LoadingDone < m.ctx.LoadingTotal

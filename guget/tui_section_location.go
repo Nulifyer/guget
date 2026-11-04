@@ -19,6 +19,11 @@ func (m *App) addPackageToProject(pkgName, version string, project *ParsedProjec
 func (m *App) openLocationPickerOrAdd(pkgName, version string, project *ParsedProject) ui.Effect {
 	// Props files: add directly, no picker needed.
 	if strings.HasSuffix(strings.ToLower(project.FilePath), ".props") {
+		for _, consumer := range m.ctx.ParsedProjects {
+			if central := projectCPMTarget(consumer); central != "" && snapshotOwnerKey(central) == snapshotOwnerKey(project.FilePath) {
+				return m.setStatus("Select a project to add a centrally managed package", true)
+			}
+		}
 		return m.addPackageToProject(pkgName, version, project)
 	}
 	// Only one target (the project itself): add directly.
@@ -31,11 +36,20 @@ func (m *App) openLocationPickerOrAdd(pkgName, version string, project *ParsedPr
 }
 
 func newLocationPicker(m *App, pkgName, version string, project *ParsedProject) locationPicker {
+	targets := project.AddTargets
+	if projectCPMTarget(project) != "" {
+		targets = nil
+		for _, target := range project.AddTargets {
+			if target.Kind == AddTargetCPM {
+				targets = append(targets, target)
+			}
+		}
+	}
 	return locationPicker{
 		sectionBase:   sectionBase{app: m, baseWidth: 80, minWidth: 60, maxMargin: 4, active: true, requestID: m.nextRequestID()},
 		pkgName:       pkgName,
 		version:       version,
-		targets:       project.AddTargets,
+		targets:       targets,
 		targetProject: project,
 	}
 }

@@ -108,7 +108,9 @@ func (m *App) bindMouse(v *ui.Frame, layout mouseLayout) {
 	v.MouseMode = ui.MouseModeCellMotion
 	v.OnMouse = func(event ui.MouseEvent) ui.Effect {
 		input := mouseInputMsg{event: event, layout: layout}
-		return func() ui.Event { return input }
+		// The runtime dispatches this callback on the event loop. Apply the
+		// input before the next key; only its resulting work is asynchronous.
+		return m.HandleEvent(input)
 	}
 }
 

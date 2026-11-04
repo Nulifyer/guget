@@ -285,8 +285,8 @@ func TestDetectSources_WithMapping(t *testing.T) {
 	if !m.IsConfigured() {
 		t.Fatal("expected mapping to be configured")
 	}
-	if len(m.Entries) != 4 {
-		t.Fatalf("expected 4 mapping entries, got %d: %v", len(m.Entries), m.Entries)
+	if len(m.Entries) != 3 {
+		t.Fatalf("expected 3 mapping entries, got %d: %v", len(m.Entries), m.Entries)
 	}
 
 	nugetPatterns := m.Entries["nuget.org"]
@@ -299,9 +299,8 @@ func TestDetectSources_WithMapping(t *testing.T) {
 		t.Fatalf("expected 2 dotnet-public patterns, got %v", dpPatterns)
 	}
 
-	d9Patterns := m.Entries["dotnet9"]
-	if len(d9Patterns) != 1 || d9Patterns[0] != "microsoft.extensions.*" {
-		t.Fatalf("expected dotnet9 patterns [microsoft.extensions.*], got %v", d9Patterns)
+	if _, mapped := m.Entries["dotnet9"]; mapped {
+		t.Fatal("stable fixture packages must not be routed to the preview feed")
 	}
 
 	ghPatterns := m.Entries["github-nulifyer"]
@@ -335,7 +334,7 @@ func TestDetectSources_MappingFiltersByPattern(t *testing.T) {
 	}
 
 	assertMappedSources("Serilog", []string{"nuget.org"})
-	assertMappedSources("Microsoft.Extensions.Logging", []string{"dotnet9"})
+	assertMappedSources("Microsoft.Extensions.Logging", []string{"dotnet-public"})
 	assertMappedSources("System.Text.Json", []string{"dotnet-public"})
 	assertMappedSources("Microsoft.CodeAnalysis", []string{"dotnet-public"})
 	assertMappedSources("Guget.TestPackage", []string{"github-nulifyer"})

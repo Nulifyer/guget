@@ -206,3 +206,43 @@ func TestMutationRefusesEvaluatedOwnerOutsideDeclaredScope(t *testing.T) {
 		}
 	}
 }
+
+func TestCPMAddRejectsExplicitVersionLocationsWithoutWriting(t *testing.T) {
+	root := t.TempDir()
+	central := filepath.Join(root, "Directory.Packages.props")
+	mustWriteFile(t, central, `<Project><PropertyGroup><ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally></PropertyGroup></Project>`)
+	path := writeCLIProject(t, root, "App", `<Project />`)
+	props := filepath.Join(root, "Shared.props")
+	mustWriteFile(t, props, `<Project />`)
+	project, err := ParseCsproj(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, location := range []AddTarget{{Kind: AddTargetProject, FilePath: path}, {Kind: AddTargetBuildProps, FilePath: props}} {
+		beforeProject, _ := os.ReadFile(path)
+		beforeCentral, _ := os.ReadFile(central)
+		beforeProps, _ := os.ReadFile(props)
+		_, _, _, err := planPackageMutation("add", "Example", "1.0.0", []mutationTarget{{project: project, addTarget: &location}}, mutationOptions{})
+		if err == nil || !strings.Contains(err.Error(), "uses central package management; choose "+central) {
+			t.Fatalf("unsafe explicit add: %v", err)
+		}
+		for name, before := range map[string][]byte{path: beforeProject, central: beforeCentral, props: beforeProps} {
+			after, _ := os.ReadFile(name)
+			if string(after) != string(before) {
+				t.Fatalf("refused add changed %s", name)
+			}
+		}
+	}
+	location := AddTarget{Kind: AddTargetCPM, FilePath: central}
+	plan, _, _, err := planPackageMutation("add", "Example", "1.0.0", []mutationTarget{{project: project, addTarget: &location}}, mutationOptions{})
+	if err != nil || plan.Len() != 2 {
+		t.Fatalf("central retry: files=%d, err=%v", plan.Len(), err)
+	}
+	if _, err := plan.Apply(); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(path)
+	if !strings.Contains(string(data), `PackageReference Include="Example" />`) {
+		t.Fatalf("expected versionless reference: %s", data)
+	}
+}

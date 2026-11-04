@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-  <Import Project="$(ProjectDir)\imported.props" />
+  <Import Project="$(MSBuildThisFileDirectory)imported.props" />
 
   <PropertyGroup>
     <TargetFramework>net8.0</TargetFramework>

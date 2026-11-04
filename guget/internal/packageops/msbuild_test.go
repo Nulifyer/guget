@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 type fakeRunner func(context.Context, string, ...string) ([]byte, error)
@@ -63,6 +65,39 @@ func TestMSBuildInspectorPropagatesCancellation(t *testing.T) {
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("error = %v", err)
 	}
+}
+
+func TestMSBuildInspectorIncludesImportedPackageWithEvaluatedOwner(t *testing.T) {
+	if _, err := exec.LookPath("dotnet"); err != nil {
+		t.Skip("dotnet SDK required for imported ownership")
+	}
+	root := t.TempDir()
+	project := filepath.Join(root, "App.csproj")
+	owner := filepath.Join(root, "Imported.props")
+	for path, data := range map[string]string{
+		project: `<Project Sdk="Microsoft.NET.Sdk"><Import Project="$(MSBuildProjectDirectory)/Imported.props"/><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup></Project>`,
+		owner:   `<Project><ItemGroup><PackageReference Include="Polly" Version="8.5.2"/></ItemGroup></Project>`,
+	} {
+		if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	snapshot, err := (MSBuildInspector{}).InspectProject(ctx, project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, use := range snapshot.PackageUses {
+		if use.PackageID != "Polly" {
+			continue
+		}
+		if use.ReferenceOwner != owner || use.VersionOwner != owner || use.EvaluatedExpression != "8.5.2" || !use.Edit.Supported {
+			t.Fatalf("imported package ownership = %+v", use)
+		}
+		return
+	}
+	t.Fatalf("imported Polly reference is missing: %+v", snapshot.PackageUses)
 }
 
 func TestEvaluatedOwnershipRefusesSourceMetadataOverrides(t *testing.T) {

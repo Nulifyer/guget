@@ -111,11 +111,43 @@ func TestWorkspaceWatchRegistryConcurrentUpdates(t *testing.T) {
 				registry.setPaths([]string{"App.csproj"})
 				registry.acknowledge(map[string]watchedFileState{"App.csproj": {Size: 1}})
 				registry.inputPaths()
+				registry.changes(nil, map[string]watchedFileState{"App.csproj": {Size: 1}})
 				registry.isAcknowledged("App.csproj", watchedFileState{Size: 1}, true)
 			}
 		}()
 	}
 	wg.Wait()
+}
+
+func TestWorkspaceWatchNewInputsUseLoadedRevision(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "NuGet.Config")
+	mustWriteFile(t, path, `<configuration/>`)
+	loaded, exists, err := readWatchedFileState(path)
+	if err != nil || !exists {
+		t.Fatalf("read loaded input: exists=%v err=%v", exists, err)
+	}
+	registry := &workspaceWatchInputs{}
+	registry.setPaths([]string{path}, map[string]watchedFileState{path: loaded})
+	firstScan := map[string]watchedFileState{path: loaded}
+	if got := registry.changes(nil, firstScan); len(got) != 0 {
+		t.Fatalf("unchanged newly loaded input triggered reload: %v", got)
+	}
+	mustWriteFile(t, path, `<configuration><packageSources/></configuration>`)
+	edited, exists, err := readWatchedFileState(path)
+	if err != nil || !exists {
+		t.Fatalf("read edited input: exists=%v err=%v", exists, err)
+	}
+	for _, prev := range []map[string]watchedFileState{nil, firstScan} {
+		if got := registry.changes(prev, map[string]watchedFileState{path: edited}); !slices.Equal(got, []string{path}) {
+			t.Fatalf("edit after loading was hidden: %v", got)
+		}
+	}
+	if got := registry.changes(firstScan, nil); !slices.Equal(got, []string{path}) {
+		t.Fatalf("deleted loaded input was hidden: %v", got)
+	}
+	if got := registry.changes(nil, map[string]watchedFileState{"new.props": loaded}); !slices.Equal(got, []string{"new.props"}) {
+		t.Fatalf("new workspace file was hidden: %v", got)
+	}
 }
 
 func TestReloadQueueMergesPathsRefreshAndDiagnostics(t *testing.T) {

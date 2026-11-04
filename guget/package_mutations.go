@@ -19,9 +19,10 @@ type mutationTarget struct {
 }
 
 type mutationOptions struct {
-	ctx             context.Context
-	skipLocked      bool
-	removeInherited bool
+	ctx               context.Context
+	skipLocked        bool
+	removeInherited   bool
+	allowDeclaredEdit bool // TUI only, after validating the loaded input revisions
 }
 
 func buildMutationPlan(verb, packageID, version string, projects []*ParsedProject) (editplan.Plan, []planRow, error) {
@@ -55,7 +56,7 @@ func planPackageMutation(verb, packageID, version string, targets []mutationTarg
 	}
 	for _, target := range targets {
 		project := target.project
-		if project.RequiresEvaluation {
+		if project.RequiresEvaluation && !((verb == "update" || verb == "remove") && options.allowDeclaredEdit && canEditLiteralDeclaration(project, packageID)) {
 			ctx := options.ctx
 			if ctx == nil {
 				ctx = context.Background()
@@ -85,6 +86,9 @@ func planPackageMutation(verb, packageID, version string, targets []mutationTarg
 				location = *target.addTarget
 			} else if central := projectCPMTarget(project); central != "" {
 				location = AddTarget{Kind: AddTargetCPM, FilePath: central}
+			}
+			if central := projectCPMTarget(project); central != "" && location.Kind != AddTargetCPM {
+				return editplan.Plan{}, nil, skipped, fmt.Errorf("%s uses central package management; choose %s as the add location", project.FileName, central)
 			}
 			if !supportedMutationOwner(location.FilePath) {
 				return editplan.Plan{}, nil, skipped, fmt.Errorf("unsupported add target %s; choose a project or .props file", location.FilePath)

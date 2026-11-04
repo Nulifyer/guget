@@ -99,7 +99,7 @@ func (m *App) startMutation(verb, packageID, version string, targets []mutationT
 		if len(result.Unrecovered) > 0 {
 			err = fmt.Errorf("%w; inspect unrecovered files before retrying: %s", err, strings.Join(result.Unrecovered, ", "))
 		}
-		completion := writeResultMsg{err: err, written: len(result.Changed), skipped: skipped, reload: len(result.Changed) > 0, selection: selection}
+		completion := writeResultMsg{err: err, summary: mutationSummary(verb, packageID, version, len(result.Changed), skipped), written: len(result.Changed), skipped: skipped, reload: len(result.Changed) > 0, selection: selection}
 		if err != nil || len(result.Changed) == 0 {
 			return completion
 		}
@@ -111,6 +111,33 @@ func (m *App) startMutation(verb, packageID, version string, targets []mutationT
 		completion.reload = false
 		return mutationReconciledMsg{writeResultMsg: completion, generation: generation, snapshot: snapshot, revisions: revisions}
 	}
+}
+
+func mutationSummary(verb, packageID, version string, written, skipped int) string {
+	if written == 0 {
+		if skipped > 0 {
+			return fmt.Sprintf("%s unchanged (%d locked)", packageID, skipped)
+		}
+		return packageID + " unchanged"
+	}
+	var summary string
+	switch verb {
+	case "update":
+		summary = fmt.Sprintf("Updated %s to %s", packageID, version)
+	case "add":
+		summary = fmt.Sprintf("Added %s %s", packageID, version)
+	case "remove":
+		summary = "Removed " + packageID
+	}
+	files := "files"
+	if written == 1 {
+		files = "file"
+	}
+	summary = fmt.Sprintf("✓ %s (%d %s", summary, written, files)
+	if skipped > 0 {
+		summary += fmt.Sprintf(", %d locked", skipped)
+	}
+	return summary + ")"
 }
 
 func (m *App) handleMutationReconciled(msg mutationReconciledMsg) ui.Effect {

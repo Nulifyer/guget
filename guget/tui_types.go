@@ -122,6 +122,7 @@ type workspaceReloadedMsg struct {
 
 type writeResultMsg struct {
 	err       error
+	summary   string
 	written   int // number of changed files in the completed transaction
 	skipped   int // number of locked refs skipped during scope=all update
 	reload    bool
@@ -243,6 +244,8 @@ type logPanel struct {
 // --- Overlay state types ---
 
 type depTreeOverlay struct {
+	ctx            context.Context
+	cancel         context.CancelFunc
 	sectionBase         // basePct=80, minWidth=40, maxMargin=4
 	loading        bool // true while dotnet list is running (T key)
 	content        string

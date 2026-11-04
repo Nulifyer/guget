@@ -105,13 +105,26 @@ func TestBindMouseCapturesRenderedLayout(t *testing.T) {
 		t.Fatal("OnMouse was not installed")
 	}
 
-	cmd := view.OnMouse(ui.MouseClick(ui.Mouse{X: 31, Y: 4, Button: ui.MouseLeft}))
-	got, ok := cmd().(mouseInputMsg)
-	if !ok {
-		t.Fatalf("mouse command returned %T, want mouseInputMsg", cmd())
+	app.packages.scroll = 0
+	view.OnMouse(ui.MouseClick(ui.Mouse{X: 31, Y: 4, Button: ui.MouseLeft}))
+	if app.focus != focusPackages || app.packages.cursor != 3 {
+		t.Fatalf("click did not use rendered scroll: focus=%v cursor=%d", app.focus, app.packages.cursor)
 	}
-	if got.layout.packageScroll != wantLayout.packageScroll || got.layout.packages != wantLayout.packages {
-		t.Fatalf("captured layout = %+v, want %+v", got.layout, wantLayout)
+}
+
+func TestMouseClickPrecedesFollowingKey(t *testing.T) {
+	initTheme("auto-dark", false)
+	app, _, _ := newActionTestApp(t, "")
+	app.mouse = true
+	app.focus = focusPackages
+	view := app.Render()
+	view.OnMouse(ui.MouseClick(ui.Mouse{X: 5, Y: 3, Button: ui.MouseLeft}))
+	if app.focus != focusProjects {
+		t.Fatal("project click was deferred past subsequent input")
+	}
+	app.HandleEvent(ui.KeyPress(ui.Key{Code: ui.KeyEnter}))
+	if app.focus != focusPackages {
+		t.Fatal("project click overtook the following Enter key")
 	}
 }
 
@@ -227,6 +240,30 @@ func TestLinkMouseRegionsOpenRenderedURL(t *testing.T) {
 	msg, ok := cmd().(openURLRequestedMsg)
 	if !ok || msg.url != "https://example.com/package" {
 		t.Fatalf("link click = %#v, want openURLRequestedMsg", msg)
+	}
+}
+
+func TestLinkMouseRegionsIgnoreStandaloneResets(t *testing.T) {
+	initTheme("auto-dark", false)
+	content := osc8Close + "left panel " + osc8Close +
+		hyperlink("https://example.com/package", "package") +
+		"\n" + osc8Close + hyperlink("https://example.com/version", "1.0.0")
+	regions := linkMouseRegions(content)
+	if len(regions) != 2 {
+		t.Fatalf("standalone resets hid links: got %d regions", len(regions))
+	}
+	for i, want := range []struct {
+		x, y int
+		url  string
+	}{{11, 0, "https://example.com/package"}, {0, 1, "https://example.com/version"}} {
+		region := regions[i]
+		if region.rect.x != want.x || region.rect.y != want.y {
+			t.Fatalf("link %d hit target = %+v", i, region.rect)
+		}
+		msg := region.click(ui.MouseClick(ui.Mouse{Button: ui.MouseLeft}))().(openURLRequestedMsg)
+		if msg.url != want.url {
+			t.Fatalf("link %d opens %q, want %q", i, msg.url, want.url)
+		}
 	}
 }
 

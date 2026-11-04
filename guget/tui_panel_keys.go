@@ -26,6 +26,8 @@ func (p *projectPanel) HandleKey(k ui.KeyEvent) ui.Effect {
 		p.app.moveProjectCursor(1)
 	case "enter":
 		p.app.focus = focusPackages
+	case "u", "U", "a", "A":
+		return p.app.setStatus("Press Enter to focus packages, then select a package to update", false)
 	}
 	return nil
 }

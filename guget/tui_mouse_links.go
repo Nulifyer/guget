@@ -31,6 +31,13 @@ func linkMouseRegions(content string) []mouseRegion {
 		}
 		urlEnd := urlStart + relURLEnd
 		textStart := urlEnd + len(osc8End)
+		url := content[urlStart:urlEnd]
+		// Clipped panels emit standalone OSC 8 resets. They do not start a
+		// link and must not consume the next real link while seeking a close.
+		if url == "" {
+			offset = textStart
+			continue
+		}
 		relClose := strings.Index(content[textStart:], osc8Close)
 		if relClose < 0 {
 			break
@@ -41,7 +48,6 @@ func linkMouseRegions(content string) []mouseRegion {
 			end += len(" ↗")
 		}
 
-		url := content[urlStart:urlEnd]
 		if url != "" {
 			lineStart := strings.LastIndex(content[:start], "\n") + 1
 			x := ansi.StringWidth(content[lineStart:start])

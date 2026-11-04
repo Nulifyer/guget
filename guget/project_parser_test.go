@@ -75,6 +75,60 @@ func TestResolveImportPath_UnresolvedVariable(t *testing.T) {
 	}
 }
 
+func TestResolveImportPath_DistinguishesProjectAndReferringDirectories(t *testing.T) {
+	root := t.TempDir()
+	projectDir := filepath.Join(root, "App")
+	propsDir := filepath.Join(root, "Shared")
+	for _, tc := range []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{"project directory", "$(MSBuildProjectDirectory)/imported.props", filepath.Join(projectDir, "imported.props")},
+		{"project directory backslashes", `$(MSBuildProjectDirectory)\imported.props`, filepath.Join(projectDir, "imported.props")},
+		{"project directory has no trailing separator", "$(MSBuildProjectDirectory).props", projectDir + ".props"},
+		{"referring directory", "$(MSBuildThisFileDirectory)imported.props", filepath.Join(propsDir, "imported.props")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := resolveImportPath(tc.raw, propsDir, projectDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tc.want {
+				t.Fatalf("resolved import = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestParseCsproj_NestedImportsRetainProjectDirectory(t *testing.T) {
+	root := t.TempDir()
+	projectDir := filepath.Join(root, "App")
+	propsDir := filepath.Join(root, "Shared")
+	for _, dir := range []string{projectDir, filepath.Join(propsDir, "Nested")} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	projectPath := filepath.Join(projectDir, "App.csproj")
+	projectOwner := filepath.Join(projectDir, "project-only.props")
+	referringOwner := filepath.Join(propsDir, "Nested", "nested.props")
+	mustWriteFile(t, projectPath, `<Project><Import Project="$(MSBuildProjectDirectory)/../Shared/first.props" /></Project>`)
+	mustWriteFile(t, filepath.Join(propsDir, "first.props"), `<Project><Import Project="$(MSBuildProjectDirectory)/project-only.props" /><Import Project="$(MSBuildThisFileDirectory)Nested/nested.props" /></Project>`)
+	mustWriteFile(t, projectOwner, `<Project><ItemGroup><PackageReference Include="Project.Owned" Version="1.0.0" /></ItemGroup></Project>`)
+	mustWriteFile(t, referringOwner, `<Project><ItemGroup><PackageReference Include="Referring.Owned" Version="2.0.0" /></ItemGroup></Project>`)
+	project, err := ParseCsproj(projectPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, owner := range map[string]string{"Project.Owned": projectOwner, "Referring.Owned": referringOwner} {
+		assertContains(t, pkgNameSet(project), name)
+		if got := project.SourceFileForPackage(name); got != owner {
+			t.Fatalf("%s source = %q, want %q", name, got, owner)
+		}
+	}
+}
+
 func TestParseCsproj_ImplicitBuildProps(t *testing.T) {
 	td := testDataDir(t)
 	// ProjectA has only Newtonsoft.Json in its csproj.

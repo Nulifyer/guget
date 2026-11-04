@@ -48,13 +48,16 @@ func loadWorkspaceReusingServices(ctx context.Context, projectDir string, previo
 	if err != nil {
 		return nil, err
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if previous != nil && slices.Equal(previous.Sources, snapshot.Sources) {
 		snapshot.NugetServices = previous.NugetServices
 		return snapshot, nil
 	}
 
 	for _, src := range snapshot.Sources {
-		svc, err := NewNugetServiceContext(ctx, src)
+		svc, err := newDeferredNugetService(src, snapshot.Sources)
 		if err != nil {
 			logWarn("Failed to initialise NuGet source [%s]: %v", src.Name, err)
 			continue
@@ -65,8 +68,8 @@ func loadWorkspaceReusingServices(ctx context.Context, projectDir string, previo
 		logWarn("No metadata-capable NuGet sources are available; package inspection remains available")
 	}
 	DeduplicateADOUpstreams(snapshot.NugetServices)
-	// Source discovery can await network responses. Recheck the disk view after
-	// that wait instead of publishing a snapshot invalidated while it was pending.
+	// Validate the local disk view before publication. Sources initialize only
+	// when metadata/search work needs them, after projects are already visible.
 	if err := validateWorkspaceSnapshot(snapshot); err != nil {
 		return nil, err
 	}

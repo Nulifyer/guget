@@ -324,6 +324,7 @@ type adoUpstreamSource struct {
 
 // NugetService talks to a single NuGet v3 feed.
 type NugetService struct {
+	deferred       *deferredNugetService
 	sourceURL      string
 	sourceName     string
 	client         *http.Client
@@ -373,6 +374,12 @@ func DeduplicateADOUpstreams(services []*NugetService) {
 // PackageURL returns a browsable web URL for the given package, or "" if unknown.
 // projectURL is the package's ProjectURL metadata (may be empty).
 func (s *NugetService) PackageURL(id, version, projectURL string) string {
+	if s.deferred != nil {
+		if ready := s.deferred.ready(); ready != nil {
+			return ready.PackageURL(id, version, projectURL)
+		}
+		return inferPackageURL(s.sourceURL, id, version, projectURL)
+	}
 	if s.detailTemplate != "" {
 		u := strings.NewReplacer("{id}", id, "{version}", version).Replace(s.detailTemplate)
 		// Strip query params like ?_src=template
@@ -693,6 +700,13 @@ func (s *NugetService) Search(query string, take int) ([]SearchResult, error) {
 }
 
 func (s *NugetService) SearchContext(ctx context.Context, query string, take int) ([]SearchResult, error) {
+	if s.deferred != nil {
+		ready, err := s.deferred.resolve(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return ready.SearchContext(ctx, query, take)
+	}
 	if s.adoSearchBase != "" {
 		return s.searchADOContext(ctx, query, take)
 	}
@@ -919,6 +933,13 @@ func (s *NugetService) SearchExact(packageID string) (*PackageInfo, error) {
 }
 
 func (s *NugetService) SearchExactContext(ctx context.Context, packageID string) (*PackageInfo, error) {
+	if s.deferred != nil {
+		ready, err := s.deferred.resolve(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return ready.SearchExactContext(ctx, packageID)
+	}
 	searchStart := time.Now()
 	logDebug("[%s] looking up %q via registration index", s.sourceName, packageID)
 	regURL := fmt.Sprintf("%s%s/index.json", s.regBase, strings.ToLower(packageID))
@@ -1421,6 +1442,13 @@ func (s *NugetService) FetchNuspec(packageID, version string) string {
 }
 
 func (s *NugetService) FetchNuspecContext(ctx context.Context, packageID, version string) string {
+	if s.deferred != nil {
+		ready, err := s.deferred.resolve(ctx)
+		if err != nil {
+			return ""
+		}
+		return ready.FetchNuspecContext(ctx, packageID, version)
+	}
 	if s.flatBase == "" {
 		logTrace("FetchNuspec: [%s] no PackageBaseAddress available", s.sourceName)
 		return ""

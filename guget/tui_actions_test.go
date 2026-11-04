@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -389,6 +390,11 @@ func TestBulkUpdateSkipsLockedProjects(t *testing.T) {
 	}
 	m.HandleEvent(msg)
 	finishActionReload(t, m, messages)
+	for _, detail := range []string{"Updated A to 2.0.0", "1 file", "1 locked"} {
+		if !strings.Contains(m.ctx.StatusLine, detail) {
+			t.Fatalf("bulk result omits %q: %q", detail, m.ctx.StatusLine)
+		}
+	}
 	data, _ := os.ReadFile(locked)
 	if !strings.Contains(string(data), `Version="[1.0.0]"`) {
 		t.Fatal("changed pinned project")
@@ -471,5 +477,255 @@ func actionWriteResult(t *testing.T, msg ui.Event) writeResultMsg {
 	default:
 		t.Fatalf("unexpected write completion %T", msg)
 		return writeResultMsg{}
+	}
+}
+
+func TestTUIActionsIgnoreUnrelatedEvaluationTargets(t *testing.T) {
+	for _, verb := range []string{"update", "remove"} {
+		t.Run(verb, func(t *testing.T) {
+			m, _, path := newActionTestApp(t, "")
+			// This project cannot be evaluated. It has no declared reference to A,
+			// so it must not participate in the TUI action or delay its completion.
+			m.ctx.ParsedProjects = append(m.ctx.ParsedProjects, &ParsedProject{
+				FileName: "Unrelated.csproj", FilePath: filepath.Join(filepath.Dir(path), "missing", "Unrelated.csproj"),
+				RequiresEvaluation: true, Packages: Set[PackageReference]{{Name: "Other", Version: ParseSemVer("1.0.0")}: {}},
+			})
+			m.projects.cursor = 0
+			m.rebuildPackageRows()
+			var cmd ui.Effect
+			if verb == "update" {
+				cmd = m.applyVersion("A", "2.0.0", nil)
+			} else {
+				cmd = m.removePackage("A")
+			}
+			if cmd == nil {
+				t.Fatal("action did not start")
+			}
+			msg := cmd()
+			result := actionWriteResult(t, msg)
+			if result.err != nil || result.written != 1 {
+				t.Fatalf("result=%+v", result)
+			}
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if verb == "update" && !strings.Contains(string(data), `Include="A" Version="2.0.0"`) {
+				t.Fatalf("update not written: %s", data)
+			}
+			if verb == "remove" && strings.Contains(string(data), `Include="A"`) {
+				t.Fatalf("reference not removed: %s", data)
+			}
+		})
+	}
+}
+
+func TestQuickUpdateExplainsUnavailableActions(t *testing.T) {
+	tests := []struct {
+		name    string
+		prepare func(*App)
+		want    string
+		isErr   bool
+	}{
+		{"saving", func(m *App) { m.ctx.Saving = true }, "Saving package changes", false},
+		{"reloading", func(m *App) { m.ctx.Reloading = true }, "Loading projects", false},
+		{"stale", func(m *App) { m.workspaceStale = true }, "Workspace is out of date", true},
+		{"empty", func(m *App) { m.packages.rows = nil }, "Select a package", false},
+		{"loading", func(m *App) { m.packages.rows[0].loading = true }, "Loading metadata for A", false},
+		{"error", func(m *App) { m.packages.rows[0].err = errors.New("feed unavailable") }, "feed unavailable", true},
+		{"no compatible version", func(m *App) {
+			m.packages.rows[0].info = &PackageInfo{Versions: []PackageVersion{{SemVer: ParseSemVer("9.0.0"), Frameworks: []TargetFramework{ParseTargetFramework("net9.0")}}}}
+		}, "No compatible stable version for A", true},
+		{"already current", func(m *App) {
+			m.packages.rows[0].info = &PackageInfo{Versions: []PackageVersion{{SemVer: ParseSemVer("1.0.0")}}}
+		}, "A is already at 1.0.0", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m, _, path := newActionTestApp(t, "")
+			before, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			tt.prepare(m)
+			if cmd := m.updatePackage(false, scopeSelected); cmd != nil {
+				t.Fatal("unavailable action scheduled work")
+			}
+			if !strings.Contains(m.ctx.StatusLine, tt.want) || m.ctx.StatusIsErr != tt.isErr {
+				t.Fatalf("status=%q error=%v", m.ctx.StatusLine, m.ctx.StatusIsErr)
+			}
+			after, err := os.ReadFile(path)
+			if err != nil || string(before) != string(after) {
+				t.Fatal("unavailable action changed the project")
+			}
+		})
+	}
+}
+
+func TestProjectFocusUpdateExplainsPackageFocus(t *testing.T) {
+	m, _, _ := newActionTestApp(t, "")
+	m.focus = focusProjects
+	if cmd := m.handleKey(ui.KeyPress(ui.Key{Code: 'u'})); cmd != nil || m.ctx.Saving {
+		t.Fatal("project focus started a package mutation")
+	}
+	if !strings.Contains(m.ctx.StatusLine, "Press Enter to focus packages") {
+		t.Fatalf("status=%q", m.ctx.StatusLine)
+	}
+	m.handleKey(ui.KeyPress(ui.Key{Code: ui.KeyEnter}))
+	if cmd := m.handleKey(ui.KeyPress(ui.Key{Code: 'u'})); cmd == nil || !m.ctx.Saving {
+		t.Fatal("Enter then u did not start the selected package update")
+	}
+}
+
+func TestActionResultsRemainVisibleDuringMetadataLoading(t *testing.T) {
+	m, _, _ := newActionTestApp(t, "")
+	m.ctx.LoadingTotal = 10
+	m.ctx.LoadingDone = 2
+	for _, result := range []writeResultMsg{{err: errors.New("ownership evaluation failed")}, {written: 1}} {
+		m.ctx.Saving = true
+		m.HandleEvent(result)
+		footer := m.renderFooter()
+		if !strings.Contains(footer, m.ctx.StatusLine) || !strings.Contains(footer, "2/10 packages loaded") {
+			t.Fatalf("action result or progress hidden: %q", footer)
+		}
+	}
+}
+
+func TestMutationFeedbackIdentifiesWrittenPackageAfterSelectionMoves(t *testing.T) {
+	for _, verb := range []string{"update", "add", "remove", "unchanged"} {
+		t.Run(verb, func(t *testing.T) {
+			m, _, path := newActionTestApp(t, `<Project><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup><ItemGroup><PackageReference Include="A" Version="1.0.0"/><PackageReference Include="B" Version="1.0.0"/></ItemGroup></Project>`)
+			var cmd ui.Effect
+			var want, selected string
+			switch verb {
+			case "update":
+				cmd, want, selected = m.updatePackage(false, scopeSelected), "Updated A to 2.0.0", "B"
+			case "add":
+				cmd, want, selected = m.addPackageToProject("C", "1.0.0", m.selectedProject()), "Added C 1.0.0", "C"
+			case "remove":
+				cmd, want, selected = m.removePackage("A"), "Removed A", "B"
+			case "unchanged":
+				cmd, want, selected = m.applyVersion("A", "1.0.0", m.selectedProject()), "A unchanged", "A"
+			}
+			if cmd == nil {
+				t.Fatal("mutation did not start")
+			}
+			executeActionCmd(t, m, cmd)
+			if !strings.Contains(m.ctx.StatusLine, want) || selectedActionPackage(m) != selected {
+				t.Fatalf("status=%q selected=%q", m.ctx.StatusLine, selectedActionPackage(m))
+			}
+			parsed, err := ParseCsproj(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			actual := map[string]string{}
+			for ref := range parsed.Packages {
+				actual[ref.Name] = ref.Version.String()
+			}
+			if actual["B"] != "1.0.0" || (verb == "update" && actual["A"] != "2.0.0") || (verb == "remove" && actual["A"] != "") || (verb == "add" && actual["C"] != "1.0.0") || (verb == "unchanged" && actual["A"] != "1.0.0") {
+				t.Fatalf("feedback disagrees with disk: %v", actual)
+			}
+		})
+	}
+}
+
+func TestRecentMutationFeedbackSurvivesWatcherReloads(t *testing.T) {
+	for _, queued := range []bool{false, true} {
+		t.Run(fmt.Sprintf("queued=%v", queued), func(t *testing.T) {
+			m, messages, path := newActionTestApp(t, `<Project><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup><ItemGroup><PackageReference Include="A" Version="1.0.0"/><PackageReference Include="B" Version="1.0.0"/></ItemGroup></Project>`)
+			executeActionCmd(t, m, m.updatePackage(false, scopeSelected))
+			notice := m.ctx.StatusLine
+			if !strings.Contains(notice, "Updated A to 2.0.0") {
+				t.Fatalf("missing actual completion: %q", notice)
+			}
+			m.requestReload(reloadRequestedMsg{reason: "external files changed", automatic: true, paths: []string{path}})
+			if queued {
+				// A second watcher notification arrives before the first reload's
+				// completion is dispatched. It must not erase the recent action.
+				m.requestReload(reloadRequestedMsg{reason: "external files changed", automatic: true, paths: []string{path}})
+			}
+			finishActionReload(t, m, messages)
+			if m.ctx.StatusLine != notice || m.ctx.StatusIsErr {
+				t.Fatalf("watcher erased completion %q: %q", notice, m.ctx.StatusLine)
+			}
+		})
+	}
+}
+
+func TestMutationFeedbackSurvivesOwnFullReconciliation(t *testing.T) {
+	m, messages, _ := newActionTestApp(t, `<Project><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup><ItemGroup><PackageReference Include="A" Version="1.0.0"/><PackageReference Include="B" Version="1.0.0"/></ItemGroup></Project>`)
+	cmd := m.updatePackage(false, scopeSelected)
+	if cmd == nil {
+		t.Fatal("mutation did not start")
+	}
+	// Use the actual write completion but request the full reconciliation path,
+	// as occurs when a local delta cannot safely be published.
+	result := actionWriteResult(t, cmd())
+	if result.err != nil || result.written != 1 {
+		t.Fatalf("result=%+v", result)
+	}
+	result.reload = true
+	m.HandleEvent(result)
+	notice := m.ctx.StatusLine
+	finishActionReload(t, m, messages)
+	if !strings.Contains(notice, "Updated A to 2.0.0") || m.ctx.StatusLine != notice || selectedActionPackage(m) != "B" {
+		t.Fatalf("notice=%q final=%q selected=%q", notice, m.ctx.StatusLine, selectedActionPackage(m))
+	}
+}
+
+func TestReloadDoesNotResurrectObsoleteMutationFeedback(t *testing.T) {
+	for _, reason := range []string{"manual", "newer status", "expired"} {
+		t.Run(reason, func(t *testing.T) {
+			m, messages, path := newActionTestApp(t, `<Project><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup><ItemGroup><PackageReference Include="A" Version="1.0.0"/><PackageReference Include="B" Version="1.0.0"/></ItemGroup></Project>`)
+			executeActionCmd(t, m, m.updatePackage(false, scopeSelected))
+			notice := m.ctx.StatusLine
+			req := reloadRequestedMsg{reason: "external files changed", automatic: true, paths: []string{path}}
+			switch reason {
+			case "manual":
+				req = reloadRequestedMsg{reason: "manual reload"}
+			case "newer status":
+				m.setStatus("Newer action result", false)
+			case "expired":
+				m.lastWriteNoticeUntil = time.Now().Add(-time.Second)
+			}
+			m.requestReload(req)
+			finishActionReload(t, m, messages)
+			if m.ctx.StatusLine == notice || strings.Contains(m.ctx.StatusLine, "Updated A") {
+				t.Fatalf("obsolete mutation notice returned after %s: %q", reason, m.ctx.StatusLine)
+			}
+		})
+	}
+}
+
+func TestAutomaticReloadWithoutWriteNoticeShowsCompletion(t *testing.T) {
+	m, messages, path := newActionTestApp(t, `<Project><ItemGroup><PackageReference Include="A" Version="1.0.0"/></ItemGroup></Project>`)
+	// Empty initial status must not be mistaken for a recent empty notice,
+	// even if its deadline happens to be in the future.
+	m.lastWriteNoticeUntil = time.Now().Add(time.Minute)
+	m.requestReload(reloadRequestedMsg{automatic: true, paths: []string{path}})
+	finishActionReload(t, m, messages)
+	if !strings.Contains(m.ctx.StatusLine, "reloaded") || m.ctx.StatusIsErr {
+		t.Fatalf("reload completion was hidden: %q", m.ctx.StatusLine)
+	}
+}
+
+func TestRestoreWaitsForPendingPackageWrite(t *testing.T) {
+	m, _, path := newActionTestApp(t, "")
+	update := m.HandleEvent(ui.KeyPress(ui.Key{Code: 'u'}))
+	if update == nil || !m.ctx.Saving {
+		t.Fatal("update did not start")
+	}
+	if restore := m.HandleEvent(ui.KeyPress(ui.Key{Code: 'r'})); restore != nil || m.ctx.Restoring || len(m.queuedRestore) != 1 {
+		t.Fatal("restore ran before the package write")
+	}
+	if m.queuedRestore[0].FilePath != path {
+		t.Fatal("restore did not retain requested project")
+	}
+	// Navigation must not widen the already requested restore to All Projects.
+	m.projects.cursor = 0
+	next := m.HandleEvent(update())
+	data, _ := os.ReadFile(path)
+	if !strings.Contains(string(data), `Include="A" Version="2.0.0"`) || m.ctx.Saving || !m.ctx.Restoring || len(m.queuedRestore) != 0 || next == nil {
+		t.Fatal("restore did not follow the reconciled write")
 	}
 }

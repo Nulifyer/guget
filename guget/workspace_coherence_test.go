@@ -157,7 +157,7 @@ func TestWorkspaceSnapshotPublicationRejectsChangesAfterDiscovery(t *testing.T) 
 	}
 }
 
-func TestWorkspaceLoadingRejectsEditDuringBlockedSourceDiscovery(t *testing.T) {
+func TestDeferredSourceDiscoveryCannotMakeChangedWorkspaceCurrent(t *testing.T) {
 	root, owner := sharedCoherenceFixture(t)
 	entered := make(chan struct{})
 	release := make(chan struct{})
@@ -170,22 +170,24 @@ func TestWorkspaceLoadingRejectsEditDuringBlockedSourceDiscovery(t *testing.T) {
 	defer server.Close()
 	defer unblock.Do(func() { close(release) })
 	mustWriteFile(t, filepath.Join(root, "NuGet.Config"), `<configuration><packageSources><clear/><add key="test" value="`+server.URL+`"/></packageSources></configuration>`)
-	type outcome struct {
-		snapshot *workspaceSnapshot
-		err      error
+	snapshot, err := loadWorkspaceContext(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
 	}
-	done := make(chan outcome, 1)
+	done := make(chan error, 1)
 	go func() {
-		snapshot, err := loadWorkspaceContext(context.Background(), root)
-		done <- outcome{snapshot, err}
+		_, err := snapshot.NugetServices[0].deferred.resolve(context.Background())
+		done <- err
 	}()
 	<-entered
 	if err := UpdatePackageVersion(owner, "A", "2.0.0"); err != nil {
 		t.Fatal(err)
 	}
 	unblock.Do(func() { close(release) })
-	result := <-done
-	if result.err == nil || result.snapshot != nil {
-		t.Fatal("edit made during source discovery was published as a current snapshot")
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if err := validateWorkspaceSnapshot(snapshot); err == nil {
+		t.Fatal("completed source discovery made changed workspace declarations current")
 	}
 }

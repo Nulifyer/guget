@@ -60,9 +60,8 @@ func TestStaleModalFrameCannotApplyToAnotherOpening(t *testing.T) {
 	view := m.Render()
 	regions := m.confirmRemove.MouseRegions()
 	button := regions[len(regions)-1]
-	oldClick := view.OnMouse(ui.MouseClick(ui.Mouse{X: button.rect.x, Y: button.rect.y, Button: ui.MouseLeft}))
 	m.confirmRemove = newConfirmRemove(m, "Dapper")
-	if effect := m.HandleEvent(oldClick()); effect != nil || m.ctx.Saving {
+	if effect := view.OnMouse(ui.MouseClick(ui.Mouse{X: button.rect.x, Y: button.rect.y, Button: ui.MouseLeft})); effect != nil || m.ctx.Saving {
 		t.Fatal("stale modal frame applied a package operation")
 	}
 	if !m.confirmRemove.active || m.confirmRemove.pkgName != "Dapper" {

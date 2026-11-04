@@ -54,12 +54,12 @@ func TestRegressionCanceledMouseRemove(t *testing.T) {
 	view := m.Render()
 	regions := m.confirmRemove.MouseRegions()
 	button := regions[2]
-	queued := view.OnMouse(ui.MouseClick(ui.Mouse{X: button.rect.x, Y: button.rect.y, Button: ui.MouseLeft}))
+	event := ui.MouseClick(ui.Mouse{X: button.rect.x, Y: button.rect.y, Button: ui.MouseLeft})
 	m.HandleEvent(ui.KeyPress(ui.Key{Code: ui.KeyEscape}))
 	if m.confirmRemove.active {
 		t.Fatal("cancel did not close overlay")
 	}
-	cmd := m.HandleEvent(queued())
+	cmd := view.OnMouse(event)
 	if cmd != nil || m.ctx.Saving {
 		t.Fatalf("canceled confirmation accepted delayed mouse input: saving=%v", m.ctx.Saving)
 	}
@@ -70,7 +70,7 @@ func TestRegressionReopenedProjectPickerRejectsOldMouseRow(t *testing.T) {
 	m.projectPick = projectPicker{sectionBase: sectionBase{app: m, baseWidth: 80, minWidth: 60, maxMargin: 4, active: true, requestID: m.nextRequestID()}, items: []projectPickItem{{project: &ParsedProject{FileName: "One.csproj"}}, {project: &ParsedProject{FileName: "Two.csproj"}}}}
 	view := m.Render()
 	row := m.projectPick.MouseRegions()[2]
-	queued := view.OnMouse(ui.MouseClick(ui.Mouse{X: row.rect.x, Y: row.rect.y, Button: ui.MouseLeft}))
+	event := ui.MouseClick(ui.Mouse{X: row.rect.x, Y: row.rect.y, Button: ui.MouseLeft})
 	m.HandleEvent(ui.KeyPress(ui.Key{Code: ui.KeyEscape}))
 	m.projectPick = projectPicker{sectionBase: sectionBase{app: m, baseWidth: 80, minWidth: 60, maxMargin: 4, active: true, requestID: m.nextRequestID()}, items: []projectPickItem{{project: &ParsedProject{FileName: "Other.csproj"}}}}
 	defer func() {
@@ -78,7 +78,7 @@ func TestRegressionReopenedProjectPickerRejectsOldMouseRow(t *testing.T) {
 			t.Errorf("old mouse row panicked in reopened picker: %v", err)
 		}
 	}()
-	m.HandleEvent(queued())
+	view.OnMouse(event)
 	if m.projectPick.cursor != 0 || m.projectPick.items[0].selected {
 		t.Error("old mouse row changed reopened picker")
 	}
@@ -230,9 +230,9 @@ func TestMouseCommandFromBeforeResizeIsIgnored(t *testing.T) {
 	m.confirmRemove = newConfirmRemove(m, "A")
 	view := m.Render()
 	button := m.confirmRemove.MouseRegions()[2]
-	queued := view.OnMouse(ui.MouseClick(ui.Mouse{X: button.rect.x, Y: button.rect.y, Button: ui.MouseLeft}))
+	event := ui.MouseClick(ui.Mouse{X: button.rect.x, Y: button.rect.y, Button: ui.MouseLeft})
 	m.HandleEvent(ui.ResizeEvent{Width: 100, Height: 20})
-	cmd := m.HandleEvent(queued())
+	cmd := view.OnMouse(event)
 	if cmd != nil || m.ctx.Saving || !m.confirmRemove.active {
 		t.Fatal("pre-resize click accepted")
 	}
@@ -312,7 +312,7 @@ func TestDelayedSearchMouseRowKeepsResultIdentity(t *testing.T) {
 
 			view := m.Render()
 			row := m.search.MouseRegions()[3] // Close, input, first result, second result.
-			queued := view.OnMouse(ui.MouseClick(ui.Mouse{X: row.rect.x, Y: row.rect.y, Button: ui.MouseLeft}))
+			event := ui.MouseClick(ui.Mouse{X: row.rect.x, Y: row.rect.y, Button: ui.MouseLeft})
 			if test.changeQuery {
 				m.HandleEvent(ui.PasteEvent{Text: "Extra"})
 			}
@@ -320,7 +320,7 @@ func TestDelayedSearchMouseRowKeepsResultIdentity(t *testing.T) {
 				requestID: m.search.requestID, id: m.search.debounceID,
 				query: m.search.lastQuery, results: test.results,
 			})
-			cmd := m.HandleEvent(queued())
+			cmd := view.OnMouse(event)
 			if !test.wantSelected {
 				if cmd != nil || m.search.fetchingVersion {
 					t.Fatal("delayed mouse row selected a removed or changed search result")

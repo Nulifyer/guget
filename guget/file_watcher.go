@@ -31,16 +31,45 @@ type watchedFileState struct {
 type workspaceWatchInputs struct {
 	mu           sync.RWMutex
 	paths        []string
+	baselines    map[string]watchedFileState
 	acknowledged map[string]watchedFileState
 }
 
-func (w *workspaceWatchInputs) setPaths(paths []string) {
+func (w *workspaceWatchInputs) setPaths(paths []string, revisions ...map[string]watchedFileState) {
 	w.mu.Lock()
 	w.paths = append([]string(nil), paths...)
+	w.baselines = make(map[string]watchedFileState)
+	if len(revisions) > 0 {
+		for path, state := range revisions[0] {
+			w.baselines[path] = state
+		}
+	}
 	// A new authoritative snapshot replaces the revisions displayed previously.
 	// Keeping old acknowledgements could hide a later external revert.
 	w.acknowledged = nil
 	w.mu.Unlock()
+}
+
+func (w *workspaceWatchInputs) changes(prev, next map[string]watchedFileState) []string {
+	changed := diffWatchedWorkspaceFiles(prev, next)
+	if w == nil {
+		return changed
+	}
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	paths := changed[:0]
+	for _, path := range changed {
+		_, watched := prev[path]
+		state, exists := next[path]
+		baseline, loaded := w.baselines[path]
+		// Loading can discover external inputs after the watcher starts. Their
+		// already displayed revisions are not edits; later revisions still are.
+		if !watched && exists && loaded && state == baseline {
+			continue
+		}
+		paths = append(paths, path)
+	}
+	return paths
 }
 
 func (w *workspaceWatchInputs) inputPaths() []string {
@@ -233,7 +262,7 @@ func watchWorkspaceFiles(rootDir string, send func(ui.Event), registries ...*wor
 					}
 					continue
 				}
-				changed := diffWatchedWorkspaceFiles(prev, next)
+				changed := inputs.changes(prev, next)
 				prev = next
 				paths := batch.update(now, changed)
 				if len(paths) > 0 {

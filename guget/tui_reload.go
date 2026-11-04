@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	ui "github.com/nulifyer/guget/internal/ui"
 )
@@ -41,7 +42,7 @@ func (m *App) requestReload(req reloadRequestedMsg) {
 		}
 		m.pendingReload = req
 		m.hasPendingReload = true
-		if !m.ctx.Loading && !m.ctx.Saving {
+		if !m.ctx.Loading && !m.ctx.Saving && !m.keepWriteNotice(req) {
 			m.setStatus("Reload queued", false)
 		}
 		return
@@ -49,7 +50,11 @@ func (m *App) requestReload(req reloadRequestedMsg) {
 
 	m.ctx.Reloading = true
 	m.activeReload = req
+	keepNotice := m.keepWriteNotice(req)
 	m.closeReloadUnsafeOverlays()
+	if keepNotice {
+		m.ctx.StatusLine = m.lastWriteNotice
+	}
 
 	m.workspaceGeneration++
 	generation := m.workspaceGeneration
@@ -149,7 +154,7 @@ func (m *App) applyWorkspaceSnapshot(snapshot *workspaceSnapshot) {
 	}
 
 	if m.watchInputs != nil {
-		m.watchInputs.setPaths(workspaceInputPaths(m.projectDir, snapshot))
+		m.watchInputs.setPaths(workspaceInputPaths(m.projectDir, snapshot), snapshot.FileRevisions)
 	}
 	m.sourceInputRevisions = snapshot.InputRevisions
 	m.ctx.ParsedProjects = snapshot.ParsedProjects
@@ -252,6 +257,12 @@ func (m *App) startPackageFetch(names []string, initial bool) {
 	fetchPackageMetadataAsync(ctx, m.send, m.workspaceGeneration, m.ctx.NugetServices, m.ctx.SourceMapping, names)
 }
 
+// Keep a completed action visible while its disk changes reconcile in the background.
+func (m *App) keepWriteNotice(req reloadRequestedMsg) bool {
+	return (req.automatic || req.reason == "package files changed") && m.lastWriteNotice != "" &&
+		m.ctx.StatusLine == m.lastWriteNotice && time.Now().Before(m.lastWriteNoticeUntil)
+}
+
 func (m *App) finishReloadSuccess() {
 	m.ctx.Reloading = false
 	if m.activeReload.saveError != nil {
@@ -259,7 +270,7 @@ func (m *App) finishReloadSuccess() {
 		if m.hasPendingReload && m.pendingReload.automatic {
 			m.pendingReload.saveError = m.activeReload.saveError
 		}
-	} else {
+	} else if !m.keepWriteNotice(m.activeReload) {
 		m.setStatus("✓ "+reloadStatusText(m.activeReload), false)
 	}
 	m.maybeStartQueuedReload()
