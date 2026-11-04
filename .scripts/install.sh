@@ -92,6 +92,7 @@ if [ -z "$INSTALL_DIR" ]; then
   fi
 fi
 
+mkdir -p "$INSTALL_DIR"
 install -m 755 "$TMP/guget" "$INSTALL_DIR/guget"
 
 echo "Installed to $INSTALL_DIR/guget"
