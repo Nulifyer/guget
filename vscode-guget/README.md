@@ -2,105 +2,93 @@
 
 <img src="https://raw.githubusercontent.com/nulifyer/guget/main/vscode-guget/icon.png" alt="guget logo" width="128" height="128">
 
-# guget - NuGet Package Manager for VS Code
+# guget for VS Code
 
-Manage NuGet packages across .NET projects with an interactive TUI, right inside VS Code.
+**Manage NuGet packages in an interactive terminal UI inside your editor.**
 
-[![Visual Studio Marketplace](https://img.shields.io/visual-studio-marketplace/v/nulifyer.guget)](https://marketplace.visualstudio.com/items?itemName=nulifyer.guget)
-[![Installs](https://img.shields.io/visual-studio-marketplace/i/nulifyer.guget)](https://marketplace.visualstudio.com/items?itemName=nulifyer.guget)
-[![GitHub Release](https://img.shields.io/github/v/release/nulifyer/guget?label=CLI&logo=github&color=brightgreen)](https://github.com/nulifyer/guget/releases)
+[![CI](https://github.com/nulifyer/guget/actions/workflows/ci.yml/badge.svg?branch=main&event=push)](https://github.com/nulifyer/guget/actions/workflows/ci.yml)
+[![Visual Studio Marketplace](https://vsmarketplacebadges.dev/version-short/nulifyer.guget.svg)](https://marketplace.visualstudio.com/items?itemName=nulifyer.guget)
+[![Installs](https://vsmarketplacebadges.dev/installs-short/nulifyer.guget.svg)](https://marketplace.visualstudio.com/items?itemName=nulifyer.guget)
 
 </div>
 
-![Screenshot placeholder](https://raw.githubusercontent.com/nulifyer/guget/main/docs/screenshot.png)
+![Guget showing .NET projects and package details](https://raw.githubusercontent.com/nulifyer/guget/main/docs/screenshot.png)
+
+Browse packages across C#, F#, and VB projects without leaving your editor.
 
 ## Features
 
-| | Feature | Description |
-|:-:|---------|-------------|
-| 📁 | **Browse projects** | Scans recursively for `.csproj` / `.fsproj` / `.vbproj` files, with support for Central Package Management (`Directory.Build.props`) and imported `.props` files |
-| 🚀 | **Live version status** | Fetches latest versions from NuGet v3 API |
-| 🛡️ | **Vulnerability & deprecation tracking** | Surfaces CVE advisories and deprecated status per package version, with severity-coloured indicators. Packages from private/Azure feeds are automatically enriched with vulnerability data from nuget.org |
-| ⬆️ | **Update packages** | Bump to the latest compatible or latest stable version |
-| 📋 | **Version picker** | Choose any specific version with target-framework and vulnerability indicators |
-| 🌳 | **Dependency tree** | View declared and full transitive dependency trees |
-| ➕ | **Add packages** | Search NuGet and add new package references |
-| 🔄 | **Bulk operations** | Update a package across all projects at once |
-| 🔧 | **Restore** | Run `dotnet restore` without leaving the TUI |
-| 🌐 | **Multi-source** | Respects `NuGet.config` and global NuGet source configuration. Private feed packages are supplemented with metadata from nuget.org |
-| 🔗 | **Clickable hyperlinks** | Package names, advisory IDs, versions, and source URLs are clickable in terminals that support OSC 8 hyperlinks |
-| 🎨 | **Themes** | Built-in colour themes: `auto`, `dracula`, `nord`, `everforest`, `gruvbox` |
-| ↔️ | **Responsive layout** | Columns hide progressively on narrow terminals to keep the UI usable at any width |
+| | Feature | What you can do |
+| :-: | --- | --- |
+| 🧩 | Editor integration | Launch from project files, the command palette, or the status bar. |
+| 🗂️ | Multi-project view | Browse your workspace and update a package across projects. |
+| 📦 | Package management | Search, add, update, and remove NuGet references. |
+| ⬆️ | Version picker | Compare available versions and framework compatibility hints before choosing a release. |
+| 🛡️ | Vulnerability notices | See known vulnerabilities and deprecation notices when metadata is available. |
+| 🌐 | Public and private feeds | Use configured NuGet sources and Package Source Mapping. |
+| 🔗 | Shared versions | Work with Central Package Management and supported imported props files. |
+| 🌳 | Dependency trees | Inspect package dependencies and a project's full transitive graph. |
+| 📝 | Release notes | Browse GitHub releases and NuSpec notes. |
+| 🔄 | Restore | Run restore for a selected project or the workspace. |
+| 🖱️ | Keyboard and mouse | Navigate panels, select versions, open links, and use action buttons. |
+| 🎨 | Themes and layout | Match your terminal theme, resize panels, and sort package lists. |
 
-## Requirements
+## Get started
 
-- The [guget](https://github.com/nulifyer/guget) CLI binary
-- [.NET SDK](https://dotnet.microsoft.com/download) dotnet CLI
+1. Install the [.NET SDK](https://dotnet.microsoft.com/download).
+2. Install the [Guget CLI](https://github.com/nulifyer/guget/blob/main/docs/installation.md).
+3. Install this extension from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=nulifyer.guget).
+4. Open a folder containing `.csproj`, `.fsproj`, or `.vbproj` files.
+5. Open the command palette and run **Guget: Manage NuGet Packages**.
 
-## Installation
+Guget opens in an editor terminal tab. Give the tab at least 80 columns and
+12 rows. Press `?` for help or read the [TUI guide](https://github.com/nulifyer/guget/blob/main/docs/tui.md).
 
-1. Install this extension from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=nulifyer.guget)
-2. Install the guget CLI:
+## Open a project directory
 
-   **Linux / macOS:**
-   ```bash
-   curl -fsSL https://raw.githubusercontent.com/nulifyer/guget/main/.scripts/install.sh | bash
-   ```
+Right-click a project file in Explorer, or use its editor title button, and
+choose **Guget: Manage NuGet Packages**. This opens the project's directory,
+including other projects under that directory. Select an individual project
+inside Guget to narrow package actions.
 
-   **Windows (PowerShell):**
-   ```powershell
-   irm https://raw.githubusercontent.com/nulifyer/guget/main/.scripts/install.ps1 | iex
-   ```
+The status-bar **guget** item opens the workspace flow. In a multi-root
+workspace, choose the folder you want to manage.
 
-   Or download from the [Releases page](https://github.com/nulifyer/guget/releases).
+## Choose the executable
 
-## Usage
+Set `guget.binaryPath` to use a particular installed binary. Otherwise, the
+extension checks standard installation locations before searching PATH:
 
-**Command palette:**
+- Windows: `%LOCALAPPDATA%\Programs\guget\guget.exe`.
+- Linux and macOS: `/usr/local/bin/guget`, then `~/.local/bin/guget`.
 
-1. Open a folder containing `.csproj`, `.fsproj`, or `.vbproj` files
-2. Open the command palette (`Ctrl+Shift+P` / `Cmd+Shift+P`)
-3. Run **"Guget: Manage NuGet Packages"**
+If VS Code launches a different version from your terminal, set the absolute
+binary path explicitly. Restart VS Code after changing its inherited PATH.
 
-**Explorer context menu:**
+## Settings
 
-Right-click any `.csproj`, `.fsproj`, or `.vbproj` file in the explorer and select **"Guget: Manage NuGet Packages"** to open guget scoped to that project's directory.
+| Setting | Default | Purpose |
+| --- | --- | --- |
+| `guget.binaryPath` | `""` | Absolute executable path; empty uses standard locations, then PATH. |
+| `guget.verbosity` | `"warn"` | Logging level: `none`, `error`, `warn`, `info`, `debug`, or `trace`. |
+| `guget.theme` | `"auto"` | TUI color theme, such as `dracula`, `nord`, or `gruvbox`. |
+| `guget.sortField` | `"status"` | Initial sort: `status`, `name`, `source`, `current`, or `available`. |
+| `guget.sortDirection` | `"asc"` | Initial direction: `asc` or `desc`. |
+| `guget.additionalArgs` | `[]` | Extra TUI arguments, such as `["--no-mouse"]`. |
 
-**Editor title button:**
-
-When viewing a `.csproj`, `.fsproj`, or `.vbproj` file, click the guget icon in the editor title bar.
-
-**Status bar:**
-
-When a workspace contains .NET project files, a **guget** item appears in the status bar. Click it to launch guget.
-
-guget opens as a full editor tab with complete keyboard support.
-
-## Extension Settings
-
-| Setting | Default | Description |
-|---------|---------|-------------|
-| `guget.binaryPath` | `""` | Absolute path to the `guget` binary. Leave empty to auto-detect from PATH. |
-| `guget.verbosity` | `"warn"` | Log verbosity level: `none`, `error`, `warn`, `info`, `debug`, `trace` |
-| `guget.theme` | `"auto"` | Color theme passed to guget (`auto`, `dracula`, `nord`, `everforest`, `gruvbox`, etc.) |
-| `guget.sortField` | `"status"` | Initial sort field: `status`, `name`, `source`, `current`, `available` |
-| `guget.sortDirection` | `"asc"` | Initial sort direction: `asc`, `desc` |
-| `guget.additionalArgs` | `[]` | Additional CLI arguments to pass to guget |
-
-## Keybindings
+## Common actions
 
 | Key | Action |
-|-----|--------|
-| `Tab` / `Shift+Tab` | Cycle panel focus |
-| `↑` / `k` / `↓` / `j` | Navigate |
-| `u` / `U` | Update to latest compatible — this / all projects |
-| `a` / `A` | Update to latest stable — this / all projects |
-| `v` | Open version picker |
-| `r` / `R` | Run `dotnet restore` — selected / all projects |
-| `/` | Search and add a new package |
-| `d` | Remove package |
-| `t` / `T` | Dependency tree / transitive tree |
-| `l` | Toggle log panel |
-| `s` | Toggle sources panel |
-| `?` | Toggle help overlay |
-| `Esc` / `q` | Quit (main) / Close (overlay) |
+| --- | --- |
+| `Tab` / `Shift+Tab` | Move between panels. |
+| `v` | Choose a specific package version. |
+| `/` | Search for a package to add. |
+| `d` | Confirm removal of the selected package. |
+| `r` / `R` | Restore the selected project or all projects. |
+| `n` | Browse release notes. |
+| `t` / `T` | Browse package dependencies or the transitive dependency tree. |
+| `?` | Show keyboard help. |
+| `Ctrl+C` | Quit from any screen. |
+
+See the [TUI guide](https://github.com/nulifyer/guget/blob/main/docs/tui.md) for
+quick update keys, project scope, mouse controls, and themes.

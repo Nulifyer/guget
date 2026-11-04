@@ -4,349 +4,91 @@
 
 <img src="vscode-guget/icon.svg" alt="guget logo" width="128" height="128">
 
-![Go](https://img.shields.io/badge/Go-1.25%2B-00ADD8?style=flat&logo=go)
-[![Platform](https://img.shields.io/badge/Platform-Linux%20|%20macOS%20|%20Windows-orange.svg)]()
-[![GitHub Release](https://img.shields.io/github/v/release/nulifyer/guget?logo=github&color=brightgreen)](https://github.com/nulifyer/guget/releases)
-[![VS Code Extension](https://img.shields.io/visual-studio-marketplace/v/nulifyer.guget?label=VS%20Code&logo=visualstudiocode)](https://marketplace.visualstudio.com/items?itemName=nulifyer.guget)
+**Manage NuGet packages across your .NET projects, right from the terminal.**
 
-A terminal UI and scriptable CLI for managing NuGet packages across .NET projects.
-</div>
-
-## Overview
-
-`guget` lets you browse, update, and add NuGet packages across all `.csproj`, `.fsproj`, and `.vbproj` files in a directory — without leaving the terminal. It fetches live version data from your configured NuGet sources and shows you at a glance what's out of date.
-
-<div align="center">
-
-![Screenshot placeholder](docs/screenshot.png)
+[![CI](https://github.com/nulifyer/guget/actions/workflows/ci.yml/badge.svg?branch=main&event=push)](https://github.com/nulifyer/guget/actions/workflows/ci.yml)
+[![CLI release](https://img.shields.io/github/v/release/nulifyer/guget?label=CLI&logo=github&cacheSeconds=300)](https://github.com/nulifyer/guget/releases/latest)
+[![VS Code extension](https://vsmarketplacebadges.dev/version-short/nulifyer.guget.svg)](https://marketplace.visualstudio.com/items?itemName=nulifyer.guget)
+[![Go version](https://img.shields.io/github/go-mod/go-version/nulifyer/guget?filename=guget%2Fgo.mod&logo=go&cacheSeconds=300)](https://github.com/nulifyer/guget/blob/main/guget/go.mod)
+![Linux, macOS, Windows](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-orange)
 
 </div>
 
+![Guget showing projects, package versions, and package details](docs/screenshot.png)
 
+Browse your solution, compare package versions, and update dependencies without
+opening each project file. Use the interactive terminal UI for day-to-day work
+or the headless CLI for scripts and agents.
 
 ## Features
 
-| | Feature | Description |
-|:-:|---------|-------------|
-| 📁 | **Browse projects** | Scans recursively for `.csproj` / `.fsproj` / `.vbproj` files, with support for Central Package Management (`Directory.Build.props`) and imported `.props` files |
-| 🚀 | **Live version status** | Fetches latest versions from NuGet v3 API |
-| 🛡️ | **Vulnerability & deprecation tracking** | Surfaces CVE advisories and deprecated status per package version, with severity-coloured indicators in the list, detail panel, and version picker. Packages from private/Azure feeds are automatically enriched with vulnerability data from nuget.org |
-| ⬆️ | **Update packages** | Bump to the latest compatible or latest stable version |
-| 📋 | **Version picker** | Choose any specific version with target-framework and vulnerability indicators |
-| 🌳 | **Dependency tree** | `t` shows declared dependencies; `T` runs `dotnet list --include-transitive` for the full transitive tree with status icons |
-| ➕ | **Add packages** | Search NuGet and add new package references |
-| 🔄 | **Bulk operations** | Update a package across all projects at once |
-| 🔧 | **Restore** | Run `dotnet restore` without leaving the TUI |
-| 🌐 | **Multi-source** | Respects `NuGet.config` and global NuGet source configuration. Private feed packages are supplemented with metadata from nuget.org |
-| 🔗 | **Clickable hyperlinks** | Package names, advisory IDs, versions, and source URLs are clickable in terminals that support OSC 8 hyperlinks |
-| 🎨 | **Themes** | Built-in colour themes: `auto`, `dracula`, `nord`, `everforest`, `gruvbox`. Select with `--theme` / `-t` |
-| ↔️ | **Responsive layout** | Columns hide progressively on narrow terminals to keep the UI usable at any width |
-| 📜 | **Log panel** | Real-time internal logs, toggleable with `l` |
-| 🔌 | **Sources panel** | View configured NuGet sources, toggleable with `s` |
-| ❓ | **Help overlay** | Full keybinding reference, press `?` |
-| ⌨️ | **Headless CLI** | Inspect, plan, edit, and restore packages from scripts without starting the TUI |
+| | Feature | What you can do |
+| :-: | --- | --- |
+| 📦 | Package management | Search, add, update, and remove NuGet references. |
+| 🗂️ | Multi-project view | Browse C#, F#, and VB projects together and update a package across projects. |
+| ⬆️ | Version picker | Compare available versions, see framework compatibility hints, and choose a release. |
+| 🛡️ | Vulnerability notices | See known vulnerabilities and deprecation notices when metadata is available. |
+| 🌐 | Public and private feeds | Use configured NuGet sources and Package Source Mapping. |
+| 🔗 | Shared versions | Work with Central Package Management and supported imported props files. |
+| 🌳 | Dependency trees | Inspect package dependencies and a project's full transitive graph. |
+| 📝 | Release notes | Browse GitHub releases and NuSpec notes alongside your packages. |
+| 🔄 | Restore | Run restore for a selected project or the workspace. |
+| 🖱️ | Keyboard and mouse | Navigate panels, select versions, open links, and use visible action buttons. |
+| 🎨 | Themes and layout | Choose light or dark themes, resize panels, and sort package lists. |
+| ⌨️ | CLI for scripts and agents | Inspect JSON, preview scoped changes, and manage packages without the TUI. |
+| 🧩 | VS Code integration | Open Guget in an editor tab from project files, the command palette, or the status bar. |
 
+<a id="installation"></a>
 
+## Install
 
-## Requirements
+Install the [.NET SDK](https://dotnet.microsoft.com/download), then install Guget.
 
-To run:
-- The [guget](https://github.com/nulifyer/guget) CLI binary
-- [.NET SDK](https://dotnet.microsoft.com/download) dotnet CLI
-
-To build:
-- [Go](https://go.dev/) 1.26+
-- [.NET SDK](https://dotnet.microsoft.com/download) dotnet CLI
-
-
-
-## Installation
-
-**Linux / macOS**
-
-Installs to `/usr/local/bin` if writable, otherwise `~/.local/bin`. Override the install location with `GUGET_INSTALL=/your/path`.
+Linux and macOS:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/nulifyer/guget/main/.scripts/install.sh | bash
 ```
-```bash
-wget -qO- https://raw.githubusercontent.com/nulifyer/guget/main/.scripts/install.sh | bash
-```
 
-**Windows (PowerShell)**
+Windows PowerShell:
 
 ```powershell
 irm https://raw.githubusercontent.com/nulifyer/guget/main/.scripts/install.ps1 | iex
 ```
 
-Fetches the latest release from GitHub, installs to `%LOCALAPPDATA%\Programs\guget`, and adds it to your user `PATH` automatically. Override the install location with `$env:GUGET_INSTALL`.
+You can also [download a release](https://github.com/nulifyer/guget/releases).
+See [installation and updates](docs/installation.md) for custom locations,
+source builds, and upgrading Guget.
 
-> **Windows note:** The binary is not yet code-signed, so Windows SmartScreen may warn on first run. Running from a terminal (PowerShell or cmd) bypasses this.
+## Try it
 
-**Manual download**
-
-Grab the archive for your platform from the [Releases page](https://github.com/nulifyer/guget/releases) and place the binary somewhere on your `PATH`.
-
-**Build from source**
+Open a directory containing your .NET projects:
 
 ```bash
-git clone https://github.com/nulifyer/guget
-cd guget/guget
-go build -o guget        # Linux / macOS
-go build -o guget.exe    # Windows
+guget --project ./src
 ```
 
-### Updating guget
+Select a project, press `Tab` to focus its packages, and press `v` to choose a
+version. Press `?` for keyboard help. The TUI needs a terminal of at least
+80 columns by 12 rows and supports both keyboard and mouse navigation.
+
+For scripts and agents, inspect packages or preview an update without opening
+the TUI:
 
 ```bash
-guget self-update --check  # Check for a newer stable release
-guget self-update          # Download, verify, and replace this executable
-```
-
-`guget update PACKAGE` continues to update NuGet packages. Self-update uses the
-GitHub release archives and verifies their SHA-256 checksums before replacing the
-installed binary. It preserves the installation path and permissions, follows
-symlinks, and does nothing when no newer stable release exists. Development
-builds must install a release first. The installation directory must be writable.
-If another tool manages your installation, use that tool to update guget.
-
-The TUI checks for new stable releases in the background and shows an idle-footer
-notice. Quit the TUI before running `guget self-update`. Press `ctrl+x` to dismiss
-the notice for that release across sessions. Check results, including failures,
-are cached for 24 hours in the operating system's user cache directory under
-`guget/update.json`. Network failures stay silent in the TUI. Use
-`guget --no-update-check` or set `GUGET_NO_UPDATE_CHECK=1` to disable TUI checks.
-Explicit `guget self-update --check` always checks GitHub directly.
-
-Windows can retain `guget.exe.old` while the previous executable is running.
-The next update removes it. If interrupted updates leave a `.update-lock`
-directory beside the executable, remove that directory only after confirming
-that no self-update is running. If a Windows update was interrupted between
-replacement steps and `guget.exe` is missing, restore `guget.exe.old` to
-`guget.exe` before retrying.
-
-## Usage
-
-```
-guget [options] [project]
-
-Usage:
-    no-color     -nc, --no-color
-                Disable colored output in the terminal
-
-    verbosity    -v, --verbose
-                Set the logging verbosity level
-                [<empty>, none, error, err, warn, warning, info, debug, dbg, trace, trc]
-
-    project      -p, --project
-                Set the target project directory (defaults to current working directory)
-
-    theme        -t, --theme
-                Color theme
-                [auto, dracula, nord, everforest, gruvbox, etc]
-
-    sort-by      -o, --sort-by
-                Initial sort order: status, name, source, current, available
-                Append :asc or :desc for direction (default: status:asc)
-
-    log-file     -lf, --log-file
-                Write all log output to this file (in addition to the TUI log panel)
-
-    no-mouse     -nm, --no-mouse
-                Disable mouse navigation in the TUI
-
-    no-update-check  --no-update-check
-                Disable TUI checks for new Guget releases
-
-    version      -V, --version
-                Print the version and exit
-```
-
-**Examples:**
-
-```bash
-# Scan the current directory
-guget
-
-# Scan a specific solution folder
-guget ~/src/MyApp
-
-# Enable verbose logging
-guget -v debug
-
-# Use the dracula theme
-guget -t dracula
-
-# Leave clicks and wheel events to the terminal
-guget --no-mouse
-
-# Sort by available updates, newest first
-guget -o available:desc
-```
-
-### Headless commands
-
-Supplying a command runs Guget without initializing Bubble Tea. Read commands
-support `table`, `tsv`, `json`, and `jsonl`; redirected output defaults to TSV.
-Diagnostics stay on stderr, and `--output` replaces its destination atomically.
-
-```bash
-# Declared, evaluated, and restore-resolved package state
 guget list --project ./src --format json
-guget show Newtonsoft.Json --project ./src
-
-# NuGet sources, source mappings, and restore-only local feeds
-guget sources --project ./src
-
-# Preview and then apply the same transactional edit plan
-guget update Newtonsoft.Json --version 13.0.4 --file App/App.csproj --dry-run
-guget update Newtonsoft.Json --version 13.0.4 --file App/App.csproj --restore
-
-# Workspace scope is always explicit
-guget remove Old.Package --project ./src --all --dry-run
-guget restore --project ./src --all
+guget update Newtonsoft.Json --version 13.0.4 --project ./src --file App/App.csproj --dry-run --format json
 ```
 
-Run `guget help` or `guget help update` for command usage. Mutation commands
-require repeatable `--file` targets or an explicit `--all`; `add` always requires
-at least one `--file`. A dry run performs the same ownership checks and planning
-path as an apply. See [CLI design](docs/cli-design.md) for JSON and exit-code
-contracts.
+The example assumes `src/App/App.csproj` exists. Replace the package, version,
+and paths with your own.
 
+## Guides
 
+- [Use the TUI](docs/tui.md): navigate, add, update, remove, restore, and browse package details.
+- [Use the CLI](docs/cli.md): explicit project scope, JSON output, and scripting examples.
+- [Configure package sources](docs/sources.md): public and private feeds, source mapping, and local feeds.
+- [Work with supported projects](docs/project-support.md): CPM, shared props, version expressions, and editing limits.
+- [Troubleshoot problems](docs/troubleshooting.md): PATH, authentication, restore, and incomplete results.
 
-## Keybindings
-
-### Navigation
-
-| Key | Action |
-|-----|--------|
-| `Tab` / `Shift+Tab` | Cycle panel focus (Projects → Packages → Detail → Logs) |
-| `↑` / `k` | Move up |
-| `↓` / `j` | Move down |
-| `Enter` | Confirm / move focus from Projects to Packages |
-| `Esc` / `q` | Quit (main screen) / Close (overlay) |
-| `Ctrl+C` | Quit from any screen |
-
-Mouse navigation is enabled by default. A left click selects project and
-package rows, sorts package columns, opens links, switches release-note tabs,
-and operates visible overlay buttons. Picker rows select or toggle their item;
-file-changing actions still require an explicit Add, Apply, Update, or Remove
-button. In the package header, click the bracketed sort mode to cycle through
-the modes and click its arrow to reverse direction. Requested, Available, and
-Source are direct sort shortcuts. The wheel navigates or scrolls the panel
-under the pointer without changing keyboard focus. Overlays remain modal, so
-clicks cannot reach the main screen underneath them.
-
-Mouse reporting can take over clicks that the terminal would otherwise use for
-text selection. Use the terminal's mouse-bypass modifier, commonly Shift, for
-native handling. Run `guget --no-mouse` to leave all mouse input with the
-terminal.
-
-### Package Actions (packages panel)
-
-| Key | Action |
-|-----|--------|
-| `u` | Update to latest **compatible** version (this project) |
-| `U` | Update to latest **compatible** version (all projects) |
-| `a` | Update to latest **stable** version (this project) |
-| `A` | Update to latest **stable** version (all projects) |
-| `v` | Open version picker overlay |
-| `o` | Cycle sort mode (status, name, source, current, available) |
-| `O` | Toggle sort direction (asc / desc) |
-| `d` | Remove selected package (prompts for confirmation) |
-| `t` | Show declared dependency tree for the selected package |
-
-With status sorting, hold `u` to update successive packages. Each successful
-quick update keeps the cursor on the same row while the updated package moves
-down. Guget accepts the next update after the write and reload finish.
-`U` and `A` apply to the selected package across projects.
-Pinned versions still require confirmation, and up-to-date packages do not trigger writes.
-
-Scanning, metadata requests, saves, and restores run in the background. Panels,
-help, and navigation remain available while work proceeds. Packages with loaded
-metadata can be updated while other packages are still loading. Saves run one
-at a time. Unchanged feeds reuse their initialized connections after a save.
-Manual reloads and `NuGet.Config` changes refresh feed discovery.
-
-The log panel keeps the latest 2,000 entries and preserves your scroll position
-when you scroll away from the bottom. Use `--log-file` for complete logs.
-The TUI requires at least 80 columns and 12 rows. Smaller terminals show a resize
-message and disable package actions until the content is visible again.
-
-Adding selects the new package. Removing keeps the nearest remaining row.
-Manual and automatic disk reloads preserve the selected package when it remains present.
-
-### Project Actions
-
-| Key | Action |
-|-----|--------|
-| `Ctrl+R` | Reload projects from disk |
-| `r` | Run `dotnet restore` (selected project) |
-| `R` | Run `dotnet restore` (all projects) |
-| `T` | Show full transitive dependency tree |
-| `/` | Search NuGet and add a new package |
-
-### General
-
-| Key | Action |
-|-----|--------|
-| `l` | Toggle log panel |
-| `s` | Toggle sources panel |
-| `?` | Toggle keybinding help |
-| `[` / `]` | Resize focused panel |
-| `Ctrl+C` | Quit from any panel or overlay |
-
-### Search Overlay (`/`)
-
-| Key | Action |
-|-----|--------|
-| `↑` / `Ctrl+P` | Previous result |
-| `↓` / `Ctrl+N` | Next result |
-| `Enter` | Select package |
-| `Esc` | Close |
-
-### Version Picker (`v`)
-
-| Key | Action |
-|-----|--------|
-| `↑` / `k` | Previous version |
-| `↓` / `j` | Next version |
-| `u` | Apply version (this project) |
-| `U` | Apply version (all projects) |
-| `Enter` | Apply version |
-| `Esc` / `q` | Close |
-
-
-
-## Package Status Icons
-
-| Icon | Meaning |
-|------|---------|
-| `▲` | Installed version has known **CVE vulnerabilities** |
-| `✗` | Error fetching version info |
-| `.` | Package metadata is still loading |
-| `↑` | Newer **compatible** version available |
-| `⬆` | Newer **stable** version available (beyond compatible) |
-| `~` | Package is **deprecated** in the registry |
-| `✓` | Up to date |
-
-
-
-## How It Works
-
-1. On startup, `guget` walks the target directory and parses every `.csproj` / `.fsproj` / `.vbproj` it finds (skipping `bin`, `obj`, `node_modules`, `.git`, etc.).
-2. A background goroutine queries your configured NuGet sources for the latest version data for each package.
-3. A background watcher polls project files, `.props`, and `nuget.config`, then reloads the workspace when those files change on disk.
-4. You can force the same rescan manually at any time with `Ctrl+R`.
-5. The UI updates as results arrive — no waiting for a full scan before you can start navigating.
-6. Mutations are planned against file hashes, written with same-directory atomic
-   replacement, and rolled back best-effort if a multi-file operation fails.
-
-
-
-## Built With
-
-- [Bubbletea](https://github.com/charmbracelet/bubbletea) — TUI framework (MVU pattern)
-- [Bubbles](https://github.com/charmbracelet/bubbles) — list, spinner, text input, viewport
-- [Lipgloss](https://github.com/charmbracelet/lipgloss) — terminal styling and layout
+Want to contribute? See [CONTRIBUTING.md](CONTRIBUTING.md).

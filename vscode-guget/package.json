@@ -33,17 +33,22 @@
   },
   "badges": [
     {
-      "url": "https://img.shields.io/github/v/release/nulifyer/guget?label=CLI",
-      "href": "https://github.com/nulifyer/guget/releases",
+      "url": "https://github.com/nulifyer/guget/actions/workflows/ci.yml/badge.svg?branch=main&event=push",
+      "href": "https://github.com/nulifyer/guget/actions/workflows/ci.yml",
+      "description": "CI status on main"
+    },
+    {
+      "url": "https://img.shields.io/github/v/release/nulifyer/guget?label=CLI&logo=github&cacheSeconds=300",
+      "href": "https://github.com/nulifyer/guget/releases/latest",
       "description": "Latest CLI release"
     },
     {
-      "url": "https://img.shields.io/visual-studio-marketplace/v/nulifyer.guget",
+      "url": "https://vsmarketplacebadges.dev/version-short/nulifyer.guget.svg",
       "href": "https://marketplace.visualstudio.com/items?itemName=nulifyer.guget",
       "description": "VS Code Marketplace version"
     },
     {
-      "url": "https://img.shields.io/visual-studio-marketplace/i/nulifyer.guget",
+      "url": "https://vsmarketplacebadges.dev/installs-short/nulifyer.guget.svg",
       "href": "https://marketplace.visualstudio.com/items?itemName=nulifyer.guget",
       "description": "Install count"
     }
@@ -106,7 +111,7 @@
         "guget.binaryPath": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Absolute path to the `guget` binary. Leave empty to search `PATH`."
+          "markdownDescription": "Absolute path to the `guget` binary. Leave empty to check standard installation locations, then `PATH`."
         },
         "guget.verbosity": {
           "type": "string",

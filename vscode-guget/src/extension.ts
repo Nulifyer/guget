@@ -90,7 +90,7 @@ async function launchGuget(context: vscode.ExtensionContext, targetFolder: strin
       );
     } else if (action === "Installation Guide") {
       vscode.env.openExternal(
-        vscode.Uri.parse("https://github.com/nulifyer/guget#installation")
+        vscode.Uri.parse("https://github.com/nulifyer/guget/blob/main/docs/installation.md")
       );
     }
     return;
