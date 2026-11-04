@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/sys/unix"
 	xterm "golang.org/x/term"
 )
 
@@ -104,6 +105,24 @@ func TestRuntimeNativePTYChild(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	inputFlags, err := unix.FcntlInt(os.Stdin.Fd(), unix.F_GETFL, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outputFlags, err := unix.FcntlInt(os.Stdout.Fd(), unix.F_GETFL, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sink, err := openTerminalOutput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	owned := sink.(*unixTerminalIO)
+	ownedFlags, flagErr := unix.FcntlInt(uintptr(owned.fd), unix.F_GETFL, 0)
+	closeErr := sink.Close()
+	if flagErr != nil || ownedFlags&unix.O_NONBLOCK == 0 || closeErr != nil {
+		t.Fatalf("owned output is not independently nonblocking: flags=%d error=%v close=%v", ownedFlags, flagErr, closeErr)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	probe := &nativePTYProbe{before: before, resized: make(chan struct{}), flood: mode == "output-backpressure"}
@@ -128,6 +147,11 @@ func TestRuntimeNativePTYChild(t *testing.T) {
 	}
 	if !reflect.DeepEqual(before, after) {
 		t.Fatal("terminal mode was not restored")
+	}
+	finalInputFlags, inputErr := unix.FcntlInt(os.Stdin.Fd(), unix.F_GETFL, 0)
+	finalOutputFlags, outputErr := unix.FcntlInt(os.Stdout.Fd(), unix.F_GETFL, 0)
+	if inputErr != nil || outputErr != nil || inputFlags != finalInputFlags || outputFlags != finalOutputFlags {
+		t.Fatalf("runtime changed caller descriptor flags: stdin %d→%d stdout %d→%d errors=%v,%v", inputFlags, finalInputFlags, outputFlags, finalOutputFlags, inputErr, outputErr)
 	}
 	if !probe.rawActive || !probe.disconnected {
 		t.Fatalf("raw mode or disconnect missing: raw=%t disconnected=%t", probe.rawActive, probe.disconnected)

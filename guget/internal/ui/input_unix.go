@@ -4,16 +4,16 @@ package ui
 
 import (
 	"io"
-	"os"
-	"syscall"
+
+	"golang.org/x/sys/unix"
 )
 
-// Own a pollable terminal descriptor so Close interrupts pending decoder reads.
-// Closing os.Stdin would affect the caller after Runtime.Run returns.
+// Own a separate terminal description; cancellation never closes stdin or
+// changes the caller's descriptor flags.
 func openInput() (io.Reader, func(), error) {
-	f, err := os.OpenFile("/dev/tty", os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	input, err := openUnixTerminalIO("/dev/tty", unix.O_RDONLY)
 	if err != nil {
 		return nil, nil, err
 	}
-	return f, func() { _ = f.Close() }, nil
+	return input, func() { _ = input.Close() }, nil
 }
