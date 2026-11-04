@@ -20,7 +20,7 @@ export async function resolveGugetBinary(): Promise<string | undefined> {
     );
   }
 
-  // 2. Well-known install locations (match install.ps1 / install.sh)
+  // 2. Well-known install locations (match .scripts/install.ps1 and .scripts/install.sh)
   for (const candidate of wellKnownPaths()) {
     if (await isExecutable(candidate)) {
       return candidate;

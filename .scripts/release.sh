@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 # ──────────────────────────────────────────────────────────────────────────────
 # release.sh — tag and push a release (GitHub Actions runs goreleaser)
-#   Usage: ./release.sh [version]   e.g.  ./release.sh 0.2.0
+#   Usage: ./.scripts/release.sh [version]   e.g.  ./.scripts/release.sh 0.2.0
 # ──────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$REPO_ROOT"
 
 # ── ANSI helpers ──────────────────────────────────────────────────────────────
 BOLD='\033[1m'; DIM='\033[2m'; RESET='\033[0m'

@@ -67,16 +67,16 @@ To build:
 Installs to `/usr/local/bin` if writable, otherwise `~/.local/bin`. Override the install location with `GUGET_INSTALL=/your/path`.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/nulifyer/guget/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/nulifyer/guget/main/.scripts/install.sh | bash
 ```
 ```bash
-wget -qO- https://raw.githubusercontent.com/nulifyer/guget/main/install.sh | bash
+wget -qO- https://raw.githubusercontent.com/nulifyer/guget/main/.scripts/install.sh | bash
 ```
 
 **Windows (PowerShell)**
 
 ```powershell
-irm https://raw.githubusercontent.com/nulifyer/guget/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/nulifyer/guget/main/.scripts/install.ps1 | iex
 ```
 
 Fetches the latest release from GitHub, installs to `%LOCALAPPDATA%\Programs\guget`, and adds it to your user `PATH` automatically. Override the install location with `$env:GUGET_INSTALL`.

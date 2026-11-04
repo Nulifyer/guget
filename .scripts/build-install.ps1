@@ -1,11 +1,11 @@
 #Requires -Version 5.1
 # ──────────────────────────────────────────────────────────────────────────────
 # build-install.ps1 — build guget from source and install it locally
-#   Usage: .\build-install.ps1
+#   Usage: .\.scripts\build-install.ps1
 # ──────────────────────────────────────────────────────────────────────────────
 $ErrorActionPreference = "Stop"
 
-$RepoRoot  = $PSScriptRoot
+$RepoRoot  = Split-Path -Parent $PSScriptRoot
 $SourceDir = Join-Path $RepoRoot "guget"
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -23,7 +23,7 @@ if (-not $?) { Fail "Go is not installed or not in PATH" }
 Ok "Go found: $(go version)"
 
 if (-not (Test-Path (Join-Path $SourceDir "go.mod"))) {
-    Fail "Cannot find $SourceDir\go.mod — run this script from the repo root"
+    Fail "Cannot find $SourceDir\go.mod — check the repository checkout"
 }
 
 # ── Version ──────────────────────────────────────────────────────────────────
@@ -46,9 +46,9 @@ Write-Host "  ▸ Building..." -ForegroundColor Cyan
 
 $env:CGO_ENABLED = "0"
 $ldflags = "-s -w -X main.version=$Version"
-$OutPath = Join-Path $RepoRoot $BinaryName
+$OutPath = Join-Path $RepoRoot ("guget-build" + [System.IO.Path]::GetExtension($BinaryName))
 
-Push-Location $SourceDir
+Push-Location -LiteralPath $SourceDir
 try {
     go build -ldflags $ldflags -o $OutPath .
     if ($LASTEXITCODE -ne 0) { Fail "Build failed" }

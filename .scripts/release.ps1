@@ -1,13 +1,14 @@
 #Requires -Version 5.1
 # ──────────────────────────────────────────────────────────────────────────────
 # release.ps1 — tag and push a release (GitHub Actions runs goreleaser)
-#   Usage: .\release.ps1 [version]   e.g.  .\release.ps1 0.2.0
+#   Usage: .\.scripts\release.ps1 [version]   e.g.  .\.scripts\release.ps1 0.2.0
 # ──────────────────────────────────────────────────────────────────────────────
 [CmdletBinding()]
 param(
     [string]$Version = ""
 )
 $ErrorActionPreference = "Stop"
+$RepoRoot = Split-Path -Parent $PSScriptRoot
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 function Sep  { Write-Host "  ────────────────────────────────────────────────────" -ForegroundColor DarkGray }
@@ -39,7 +40,7 @@ Sep
 
 # ── Version ───────────────────────────────────────────────────────────────────
 if (-not $Version) {
-    $RecentTags = git tag --sort=-version:refname 2>$null | Select-Object -First 5
+    $RecentTags = git -C $RepoRoot tag --sort=-version:refname 2>$null | Select-Object -First 5
     if ($RecentTags) {
         Write-Host "  Recent tags:" -ForegroundColor DarkGray
         foreach ($t in $RecentTags) {
@@ -62,14 +63,14 @@ $Tag = "v$Version"
 # ── Pre-flight ────────────────────────────────────────────────────────────────
 Hdr "Pre-flight checks"
 
-$null = git rev-parse --git-dir 2>&1
+$null = git -C $RepoRoot rev-parse --git-dir 2>&1
 if ($LASTEXITCODE -ne 0) { Fail "Not inside a git repository" }
 Ok "Git repository"
 
-$Branch = git rev-parse --abbrev-ref HEAD 2>&1
+$Branch = git -C $RepoRoot rev-parse --abbrev-ref HEAD 2>&1
 Ok "Branch: $Branch"
 
-$Dirty = git status --porcelain 2>&1
+$Dirty = git -C $RepoRoot status --porcelain 2>&1
 if ($Dirty) {
     Warn "Uncommitted changes in working tree:"
     $Dirty | ForEach-Object { Dim "  $_" }
@@ -79,7 +80,7 @@ if ($Dirty) {
 }
 
 Write-Host "  → Running Go verification..." -ForegroundColor Cyan
-Push-Location guget
+Push-Location -LiteralPath (Join-Path $RepoRoot "guget")
 try {
     go mod verify
     if ($LASTEXITCODE -ne 0) { Fail "go mod verify failed" }
@@ -93,7 +94,7 @@ finally {
 }
 Ok "Go verification passed"
 
-$null = git rev-parse $Tag 2>&1
+$null = git -C $RepoRoot rev-parse $Tag 2>&1
 if ($LASTEXITCODE -eq 0) {
     Fail "Tag $Tag already exists"
 } else {
@@ -103,7 +104,7 @@ if ($LASTEXITCODE -eq 0) {
 # ── Git summary ───────────────────────────────────────────────────────────────
 Hdr "Commits since last release"
 
-$LastTag = git describe --tags --abbrev=0 2>&1
+$LastTag = git -C $RepoRoot describe --tags --abbrev=0 2>&1
 if ($LASTEXITCODE -ne 0) { $LastTag = "" }
 
 $Range = if ($LastTag) { "$LastTag..HEAD" } else { "" }
@@ -118,7 +119,7 @@ Sep
 # Fetch commits: "hash|subject|author|reltime"
 $logArgs = @("log", "--no-decorate", "--format=%h|%s|%an|%ar")
 if ($Range) { $logArgs += $Range }
-$Commits = & git @logArgs 2>$null | Select-Object -First 20
+$Commits = & git -C $RepoRoot @logArgs 2>$null | Select-Object -First 20
 
 foreach ($line in $Commits) {
     $p = $line -split '\|', 4
@@ -131,7 +132,7 @@ Sep
 
 $countArgs = @("rev-list", "--count")
 $countArgs += if ($Range) { $Range } else { "HEAD" }
-$CommitCount = (& git @countArgs 2>$null) -as [int]
+$CommitCount = (& git -C $RepoRoot @countArgs 2>$null) -as [int]
 if (-not $LastTag -and $CommitCount -gt 20) {
     Dim "20 of $CommitCount total commits shown"
 } else {
@@ -170,12 +171,12 @@ Hdr "Releasing $Tag"
 Write-Host ""
 
 Write-Host "  → Creating tag $Tag..." -ForegroundColor Cyan
-git tag -a $Tag -m "Release $Tag"
+git -C $RepoRoot tag -a $Tag -m "Release $Tag"
 if ($LASTEXITCODE -ne 0) { Fail "git tag failed" }
 Ok "Tag created"
 
 Write-Host "  → Pushing tag to origin..." -ForegroundColor Cyan
-git push origin $Tag
+git -C $RepoRoot push origin $Tag
 if ($LASTEXITCODE -ne 0) { Fail "git push failed" }
 Ok "Tag pushed"
 

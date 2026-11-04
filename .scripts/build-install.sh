@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # ──────────────────────────────────────────────────────────────────────────────
 # build-install.sh — build guget from source and install it locally
-#   Usage: ./build-install.sh
+#   Usage: ./.scripts/build-install.sh
 # ──────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SOURCE_DIR="$REPO_ROOT/guget"
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -23,7 +23,7 @@ echo -e "${DIM}  ─────────────────────
 command -v go &>/dev/null || fail "Go is not installed or not in PATH"
 ok "Go found: $(go version)"
 
-[[ -f "$SOURCE_DIR/go.mod" ]] || fail "Cannot find $SOURCE_DIR/go.mod — run this script from the repo root"
+[[ -f "$SOURCE_DIR/go.mod" ]] || fail "Cannot find $SOURCE_DIR/go.mod — check the repository checkout"
 
 # ── Version ──────────────────────────────────────────────────────────────────
 VERSION="dev"

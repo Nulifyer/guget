@@ -95,4 +95,4 @@ jobs:
         uses: actions/checkout@v7.0.1
 
       - name: ShellCheck
-        run: shellcheck install.sh build-install.sh release.sh download-stats.sh
+        run: shellcheck .scripts/*.sh

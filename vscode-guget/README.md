@@ -44,12 +44,12 @@ Manage NuGet packages across .NET projects with an interactive TUI, right inside
 
    **Linux / macOS:**
    ```bash
-   curl -fsSL https://raw.githubusercontent.com/nulifyer/guget/main/install.sh | bash
+   curl -fsSL https://raw.githubusercontent.com/nulifyer/guget/main/.scripts/install.sh | bash
    ```
 
    **Windows (PowerShell):**
    ```powershell
-   irm https://raw.githubusercontent.com/nulifyer/guget/main/install.ps1 | iex
+   irm https://raw.githubusercontent.com/nulifyer/guget/main/.scripts/install.ps1 | iex
    ```
 
    Or download from the [Releases page](https://github.com/nulifyer/guget/releases).
