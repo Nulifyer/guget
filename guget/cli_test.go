@@ -113,7 +113,7 @@ func TestDispatchCLI_AddDryRunAndApply(t *testing.T) {
 	if err := json.Unmarshal([]byte(stdout), &plan); err != nil {
 		t.Fatalf("invalid plan JSON: %v", err)
 	}
-	if !plan.DryRun || len(plan.Changes) != 1 || plan.Changes[0].Path != project {
+	if !plan.DryRun || len(plan.Changes) != 1 || plan.Changes[0].Path != canonicalTestOwnerPath(t, project) {
 		t.Fatalf("plan = %#v", plan)
 	}
 	afterDryRun, _ := os.ReadFile(project)
@@ -146,7 +146,7 @@ func TestDispatchCLI_AddIgnoresDisabledCentralPackageFile(t *testing.T) {
 	if err := json.Unmarshal([]byte(stdout), &plan); err != nil {
 		t.Fatal(err)
 	}
-	if len(plan.Changes) != 1 || plan.Changes[0].Path != project || plan.Changes[0].Version != "1.4.0" {
+	if len(plan.Changes) != 1 || plan.Changes[0].Path != canonicalTestOwnerPath(t, project) || plan.Changes[0].Version != "1.4.0" {
 		t.Fatalf("plan = %#v", plan)
 	}
 }
@@ -465,4 +465,13 @@ func TestMutationOutputCannotOverwriteNuGetConfiguration(t *testing.T) {
 			t.Fatalf("configuration changed: data=%s err=%v", data, err)
 		}
 	}
+}
+
+func canonicalTestOwnerPath(t *testing.T, path string) string {
+	t.Helper()
+	canonical, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return canonical
 }

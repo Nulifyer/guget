@@ -72,8 +72,8 @@ func DetectSources(projectDir string) DetectedConfig {
 
 	// addConfig adds sources and mapping rules from a config file.
 	// Returns true if a <clear/> was found in <packageSources>.
-	// Deduplicates by resolved path so case-insensitive filesystems
-	// (Windows) don't parse the same file twice.
+	// Deduplicates by file identity so aliases on case-insensitive filesystems
+	// are processed and diagnosed once, including nonregular configurations.
 	var seenConfigs []os.FileInfo
 	readConfig := func(path string) ([]byte, bool) {
 		if path == "" {
@@ -92,16 +92,16 @@ func DetectSources(projectDir string) DetectedConfig {
 			configErrors = append(configErrors, fmt.Errorf("inspect source configuration %s: %w", absolute, err))
 			return nil, false
 		}
-		if !info.Mode().IsRegular() {
-			configErrors = append(configErrors, fmt.Errorf("source configuration is not a regular file: %s", absolute))
-			return nil, false
-		}
 		for _, previous := range seenConfigs {
 			if os.SameFile(previous, info) {
 				return nil, false
 			}
 		}
 		seenConfigs = append(seenConfigs, info)
+		if !info.Mode().IsRegular() {
+			configErrors = append(configErrors, fmt.Errorf("source configuration is not a regular file: %s", absolute))
+			return nil, false
+		}
 		data, err := os.ReadFile(absolute)
 		if err != nil {
 			configErrors = append(configErrors, fmt.Errorf("read source configuration %s: %w", absolute, err))

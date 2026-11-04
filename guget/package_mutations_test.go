@@ -20,7 +20,7 @@ func TestMutationPlanReportsOnlyActualChanges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.Len() != 1 || len(rows) != 1 || rows[0].Path != changed {
+	if plan.Len() != 1 || len(rows) != 1 || rows[0].Path != canonicalTestOwnerPath(t, changed) {
 		t.Fatalf("rows=%+v plan len=%d", rows, plan.Len())
 	}
 	before, _ := os.ReadFile(unchanged)

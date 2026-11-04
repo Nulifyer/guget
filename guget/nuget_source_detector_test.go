@@ -26,10 +26,10 @@ func TestDetectSourcesRejectsMalformedConfigurations(t *testing.T) {
 				t.Fatalf("malformed config accepted: %+v", detected)
 			}
 			diagnostic := detected.Errors[0].Error()
-			if !strings.Contains(diagnostic, path) || strings.Contains(diagnostic, "credential-secret") || strings.Contains(diagnostic, "private.example") {
+			if !sourceDiagnosticNamesFile(t, diagnostic, path) || strings.Contains(diagnostic, "credential-secret") || strings.Contains(diagnostic, "private.example") {
 				t.Fatalf("unsafe or unhelpful diagnostic: %s", diagnostic)
 			}
-			if digest := detected.InputRevisions[path]; digest != sha256.Sum256([]byte(content)) {
+			if digest := sourceConsumedRevision(t, detected, path); digest != sha256.Sum256([]byte(content)) {
 				t.Fatal("configuration revision does not match consumed bytes")
 			}
 		})
@@ -49,14 +49,14 @@ func TestDetectSourcesRetainsConsumedSourceRevisions(t *testing.T) {
 		t.Fatalf("detected=%+v", detected)
 	}
 	for path, content := range map[string]string{config: configData, props: propsData} {
-		if digest := detected.InputRevisions[path]; digest != sha256.Sum256([]byte(content)) {
+		if digest := sourceConsumedRevision(t, detected, path); digest != sha256.Sum256([]byte(content)) {
 			t.Fatalf("incorrect consumed revision for %s", path)
 		}
 	}
 	// A later save must not retroactively change the revision attached to the
 	// source configuration which was consumed for this snapshot.
 	mustWriteFile(t, config, `<configuration/>`)
-	if detected.InputRevisions[config] != sha256.Sum256([]byte(configData)) {
+	if sourceConsumedRevision(t, detected, config) != sha256.Sum256([]byte(configData)) {
 		t.Fatal("returned revision changed after subsequent editor save")
 	}
 }
@@ -89,7 +89,7 @@ func TestDetectSourcesReportsNonRegularConfiguration(t *testing.T) {
 		t.Fatal(err)
 	}
 	detected := DetectSources(root)
-	if len(detected.Errors) == 0 || !strings.Contains(detected.Errors[0].Error(), path) || len(detected.Sources) != 0 {
+	if len(detected.Errors) == 0 || !sourceDiagnosticNamesFile(t, detected.Errors[0].Error(), path) || len(detected.Sources) != 0 {
 		t.Fatalf("detected=%+v", detected)
 	}
 }
@@ -128,10 +128,10 @@ func TestDetectSourcesRejectsMalformedBuildPropsSourceSettings(t *testing.T) {
 	content := `<Project><PropertyGroup><RestoreSources>https://secret-feed.example/index.json</RestoreSources>`
 	mustWriteFile(t, path, content)
 	detected := DetectSources(root)
-	if len(detected.Errors) == 0 || len(detected.Sources) != 0 || !strings.Contains(detected.Errors[0].Error(), path) || strings.Contains(detected.Errors[0].Error(), "secret-feed") {
+	if len(detected.Errors) == 0 || len(detected.Sources) != 0 || !sourceDiagnosticNamesFile(t, detected.Errors[0].Error(), path) || strings.Contains(detected.Errors[0].Error(), "secret-feed") {
 		t.Fatalf("errors=%v sources=%v", detected.Errors, detected.Sources)
 	}
-	if detected.InputRevisions[path] != sha256.Sum256([]byte(content)) {
+	if sourceConsumedRevision(t, detected, path) != sha256.Sum256([]byte(content)) {
 		t.Fatal("malformed source props revision was not captured")
 	}
 }
@@ -148,7 +148,7 @@ func TestDetectSourcesReportsUnreadableConfiguration(t *testing.T) {
 		t.Skip("current account can read permission-restricted files")
 	}
 	detected := DetectSources(root)
-	if len(detected.Errors) == 0 || len(detected.Sources) != 0 || !strings.Contains(detected.Errors[0].Error(), path) {
+	if len(detected.Errors) == 0 || len(detected.Sources) != 0 || !sourceDiagnosticNamesFile(t, detected.Errors[0].Error(), path) {
 		t.Fatalf("errors=%v sources=%v", detected.Errors, detected.Sources)
 	}
 }
@@ -195,5 +195,67 @@ func TestDetectSourcesDefaultsOnlyWithoutConfiguredSourcesOrClear(t *testing.T) 
 	detected := DetectSources(root)
 	if len(detected.Errors) != 0 || len(detected.Sources) != 1 || detected.Sources[0].URL != defaultNugetSource {
 		t.Fatalf("default source missing: %+v", detected)
+	}
+}
+
+// Configuration discovery uses the first matching casing. Require that the
+// diagnostic identifies the actual file, allowing aliases only when the host
+// filesystem confirms they name the same object.
+func sourceDiagnosticNamesFile(t *testing.T, diagnostic, path string) bool {
+	t.Helper()
+	expected, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidates := []string{path}
+	for _, name := range []string{"nuget.config", "NuGet.Config", "NuGet.config", "Directory.Build.props"} {
+		candidates = append(candidates, filepath.Join(filepath.Dir(path), name))
+	}
+	for _, candidate := range candidates {
+		actual, err := os.Stat(candidate)
+		if err == nil && os.SameFile(expected, actual) && strings.Contains(diagnostic, candidate) {
+			return true
+		}
+	}
+	return false
+}
+
+func sourceConsumedRevision(t *testing.T, detected DetectedConfig, path string) [sha256.Size]byte {
+	t.Helper()
+	expected, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var digest [sha256.Size]byte
+	matches := 0
+	for recorded, revision := range detected.InputRevisions {
+		actual, err := os.Stat(recorded)
+		if err == nil && os.SameFile(expected, actual) {
+			digest = revision
+			matches++
+		}
+	}
+	if matches != 1 {
+		t.Fatalf("expected one consumed revision for %s, found %d", path, matches)
+	}
+	return digest
+}
+
+func TestDetectSourcesDeduplicatesNonRegularConfigurationAliases(t *testing.T) {
+	root := t.TempDir()
+	upper := filepath.Join(root, "NuGet.Config")
+	lower := filepath.Join(root, "nuget.config")
+	if err := os.Mkdir(upper, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	upperInfo, _ := os.Stat(upper)
+	if lowerInfo, err := os.Stat(lower); err != nil || !os.SameFile(upperInfo, lowerInfo) {
+		if err := os.Symlink(upper, lower); err != nil {
+			t.Skipf("configuration alias unavailable: %v", err)
+		}
+	}
+	detected := DetectSources(root)
+	if len(detected.Errors) != 1 || len(detected.Sources) != 0 || !sourceDiagnosticNamesFile(t, detected.Errors[0].Error(), upper) {
+		t.Fatalf("alias should be diagnosed once: %v", detected.Errors)
 	}
 }
