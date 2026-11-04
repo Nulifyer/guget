@@ -102,11 +102,16 @@ func (m *App) renderDetailVulnerabilities(row packageRow) string {
 	if !row.vulnerable {
 		return ""
 	}
-	var vulns []PackageVulnerability
+	type installedAdvisory struct {
+		PackageVulnerability
+		version string
+	}
+	var vulns []installedAdvisory
 	for _, v := range row.info.Versions {
-		if v.SemVer.String() == row.ref.Version.String() {
-			vulns = v.Vulnerabilities
-			break
+		if row.installedVersions.Contains(v.SemVer.String()) || v.SemVer.String() == row.ref.Version.String() {
+			for _, advisory := range v.Vulnerabilities {
+				vulns = append(vulns, installedAdvisory{advisory, v.SemVer.String()})
+			}
 		}
 	}
 	if len(vulns) == 0 {
@@ -128,7 +133,7 @@ func (m *App) renderDetailVulnerabilities(row packageRow) string {
 		}
 		sevStr := sevStyle.Render(sev)
 		label := hyperlink(vuln.AdvisoryURL, styleSubtle.Render(advisoryLabel(vuln.AdvisoryURL)))
-		s.WriteString("  " + sevStr + "  " + label + "\n")
+		s.WriteString("  " + sevStr + "  " + styleSubtle.Render(vuln.version) + "  " + label + "\n")
 	}
 	s.WriteString("\n")
 	return s.String()
@@ -293,7 +298,7 @@ func (m *App) renderDetailVersionList(row packageRow, w int) string {
 		}
 		line := vStyle.Render(marker) + verText + extras
 		if isHighlighted {
-			if ago := timeAgo(v.Published); ago != "" {
+			if ago := versionAge(v); ago != "" {
 				agoRendered := vStyle.Render(ago)
 				leftW := lipgloss.Width(line)
 				agoW := lipgloss.Width(agoRendered)

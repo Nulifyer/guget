@@ -36,8 +36,8 @@ func (m *App) requestReload(req reloadRequestedMsg) {
 	}
 
 	if m.ctx.Reloading || m.ctx.Saving {
-		if req.selection == nil && m.hasPendingReload {
-			req.selection = m.pendingReload.selection
+		if m.hasPendingReload {
+			req = mergeReloadRequests(m.pendingReload, req)
 		}
 		m.pendingReload = req
 		m.hasPendingReload = true
@@ -57,14 +57,11 @@ func (m *App) requestReload(req reloadRequestedMsg) {
 		m.metadataCancel()
 	}
 	var previous *workspaceSnapshot
-	reuseServices := req.reason == "package files changed"
-	if req.automatic && len(req.paths) > 0 {
-		reuseServices = true
-		for _, path := range req.paths {
-			if strings.EqualFold(filepath.Base(path), "nuget.config") {
-				reuseServices = false
-				break
-			}
+	reuseServices := req.reason == "package files changed" || req.automatic && len(req.paths) > 0
+	for _, path := range req.paths {
+		if strings.EqualFold(filepath.Base(path), "nuget.config") {
+			reuseServices = false
+			break
 		}
 	}
 	if reuseServices {
@@ -96,6 +93,7 @@ func (m *App) handleWorkspaceReloaded(msg workspaceReloadedMsg) {
 	}
 	if msg.err != nil {
 		m.ctx.Reloading = false
+		m.workspaceStale = true
 		// The prior generation was canceled when the reload began. Resume its
 		// unresolved packages against the workspace that remains on screen.
 		names := make([]string, 0, len(m.ctx.PendingPackages))
@@ -103,7 +101,7 @@ func (m *App) handleWorkspaceReloaded(msg workspaceReloadedMsg) {
 			names = append(names, name)
 		}
 		m.startPackageFetch(names, false)
-		m.setStatus("▲ Reload failed: "+msg.err.Error(), true)
+		m.setStatus("▲ Reload failed; fix files and Ctrl+R: "+msg.err.Error(), true)
 		m.maybeStartQueuedReload()
 		return
 	}
@@ -115,7 +113,10 @@ func (m *App) handleWorkspaceReloaded(msg workspaceReloadedMsg) {
 		go logInfo("NuGet source configuration changed; refreshing all package metadata")
 	}
 
+	before := m.packageSelection()
+	offset := m.detail.vp.YOffset()
 	m.applyWorkspaceSnapshot(msg.snapshot)
+	m.workspaceStale = false
 	m.sourceSignature = nextSourceSig
 
 	nextResults, toFetch := planPackageReload(msg.snapshot, m.ctx.Results, invalidateAll)
@@ -125,6 +126,9 @@ func (m *App) handleWorkspaceReloaded(msg workspaceReloadedMsg) {
 	m.rebuildPackageRows()
 	m.selectPackageByName(selectedPackage)
 	m.refreshDetail()
+	if samePackageIdentity(m.packageSelection(), before) {
+		m.detail.vp.SetYOffset(offset)
+	}
 
 	// Disk state is authoritative now. Metadata continues independently so a
 	// slow package source cannot prevent actions on packages already resolved.
@@ -144,6 +148,10 @@ func (m *App) applyWorkspaceSnapshot(snapshot *workspaceSnapshot) {
 		selectedPackage = m.packages.rows[m.packages.cursor].ref.Name
 	}
 
+	if m.watchInputs != nil {
+		m.watchInputs.setPaths(workspaceInputPaths(m.projectDir, snapshot))
+	}
+	m.sourceInputRevisions = snapshot.InputRevisions
 	m.ctx.ParsedProjects = snapshot.ParsedProjects
 	m.ctx.PropsProjects = snapshot.PropsProjects
 	m.ctx.NugetServices = snapshot.NugetServices
@@ -334,4 +342,45 @@ func formatReloadPaths(rootDir string, paths []string) string {
 		return strings.Join(parts[:4], ", ") + fmt.Sprintf(" (+%d more)", len(parts)-4)
 	}
 	return strings.Join(parts, ", ")
+}
+
+// mergeReloadRequests retains every invalidation, including configuration refresh
+// and error provenance, while allowing the newest explicit selection to win.
+func mergeReloadRequests(previous, next reloadRequestedMsg) reloadRequestedMsg {
+	paths := make(map[string]struct{}, len(previous.paths)+len(next.paths))
+	for _, path := range previous.paths {
+		paths[path] = struct{}{}
+	}
+	for _, path := range next.paths {
+		paths[path] = struct{}{}
+	}
+	next.paths = make([]string, 0, len(paths))
+	for path := range paths {
+		next.paths = append(next.paths, path)
+	}
+	slices.Sort(next.paths)
+	if next.selection == nil {
+		next.selection = previous.selection
+	}
+	if next.saveError == nil {
+		next.saveError = previous.saveError
+	}
+	if !previous.automatic && previous.reason != "package files changed" && (next.automatic || next.reason == "package files changed") {
+		next.reason = previous.reason
+	}
+	next.automatic = next.automatic && previous.automatic
+	return next
+}
+
+func (m *App) handleWatchedWorkspaceChange(msg watchedWorkspaceChangeMsg) {
+	paths := make([]string, 0, len(msg.paths))
+	for _, path := range msg.paths {
+		state, exists := msg.states[path]
+		if !m.watchInputs.isAcknowledged(path, state, exists) {
+			paths = append(paths, path)
+		}
+	}
+	if len(paths) > 0 {
+		m.requestReload(reloadRequestedMsg{reason: "disk changes detected", paths: paths, automatic: true})
+	}
 }

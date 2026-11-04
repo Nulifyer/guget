@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math/rand"
 	"net/http"
 	"net/url"
@@ -87,11 +88,12 @@ type adoVersion struct {
 
 // PackageVersion is an enriched version with semver + framework info.
 type PackageVersion struct {
-	SemVer           SemVer
-	Published        time.Time              // when this version was published
-	Frameworks       []TargetFramework      // target frameworks this version supports
-	Vulnerabilities  []PackageVulnerability // CVE advisories for this specific version
-	DependencyGroups []dependencyGroup      // declared dependencies, for dep tree overlay
+	SemVer            SemVer
+	NugetOrgPublished time.Time              // public feed date, retained separately from the selected source
+	Published         time.Time              // when this version was published
+	Frameworks        []TargetFramework      // target frameworks this version supports
+	Vulnerabilities   []PackageVulnerability // CVE advisories for this specific version
+	DependencyGroups  []dependencyGroup      // declared dependencies, for dep tree overlay
 }
 
 // PackageInfo is the full picture of a package.
@@ -1287,9 +1289,13 @@ var githubClient = &http.Client{Timeout: 15 * time.Second}
 
 // FetchGitHubReleases returns up to `limit` releases for the given GitHub repo.
 func FetchGitHubReleases(owner, repo string, limit int) ([]GitHubRelease, error) {
+	return FetchGitHubReleasesContext(context.Background(), owner, repo, limit)
+}
+
+func FetchGitHubReleasesContext(ctx context.Context, owner, repo string, limit int) ([]GitHubRelease, error) {
 	apiURL := fmt.Sprintf("https://api.github.com/repos/%s/%s/releases?per_page=%d", owner, repo, limit)
 	logTrace("FetchGitHubReleases: GET %s", apiURL)
-	req, err := http.NewRequest("GET", apiURL, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
 	if err != nil {
 		logTrace("FetchGitHubReleases: request error: %v", err)
 		return nil, err
@@ -1351,10 +1357,18 @@ func FetchGitHubReleaseByTag(owner, repo, version string) (*GitHubRelease, error
 // fetchNuspec fetches the .nuspec from the given flat container base URL
 // using the service's authenticated HTTP client.
 func (s *NugetService) fetchNuspec(flatBase, packageID, version string) string {
+	return s.fetchNuspecContext(context.Background(), flatBase, packageID, version)
+}
+
+func (s *NugetService) fetchNuspecContext(ctx context.Context, flatBase, packageID, version string) string {
 	lower := strings.ToLower(packageID)
 	u := fmt.Sprintf("%s/%s/%s/%s.nuspec", flatBase, lower, version, lower)
 	logTrace("fetchNuspec: GET %s", u)
-	resp, err := s.client.Get(u)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return ""
+	}
+	resp, err := s.client.Do(req)
 	if err != nil {
 		return ""
 	}
@@ -1363,9 +1377,13 @@ func (s *NugetService) fetchNuspec(flatBase, packageID, version string) string {
 		logTrace("fetchNuspec: %s/%s returned HTTP %d", packageID, version, resp.StatusCode)
 		return ""
 	}
-	buf := make([]byte, 64*1024)
-	n, _ := resp.Body.Read(buf)
-	return string(buf[:n])
+	const maxNuspecSize = 4 * 1024 * 1024
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxNuspecSize+1))
+	if err != nil || len(body) > maxNuspecSize {
+		logDebug("fetchNuspec: could not read complete manifest for %s/%s", packageID, version)
+		return ""
+	}
+	return string(body)
 }
 
 // extractRepoURL extracts the <repository url="..."> attribute from nuspec XML.
@@ -1399,11 +1417,15 @@ func extractRepoURL(body string) string {
 // FetchNuspec fetches the .nuspec XML body for a package version.
 // Returns "" if the flat container is unavailable or the fetch fails.
 func (s *NugetService) FetchNuspec(packageID, version string) string {
+	return s.FetchNuspecContext(context.Background(), packageID, version)
+}
+
+func (s *NugetService) FetchNuspecContext(ctx context.Context, packageID, version string) string {
 	if s.flatBase == "" {
 		logTrace("FetchNuspec: [%s] no PackageBaseAddress available", s.sourceName)
 		return ""
 	}
-	return s.fetchNuspec(s.flatBase, packageID, version)
+	return s.fetchNuspecContext(ctx, s.flatBase, packageID, version)
 }
 
 // ExtractNuspecRepoURL extracts <repository url="..."> from nuspec XML.

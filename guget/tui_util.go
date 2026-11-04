@@ -11,12 +11,16 @@ import (
 )
 
 func timeAgo(t time.Time) string {
+	return timeAgoAt(t, time.Now())
+}
+
+func timeAgoAt(t, now time.Time) string {
 	// NuGet uses 1900-01-01 as a sentinel "no publish date" value.
 	// Treat anything before 2005 as unknown rather than showing nonsense like "126 years ago".
-	if t.IsZero() || t.Year() < 2005 {
+	if t.IsZero() || t.Year() < 2005 || t.After(now) {
 		return ""
 	}
-	d := time.Since(t)
+	d := now.Sub(t)
 	days := int(d.Hours() / 24)
 	if days < 1 {
 		return "today"
@@ -39,6 +43,15 @@ func timeAgo(t time.Time) string {
 		return "1 day ago"
 	}
 	return fmt.Sprintf("%d days ago", days)
+}
+
+// versionAge labels public-feed evidence separately; a private feed can republish
+// a package today without changing when that ID/version appeared on nuget.org.
+func versionAge(v PackageVersion) string {
+	if ago := timeAgo(v.NugetOrgPublished); ago != "" && !v.NugetOrgPublished.Equal(v.Published) {
+		return "nuget.org: " + ago
+	}
+	return timeAgo(v.Published)
 }
 
 // sectionBase holds width configuration and resize state for any TUI section
@@ -105,6 +118,8 @@ func (s *sectionBase) Resize(delta int) bool {
 
 // IsActive returns whether this section's overlay is currently shown.
 func (s *sectionBase) IsActive() bool { return s.active }
+
+func (s *sectionBase) mouseSessionID() int { return s.requestID }
 
 // ResetOffset zeroes the resize offset.
 func (s *sectionBase) ResetOffset() {

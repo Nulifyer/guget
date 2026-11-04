@@ -298,6 +298,7 @@ func (m *App) rebuildPackageRows() {
 
 	var rows []packageRow
 	sel := m.selectedProject()
+	frameworks := packageFrameworksForView(m.ctx.ParsedProjects, sel)
 
 	if sel == nil {
 		// All Projects — merge by package name
@@ -332,23 +333,28 @@ func (m *App) rebuildPackageRows() {
 				}
 			}
 
+			installed := NewSet[string]()
+			for _, ref := range g.refs {
+				installed.Add(ref.Version.String())
+			}
 			row := packageRow{
-				ref:      PackageReference{Name: name, Version: newest},
-				project:  g.project,
-				info:     res.pkg,
-				source:   res.source,
-				err:      res.err,
-				loading:  m.ctx.PendingPackages.Contains(name),
-				diverged: oldest != newest,
-				oldest:   oldest,
+				installedVersions: installed,
+				ref:               PackageReference{Name: name, Version: newest},
+				project:           g.project,
+				info:              res.pkg,
+				source:            res.source,
+				err:               res.err,
+				loading:           m.ctx.PendingPackages.Contains(name),
+				diverged:          oldest != newest,
+				oldest:            oldest,
 			}
 			if res.pkg != nil {
-				row.latestCompatible = res.pkg.LatestStableForFramework(g.project.TargetFrameworks)
+				row.latestCompatible = res.pkg.LatestStableForFramework(frameworks[strings.ToLower(name)])
 				row.latestStable = res.pkg.LatestStable()
 				row.deprecated = res.pkg.Deprecated
 				for _, v := range res.pkg.Versions {
 					vs := v.SemVer.String()
-					if vs == newest.String() || vs == oldest.String() {
+					if installed.Contains(vs) {
 						if len(v.Vulnerabilities) > 0 {
 							row.vulnerable = true
 							break
@@ -370,7 +376,7 @@ func (m *App) rebuildPackageRows() {
 				loading: m.ctx.PendingPackages.Contains(ref.Name),
 			}
 			if res.pkg != nil {
-				row.latestCompatible = res.pkg.LatestStableForFramework(sel.TargetFrameworks)
+				row.latestCompatible = res.pkg.LatestStableForFramework(frameworks[strings.ToLower(ref.Name)])
 				row.latestStable = res.pkg.LatestStable()
 				row.deprecated = res.pkg.Deprecated
 				for _, v := range res.pkg.Versions {

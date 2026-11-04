@@ -84,7 +84,7 @@ func (s *versionPicker) applyPickerVersion(scope actionScope) bubble_tea.Cmd {
 
 func newVersionPicker(m *App, pkgName string, versions []PackageVersion, targets Set[TargetFramework], project *ParsedProject, addMode bool) versionPicker {
 	return versionPicker{
-		sectionBase:   sectionBase{app: m, baseWidth: 50, minWidth: 40, maxMargin: 4, active: true},
+		sectionBase:   sectionBase{app: m, baseWidth: 50, minWidth: 40, maxMargin: 4, active: true, requestID: m.nextRequestID()},
 		pkgName:       pkgName,
 		versions:      versions,
 		cursor:        defaultVersionCursor(versions, targets),
@@ -103,7 +103,7 @@ func (m *App) openVersionPicker() {
 		return
 	}
 	m.ctx.StatusLine = ""
-	m.picker = newVersionPicker(m, row.ref.Name, row.info.Versions, row.project.TargetFrameworks, m.selectedProject(), false)
+	m.picker = newVersionPicker(m, row.ref.Name, row.info.Versions, m.packageTargets(row.ref.Name, scopeSelected), m.selectedProject(), false)
 }
 
 func (s *versionPicker) Render() string {
@@ -208,7 +208,7 @@ func (s *versionPicker) Render() string {
 		}
 		verText := style.Render(prefix) + verStr + extras
 
-		ago := timeAgo(v.Published)
+		ago := versionAge(v)
 		if ago != "" {
 			agoRendered := styleSubtle.Render(ago)
 			leftW := lipgloss.Width(verText)

@@ -15,9 +15,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-var errWorkspaceInputsChanged = errors.New("workspace inputs changed while scanning")
-
 type workspaceSnapshot struct {
+	FileRevisions  map[string]watchedFileState
 	InputRevisions map[string][sha256.Size]byte
 	ProjectDir     string
 	ParsedProjects []*ParsedProject
@@ -66,7 +65,11 @@ func loadWorkspaceReusingServices(ctx context.Context, projectDir string, previo
 		logWarn("No metadata-capable NuGet sources are available; package inspection remains available")
 	}
 	DeduplicateADOUpstreams(snapshot.NugetServices)
-
+	// Source discovery can await network responses. Recheck the disk view after
+	// that wait instead of publishing a snapshot invalidated while it was pending.
+	if err := validateWorkspaceSnapshot(snapshot); err != nil {
+		return nil, err
+	}
 	return snapshot, nil
 }
 
@@ -74,11 +77,79 @@ func loadWorkspaceReusingServices(ctx context.Context, projectDir string, previo
 // package source. Headless inspection commands use this path so listing local
 // package declarations never depends on network availability.
 func scanWorkspace(projectDir string) (*workspaceSnapshot, error) {
+	return scanWorkspaceWithParser(projectDir, ParseCsproj)
+}
+
+// Validate a whole disk view, including external owners discovered during parsing.
+// Generations order requests; these revisions detect changes within one request.
+func scanWorkspaceWithParser(projectDir string, parse func(string) (*ParsedProject, error)) (*workspaceSnapshot, error) {
 	fullProjectPath, err := filepath.Abs(projectDir)
 	if err != nil {
 		return nil, fmt.Errorf("getting absolute project directory: %w", err)
 	}
+	inputs := workspaceInputPaths(fullProjectPath, &workspaceSnapshot{})
+	const maxAttempts = 3
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		before, err := scanWatchedWorkspaceFiles(fullProjectPath, inputs...)
+		if err != nil {
+			return nil, fmt.Errorf("reading workspace input revisions: %w", err)
+		}
+		snapshot, err := scanWorkspaceOnce(fullProjectPath, parse, before)
+		if errors.Is(err, errWorkspaceInputsChanged) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		inputs = mergeWorkspaceInputPaths(inputs, workspaceInputPaths(fullProjectPath, snapshot))
+		after, err := scanWatchedWorkspaceFiles(fullProjectPath, inputs...)
+		if err != nil {
+			return nil, fmt.Errorf("validating workspace input revisions: %w", err)
+		}
+		if sameWorkspaceInputRevisions(before, after) {
+			snapshot.FileRevisions = after
+			return snapshot, nil
+		}
+	}
+	return nil, fmt.Errorf("workspace inputs changed during %d consecutive scans; wait for saves to finish and reload", maxAttempts)
+}
 
+func validateWorkspaceSnapshot(snapshot *workspaceSnapshot) error {
+	if snapshot.FileRevisions == nil {
+		return nil
+	}
+	current, err := scanWatchedWorkspaceFiles(snapshot.ProjectDir, workspaceInputPaths(snapshot.ProjectDir, snapshot)...)
+	if err != nil {
+		return fmt.Errorf("revalidating workspace before publication: %w", err)
+	}
+	if !sameWorkspaceInputRevisions(snapshot.FileRevisions, current) {
+		return fmt.Errorf("workspace inputs changed while loading package sources; reload to use the current files")
+	}
+	return nil
+}
+
+func mergeWorkspaceInputPaths(first, second []string) []string {
+	paths := append(append([]string(nil), first...), second...)
+	slices.Sort(paths)
+	return slices.Compact(paths)
+}
+
+func sameWorkspaceInputRevisions(before, after map[string]watchedFileState) bool {
+	if len(before) != len(after) {
+		return false
+	}
+	for path, prior := range before {
+		current, ok := after[path]
+		if !ok || current.Hash != prior.Hash || current.Owner != prior.Owner {
+			return false
+		}
+	}
+	return true
+}
+
+var errWorkspaceInputsChanged = errors.New("workspace inputs changed while scanning")
+
+func scanWorkspaceOnce(fullProjectPath string, parse func(string) (*ParsedProject, error), revisions map[string]watchedFileState) (*workspaceSnapshot, error) {
 	logInfo("Scanning workspace: %s", fullProjectPath)
 
 	projectFiles, err := FindProjectFiles(fullProjectPath)
@@ -89,9 +160,12 @@ func scanWorkspace(projectDir string) (*workspaceSnapshot, error) {
 
 	var parsedProjects []*ParsedProject
 	for _, file := range projectFiles {
-		project, err := ParseCsproj(file)
+		project, err := parse(file)
 		if err != nil {
 			return nil, fmt.Errorf("incomplete workspace discovery: project %s could not be parsed: %w", file, err)
+		}
+		if err := validateProjectInputRevisions(project, revisions); err != nil {
+			return nil, err
 		}
 		parsedProjects = append(parsedProjects, project)
 	}
@@ -101,6 +175,11 @@ func scanWorkspace(projectDir string) (*workspaceSnapshot, error) {
 	}
 
 	propsProjects := collectPropsProjects(parsedProjects)
+	for _, project := range propsProjects {
+		if err := validateProjectInputRevisions(project, revisions); err != nil {
+			return nil, err
+		}
+	}
 	logInfo("Found %d .props file(s) with packages", len(propsProjects))
 	unsupported := findUnsupportedPackageArtifacts(fullProjectPath)
 	for _, artifact := range unsupported {
@@ -109,7 +188,12 @@ func scanWorkspace(projectDir string) (*workspaceSnapshot, error) {
 
 	detected := DetectSources(fullProjectPath)
 	if len(detected.Errors) > 0 {
-		return nil, fmt.Errorf("invalid NuGet source configuration: %w", errors.Join(detected.Errors...))
+		return nil, fmt.Errorf("incomplete source configuration: %w", errors.Join(detected.Errors...))
+	}
+	for path, actual := range detected.InputRevisions {
+		if expected, known := revisions[path]; known && expected.Hash != actual {
+			return nil, fmt.Errorf("%w: source configuration %s consumed a different revision", errWorkspaceInputsChanged, path)
+		}
 	}
 	sources := detected.Sources
 	sourceMapping := detected.Mapping
@@ -119,14 +203,38 @@ func scanWorkspace(projectDir string) (*workspaceSnapshot, error) {
 	}
 
 	return &workspaceSnapshot{
-		InputRevisions: detected.InputRevisions,
 		ProjectDir:     fullProjectPath,
+		InputRevisions: detected.InputRevisions,
 		ParsedProjects: parsedProjects,
 		PropsProjects:  propsProjects,
 		Sources:        sources,
 		SourceMapping:  sourceMapping,
 		Unsupported:    unsupported,
 	}, nil
+}
+
+// Compare the exact bytes consumed and current bytes with the baseline. A later
+// restore of the original contents cannot disguise a different parsed revision.
+func validateProjectInputRevisions(project *ParsedProject, baseline map[string]watchedFileState) error {
+	for path, actual := range project.InputRevisions {
+		if expected, known := baseline[path]; known && expected.Hash != actual {
+			return fmt.Errorf("%w: %s consumed a different revision", errWorkspaceInputsChanged, path)
+		}
+	}
+	for _, path := range projectInputPaths(project) {
+		expected, known := baseline[path]
+		if !known {
+			continue
+		} // Newly discovered external inputs require another attempt.
+		current, exists, err := readWatchedFileState(path)
+		if err != nil {
+			return fmt.Errorf("validate project input %s: %w", path, err)
+		}
+		if !exists || current.Hash != expected.Hash || current.Owner != expected.Owner {
+			return fmt.Errorf("%w: %s", errWorkspaceInputsChanged, path)
+		}
+	}
+	return nil
 }
 
 func findUnsupportedPackageArtifacts(root string) []unsupportedPackageArtifact {

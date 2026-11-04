@@ -32,7 +32,7 @@ func (m *App) openLocationPickerOrAdd(pkgName, version string, project *ParsedPr
 
 func newLocationPicker(m *App, pkgName, version string, project *ParsedProject) locationPicker {
 	return locationPicker{
-		sectionBase:   sectionBase{app: m, baseWidth: 80, minWidth: 60, maxMargin: 4, active: true},
+		sectionBase:   sectionBase{app: m, baseWidth: 80, minWidth: 60, maxMargin: 4, active: true, requestID: m.nextRequestID()},
 		pkgName:       pkgName,
 		version:       version,
 		targets:       project.AddTargets,

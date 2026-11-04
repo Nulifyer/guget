@@ -11,7 +11,8 @@ and 12 rows. Press `?` for help, and use `Ctrl+C` to quit from any screen.
 
 ## Select the project you want to change
 
-The left panel lists projects and shared props files. Select an individual
+The left panel groups projects and shared props files by parent directory, keeping
+their existing order within each directory. Select an individual
 project, then press `Tab` or `Enter` to focus its packages. Use `Tab` and
 `Shift+Tab` to move between panels.
 
@@ -50,11 +51,12 @@ projects. Bulk updates, including version-picker changes from All Projects,
 skip pinned references. A selected project's pinned reference can be changed
 after confirmation.
 
-For projects targeting different frameworks, update per project or choose a
-shared version explicitly and restore each affected project.
+Compatible quick updates consider every affected project's frameworks, including
+projects that consume the same shared version. Latest stable and explicit picker
+choices can require newer frameworks; restore and test each affected project.
 
-Wait for saving and reloading to finish before requesting the next change.
-You can continue navigating while package information loads.
+The saved package state refreshes before the next change becomes available.
+You can continue navigating while saving, reloading, or fetching package information.
 
 ## Add a package
 
@@ -85,9 +87,11 @@ For a reference inherited from props, Guget may refuse project-local removal.
 | `R` | Restore all discovered projects. |
 | `Ctrl+R` | Reload project declarations from disk. |
 
-Use `Ctrl+R` after editing imported files or configuration outside the opened
-directory. After a restore failure, open logs with `l` and inspect the message
-before retrying. See [restore troubleshooting](troubleshooting.md#restore-failed-after-an-edit).
+Guget watches project files, loaded imports, and source configuration, including
+loaded files outside the opened directory. Use `Ctrl+R` to request a fresh scan.
+If a reload fails while a file is being saved, you can keep browsing the previous
+view. Finish or repair the save, then reload successfully before making changes.
+After a restore failure, open logs with `l` and inspect the message before retrying. See [restore troubleshooting](troubleshooting.md#restore-failed-after-an-edit).
 
 ## Browse dependencies and release notes
 
@@ -101,8 +105,10 @@ when available. `Tab` switches between the version list and note content. Use
 arrow keys to navigate or scroll, and `Esc` to close.
 
 Some feeds or packages do not provide release notes, dependency metadata, or
-publication dates. A version's age comes from the feed's publication timestamp;
-a mirrored feed may report a different timestamp from the public package page.
+publication dates. Version ages use feed publication timestamps. When a mirrored
+feed and nuget.org report different dates, an age labeled `nuget.org:` refers to
+the public feed's date. That label does not establish that the private artifact
+is identical to the public one. Missing or future dates are left blank.
 
 ## Use the mouse
 

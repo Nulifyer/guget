@@ -1,6 +1,9 @@
 package main
 
-import bubble_tea "charm.land/bubbletea/v2"
+import (
+	bubble_tea "charm.land/bubbletea/v2"
+	"strings"
+)
 
 // mouseRect is a zero-based terminal-cell rectangle. The same layout values
 // that size the rendered panels produce these rectangles, keeping pointer hit
@@ -31,7 +34,14 @@ type mouseRegion struct {
 // OnMouse for that rendered view, so resize or overlay changes cannot make an
 // event use geometry from a different frame.
 type mouseLayout struct {
-	modal bool
+	modal               bool
+	captured            bool
+	width, height       int
+	sessionID           int
+	workspaceGeneration int
+	projectPath         string
+	projectPaths        []string
+	packageNames        []string
 
 	projects mouseRect
 	packages mouseRect
@@ -48,9 +58,39 @@ type mouseInputMsg struct {
 	layout mouseLayout
 }
 
+func (m *App) activeMouseSessionID() int {
+	for _, overlay := range m.overlays() {
+		if overlay.IsActive() {
+			if session, ok := overlay.(interface{ mouseSessionID() int }); ok {
+				return session.mouseSessionID()
+			}
+		}
+	}
+	return 0
+}
+
 func (m *App) bindMouse(v *bubble_tea.View, layout mouseLayout) {
 	if !m.mouse {
 		return
+	}
+	layout.captured = true
+	layout.width, layout.height = m.ctx.Width, m.ctx.Height
+	layout.sessionID = m.activeMouseSessionID()
+	layout.workspaceGeneration = m.workspaceGeneration
+	if project := m.selectedProject(); project != nil {
+		layout.projectPath = project.FilePath
+	}
+	if !layout.modal {
+		for _, item := range m.projects.items {
+			path := ""
+			if item.project != nil {
+				path = item.project.FilePath
+			}
+			layout.projectPaths = append(layout.projectPaths, path)
+		}
+		for _, row := range m.packages.rows {
+			layout.packageNames = append(layout.packageNames, row.ref.Name)
+		}
 	}
 	// OSC 8 links are discovered from the final rendered frame, after panel
 	// joins, viewport scrolling, centering, and safety trimming. This keeps link
@@ -179,6 +219,24 @@ func (l mouseLayout) packageIndexAt(x, y, total int) (int, bool) {
 }
 
 func (m *App) handleMouse(input mouseInputMsg) bubble_tea.Cmd {
+	if input.layout.captured {
+		if input.layout.width != m.ctx.Width || input.layout.height != m.ctx.Height {
+			return nil
+		}
+		if input.layout.modal != m.anyOverlayActive() || input.layout.sessionID != m.activeMouseSessionID() {
+			return nil
+		}
+		if !input.layout.modal {
+			path := ""
+			if project := m.selectedProject(); project != nil {
+				path = project.FilePath
+			}
+			if input.layout.workspaceGeneration != m.workspaceGeneration || input.layout.projectPath != path {
+				return nil
+			}
+		}
+	}
+
 	if m.ctx.Width > 0 && (m.ctx.Width < 80 || m.ctx.Height < 12) {
 		return nil
 	}
@@ -222,12 +280,44 @@ func (m *App) handleMouse(input mouseInputMsg) bubble_tea.Cmd {
 		m.focus = target
 		switch target {
 		case focusProjects:
-			if index, ok := input.layout.projectIndexAt(event.X, event.Y, len(m.projects.items)); ok {
-				m.selectProjectIndex(index)
+			total := len(m.projects.items)
+			if input.layout.captured {
+				total = len(input.layout.projectPaths)
+			}
+			if index, ok := input.layout.projectIndexAt(event.X, event.Y, total); ok {
+				if !input.layout.captured {
+					m.selectProjectIndex(index)
+				} else {
+					path := input.layout.projectPaths[index]
+					for i, item := range m.projects.items {
+						current := ""
+						if item.project != nil {
+							current = item.project.FilePath
+						}
+						if current == path {
+							m.selectProjectIndex(i)
+							break
+						}
+					}
+				}
 			}
 		case focusPackages:
-			if index, ok := input.layout.packageIndexAt(event.X, event.Y, len(m.packages.rows)); ok {
-				m.selectPackageIndex(index)
+			total := len(m.packages.rows)
+			if input.layout.captured {
+				total = len(input.layout.packageNames)
+			}
+			if index, ok := input.layout.packageIndexAt(event.X, event.Y, total); ok {
+				if !input.layout.captured {
+					m.selectPackageIndex(index)
+				} else {
+					name := input.layout.packageNames[index]
+					for i, row := range m.packages.rows {
+						if strings.EqualFold(row.ref.Name, name) {
+							m.selectPackageIndex(i)
+							break
+						}
+					}
+				}
 			}
 		}
 

@@ -57,11 +57,14 @@ type App struct {
 	sources       sourcesOverlay
 	help          helpOverlay
 
-	workspaceGeneration int
-	sourceSignature     string
-	activeReload        reloadRequestedMsg
-	pendingReload       reloadRequestedMsg
-	hasPendingReload    bool
+	workspaceGeneration  int
+	sourceSignature      string
+	activeReload         reloadRequestedMsg
+	pendingReload        reloadRequestedMsg
+	hasPendingReload     bool
+	watchInputs          *workspaceWatchInputs
+	workspaceStale       bool
+	sourceInputRevisions map[string][32]byte
 
 	resizeDebounceID      int
 	requestID             int
@@ -130,6 +133,7 @@ func NewApp(projectDir string, snapshot *workspaceSnapshot, initialLogLines []st
 		mouse:                !flags.NoMouse,
 		updateChecksDisabled: flags.NoUpdateCheck,
 		sourceSignature:      workspaceSourceSignature(snapshot.Sources, snapshot.SourceMapping),
+		sourceInputRevisions: snapshot.InputRevisions,
 		projects: projectPanel{
 			sectionBase: sectionBase{baseWidth: 30, minWidth: 10},
 			items:       projItems,
@@ -238,9 +242,19 @@ func (m *App) Update(msg bubble_tea.Msg) (bubble_tea.Model, bubble_tea.Cmd) {
 	case packageRowsRefreshMsg:
 		m.packageRefreshPending = false
 		selectedPackage := m.packageSelection().name
+		offset := m.detail.vp.YOffset()
 		m.rebuildPackageRows()
 		m.selectPackageByName(selectedPackage)
 		m.refreshDetail()
+		if strings.EqualFold(selectedPackage, m.packageSelection().name) {
+			m.detail.vp.SetYOffset(offset)
+		}
+
+	case watchedWorkspaceChangeMsg:
+		m.handleWatchedWorkspaceChange(msg)
+
+	case mutationReconciledMsg:
+		cmds = append(cmds, m.handleMutationReconciled(msg))
 
 	case reloadRequestedMsg:
 		m.requestReload(msg)
@@ -434,6 +448,11 @@ func (m *App) Update(msg bubble_tea.Msg) (bubble_tea.Model, bubble_tea.Cmd) {
 	case mouseInputMsg:
 		cmds = append(cmds, m.handleMouse(msg))
 
+	case bubble_tea.PasteMsg:
+		if m.search.active {
+			cmds = append(cmds, m.search.updateInput(msg))
+		}
+
 	case bubble_tea.KeyReleaseMsg:
 		return m, nil
 
@@ -546,12 +565,14 @@ func (m *App) handleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 	case "s":
 		m.sources.active = !m.sources.active
 		if m.sources.active {
+			m.sources.requestID = m.nextRequestID()
 			m.ctx.StatusLine = ""
 		}
 
 	case "?":
 		m.help.active = !m.help.active
 		if m.help.active {
+			m.help.requestID = m.nextRequestID()
 			m.ctx.StatusLine = ""
 			m.help.refreshView()
 		}

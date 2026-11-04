@@ -279,8 +279,9 @@ func main() {
 	buf.send = p.Send
 	buf.mu.Unlock()
 	m.SetSender(p.Send)
+	m.watchInputs = &workspaceWatchInputs{}
 	m.requestReload(reloadRequestedMsg{reason: "initial load"})
-	stopWatcher := watchWorkspaceFiles(fullProjectPath, p.Send)
+	stopWatcher := watchWorkspaceFiles(fullProjectPath, p.Send, m.watchInputs)
 	defer stopWatcher()
 
 	if _, err := p.Run(); err != nil {
@@ -293,8 +294,10 @@ func main() {
 // a PackageInfo fetched from a private feed.
 func enrichFromNugetOrg(info, nugetInfo *PackageInfo) {
 	// Build a version→vulnerabilities map from nuget.org data.
+	nugetVersions := make(map[string]PackageVersion, len(nugetInfo.Versions))
 	nugetVulns := make(map[string][]PackageVulnerability, len(nugetInfo.Versions))
 	for _, v := range nugetInfo.Versions {
+		nugetVersions[v.SemVer.String()] = v
 		if len(v.Vulnerabilities) > 0 {
 			nugetVulns[v.SemVer.String()] = v.Vulnerabilities
 		}
@@ -302,6 +305,9 @@ func enrichFromNugetOrg(info, nugetInfo *PackageInfo) {
 
 	for i := range info.Versions {
 		key := info.Versions[i].SemVer.String()
+		if public, ok := nugetVersions[key]; ok {
+			info.Versions[i].NugetOrgPublished = public.Published
+		}
 		if len(info.Versions[i].Vulnerabilities) == 0 {
 			if vulns, ok := nugetVulns[key]; ok {
 				info.Versions[i].Vulnerabilities = vulns

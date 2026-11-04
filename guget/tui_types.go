@@ -259,6 +259,8 @@ const (
 )
 
 type releaseNotesOverlay struct {
+	ctx         context.Context
+	cancel      context.CancelFunc
 	sectionBase      // basePct=85, minWidth=60, maxMargin=4
 	focusRight  bool // false = left list, true = notes viewport
 	vp          bubbles_viewport.Model
@@ -330,18 +332,19 @@ func (p projectItem) Description() string {
 }
 
 type packageRow struct {
-	ref              PackageReference
-	project          *ParsedProject
-	info             *PackageInfo
-	source           string
-	err              error
-	loading          bool
-	latestCompatible *PackageVersion
-	latestStable     *PackageVersion
-	diverged         bool
-	oldest           SemVer
-	vulnerable       bool // installed version has ≥1 known vulnerability
-	deprecated       bool // package is deprecated in the registry
+	installedVersions Set[string]
+	ref               PackageReference
+	project           *ParsedProject
+	info              *PackageInfo
+	source            string
+	err               error
+	loading           bool
+	latestCompatible  *PackageVersion
+	latestStable      *PackageVersion
+	diverged          bool
+	oldest            SemVer
+	vulnerable        bool // installed version has ≥1 known vulnerability
+	deprecated        bool // package is deprecated in the registry
 }
 
 // effectiveVersion returns the version used for status comparisons.

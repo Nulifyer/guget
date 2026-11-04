@@ -143,10 +143,11 @@ diff before taking further action.
 
 ## A version says today or has no date
 
-The version age uses the publication timestamp supplied by the metadata feed.
-A mirrored feed may report when it received a package. Compare the same version
-on the publishing feed when the original release date matters. Missing dates can
-mean the feed did not provide a usable timestamp.
+Version age uses the metadata feed's publication timestamp. A mirror can report
+when it received the package. When public metadata is available, an age labeled
+`nuget.org:` identifies that feed's publication date separately. Missing, sentinel,
+or future timestamps produce no age. Compare the package's publishing page if
+you need to confirm its release history.
 
 ## Mouse input interferes with text selection
 

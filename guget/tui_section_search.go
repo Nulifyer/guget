@@ -66,7 +66,7 @@ func (s *packageSearch) HandleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 		return nil
 
 	case "enter":
-		if s.loading || s.fetchingVersion || len(s.results) == 0 {
+		if s.loading || s.fetchingVersion || s.cursor < 0 || s.cursor >= len(s.results) {
 			return nil
 		}
 		selected := s.results[s.cursor]
@@ -84,18 +84,22 @@ func (s *packageSearch) HandleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 			}
 		}
 		// Use cached info if we already fetched this package (e.g. it's in another project).
-		if cached, ok := s.app.ctx.Results[selected.ID]; ok && cached.pkg != nil {
+		if cached, ok := s.app.ctx.Results[selected.ID]; ok && cached.pkg != nil && strings.EqualFold(cached.source, selected.Source) {
 			return func() bubble_tea.Msg {
 				return packageFetchedMsg{requestID: requestID, info: cached.pkg, source: cached.source}
 			}
 		}
-		return s.fetchPackageCmd(selected.ID)
+		return s.fetchPackageCmd(selected.ID, selected.Source)
 	}
+	return s.updateInput(msg)
+}
+
+func (s *packageSearch) updateInput(msg bubble_tea.Msg) bubble_tea.Cmd {
 	if s.fetchingVersion {
 		return nil
 	}
 
-	// Forward all other keys to the textinput
+	// Forward typing and bracketed paste to the same query/debounce path.
 	var cmd bubble_tea.Cmd
 	s.input, cmd = s.input.Update(msg)
 	newQuery := s.input.Value()
@@ -151,28 +155,33 @@ func (s *packageSearch) doSearchCmd(query string) bubble_tea.Cmd {
 			results []SearchResult
 			err     error
 			source  string
+			index   int
 		}
 
 		ch := make(chan sourceResult, len(services))
-		for _, svc := range services {
-			go func(svc *NugetService) {
+		for index, svc := range services {
+			go func(index int, svc *NugetService) {
 				results, err := svc.SearchContext(ctx, query, 50)
-				ch <- sourceResult{results: results, err: err, source: svc.SourceName()}
-			}(svc)
+				ch <- sourceResult{results: results, err: err, source: svc.SourceName(), index: index}
+			}(index, svc)
+		}
+		ordered := make([]sourceResult, len(services))
+		for range services {
+			sr := <-ch
+			ordered[sr.index] = sr
 		}
 
 		seen := NewSet[string]()
 		var merged []SearchResult
 		var lastErr error
-		for range services {
-			sr := <-ch
+		for _, sr := range ordered {
 			if sr.err != nil {
 				lastErr = sr.err
 				logWarn("search source [%s] failed: %v", sr.source, sr.err)
 				continue
 			}
 			for _, r := range sr.results {
-				key := strings.ToLower(r.ID)
+				key := strings.ToLower(r.ID) + "\x00" + strings.ToLower(sr.source)
 				if seen.Contains(key) {
 					continue
 				}
@@ -210,8 +219,14 @@ func (s *packageSearch) doSearchCmd(query string) bubble_tea.Cmd {
 	}
 }
 
-func (s *packageSearch) fetchPackageCmd(id string) bubble_tea.Cmd {
-	services := FilterServices(s.app.ctx.NugetServices, s.app.ctx.SourceMapping, id)
+func (s *packageSearch) fetchPackageCmd(id, source string) bubble_tea.Cmd {
+	eligible := FilterServices(s.app.ctx.NugetServices, s.app.ctx.SourceMapping, id)
+	var services []*NugetService
+	for _, service := range eligible {
+		if strings.EqualFold(service.SourceName(), source) {
+			services = append(services, service)
+		}
+	}
 	requestID := s.requestID
 	ctx, cancel := context.WithCancel(s.app.lifecycle)
 	s.cancel = cancel
@@ -353,12 +368,21 @@ func (s *packageSearch) Render() string {
 
 			line := prefix + pkgID + source + ver
 			lines = append(lines, line)
-			index := i
+			queryID := s.debounceID
+			resultID, sourceID, version := r.ID, r.Source, r.Version
 			regions = append(regions, mouseRegion{
 				rect: mouseRect{x: overlayContentX, y: overlayContentY + len(lines) - 1, w: innerW, h: 1},
 				click: func(bubble_tea.MouseMsg) bubble_tea.Cmd {
-					s.cursor = index
-					return s.HandleKey(bubble_tea.KeyPressMsg(bubble_tea.Key{Code: bubble_tea.KeyEnter}))
+					if s.debounceID != queryID {
+						return nil
+					}
+					for index, current := range s.results {
+						if strings.EqualFold(current.ID, resultID) && strings.EqualFold(current.Source, sourceID) && current.Version == version {
+							s.cursor = index
+							return s.HandleKey(bubble_tea.KeyPressMsg(bubble_tea.Key{Code: bubble_tea.KeyEnter}))
+						}
+					}
+					return nil
 				},
 			})
 		}

@@ -21,7 +21,9 @@ func (m *App) updatePackage(useStable bool, scope actionScope) bubble_tea.Cmd {
 	if useStable {
 		target = row.latestStable
 	} else {
-		target = row.latestCompatible
+		if row.info != nil {
+			target = row.info.LatestStableForFramework(m.packageTargets(row.ref.Name, scope))
+		}
 	}
 	if target == nil {
 		return nil
@@ -62,6 +64,32 @@ func (m *App) updatePackage(useStable bool, scope actionScope) bubble_tea.Cmd {
 		return nil
 	}
 	return m.applyOrConfirmUpdateWithSelection(row.ref.Name, version, project, m.rowReloadSelection())
+}
+
+// packageTargets includes all consumers of each version owner the action can change.
+// A central version selected in one project may also affect other target frameworks.
+func (m *App) packageTargets(packageID string, scope actionScope) Set[TargetFramework] {
+	selected := m.ctx.ParsedProjects
+	if scope == scopeSelected && m.selectedProject() != nil {
+		selected = []*ParsedProject{m.selectedProject()}
+	}
+	var references []*ParsedProject
+	for _, project := range selected {
+		for ref := range project.Packages {
+			if strings.EqualFold(ref.Name, packageID) {
+				references = append(references, project)
+				break
+			}
+		}
+	}
+	targets := NewSet[TargetFramework]()
+	consumers := append(references, snapshotAffectedProjects(m.ctx.ParsedProjects, references, packageID)...)
+	for _, project := range consumers {
+		for target := range project.TargetFrameworks {
+			targets.Add(target)
+		}
+	}
+	return targets
 }
 
 func (m *App) isPropsProject(p *ParsedProject) bool {

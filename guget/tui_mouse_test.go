@@ -350,7 +350,7 @@ func TestSearchResultClickContinuesToVersionFetch(t *testing.T) {
 	app.search = packageSearch{
 		sectionBase: sectionBase{app: app, baseWidth: 90, minWidth: 56, maxMargin: 4, active: true},
 		input:       bubbles_textinput.New(),
-		results:     []SearchResult{{ID: "Example", Version: "1.0.0"}},
+		results:     []SearchResult{{ID: "Example", Version: "1.0.0", Source: "test"}},
 		lastQuery:   "Example",
 	}
 	app.ctx.Results["Example"] = nugetResult{pkg: &PackageInfo{ID: "Example"}, source: "test"}

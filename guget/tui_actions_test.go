@@ -99,11 +99,8 @@ func TestHeldQuickUpdatesProcessEveryPackage(t *testing.T) {
 					t.Fatal("repeat scheduled an overlapping write")
 				}
 				executeActionCmd(t, m, cmd)
-				if !m.ctx.Reloading {
-					t.Fatal("successful write did not reload")
-				}
-				if m.handleKey(tea.KeyPressMsg(tea.Key{Code: key, IsRepeat: true})) != nil {
-					t.Fatal("repeat updated stale state during reload")
+				if m.ctx.Saving || m.ctx.Reloading {
+					t.Fatal("successful write did not reconcile locally")
 				}
 				finishActionReload(t, m, messages)
 				if m.packages.cursor != 0 {
@@ -348,11 +345,12 @@ func TestTUIBulkAddUsesOneCentralTransaction(t *testing.T) {
 	if cmd == nil || !m.ctx.Saving {
 		t.Fatal("bulk add did not start")
 	}
-	result, ok := cmd().(writeResultMsg)
-	if !ok || result.err != nil || result.written != 3 {
-		t.Fatalf("bulk result=%+v, one transaction=%v", result, ok)
+	msg := cmd()
+	result := actionWriteResult(t, msg)
+	if result.err != nil || result.written != 3 {
+		t.Fatalf("bulk result=%+v", result)
 	}
-	m.Update(result)
+	m.Update(msg)
 	finishActionReload(t, m, messages)
 	data, _ := os.ReadFile(central)
 	if strings.Count(string(data), "PackageVersion Include=") != 1 {
@@ -384,11 +382,12 @@ func TestBulkUpdateSkipsLockedProjects(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("no workspace update command")
 	}
-	result := cmd().(writeResultMsg)
+	msg := cmd()
+	result := actionWriteResult(t, msg)
 	if result.err != nil || result.skipped != 1 {
 		t.Fatalf("result=%+v", result)
 	}
-	m.Update(result)
+	m.Update(msg)
 	finishActionReload(t, m, messages)
 	data, _ := os.ReadFile(locked)
 	if !strings.Contains(string(data), `Version="[1.0.0]"`) {
@@ -459,5 +458,18 @@ func TestFailedWriteReloadPreservesSelectionAndError(t *testing.T) {
 	finishActionReload(t, m, messages)
 	if selectedActionPackage(m) != "A" || !m.ctx.StatusIsErr || !strings.Contains(m.ctx.StatusLine, "rollback failure") {
 		t.Fatalf("selected=%s error=%v status=%q", selectedActionPackage(m), m.ctx.StatusIsErr, m.ctx.StatusLine)
+	}
+}
+
+func actionWriteResult(t *testing.T, msg tea.Msg) writeResultMsg {
+	t.Helper()
+	switch result := msg.(type) {
+	case writeResultMsg:
+		return result
+	case mutationReconciledMsg:
+		return result.writeResultMsg
+	default:
+		t.Fatalf("unexpected write completion %T", msg)
+		return writeResultMsg{}
 	}
 }

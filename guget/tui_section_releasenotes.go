@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -13,7 +14,13 @@ import (
 const releaseListWidth = 22 // width of the left release/version list panel
 
 func newReleaseNotesOverlay(m *App, title string) releaseNotesOverlay {
+	parent := m.lifecycle
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithCancel(parent)
 	rn := releaseNotesOverlay{
+		ctx: ctx, cancel: cancel,
 		sectionBase: sectionBase{app: m, basePct: 100, minWidth: 60, maxMargin: 0, active: true, requestID: m.nextRequestID()},
 		title:       title,
 	}
@@ -22,6 +29,13 @@ func newReleaseNotesOverlay(m *App, title string) releaseNotesOverlay {
 	vpH := max(1, overlayH-rn.headerLines())
 	rn.vp = bubbles_viewport.New(bubbles_viewport.WithWidth(rightW), bubbles_viewport.WithHeight(vpH))
 	return rn
+}
+
+func (s *releaseNotesOverlay) closeOverlay() {
+	if s.cancel != nil {
+		s.cancel()
+	}
+	s.sectionBase.closeOverlay()
 }
 
 func (m *App) openReleaseNotes() bubble_tea.Cmd {
@@ -34,6 +48,7 @@ func (m *App) openReleaseNotes() bubble_tea.Cmd {
 	}
 	m.ctx.StatusLine = ""
 
+	m.releaseNotes.closeOverlay()
 	title := row.info.ID + " — Release Notes"
 	rn := newReleaseNotesOverlay(m, title)
 	rn.nsPkgID = row.info.ID
@@ -66,7 +81,7 @@ func (m *App) openReleaseNotes() bubble_tea.Cmd {
 		rn.ghOwner = owner
 		rn.ghRepo = repo
 		rn.ghLoading = true
-		cmds = append(cmds, fetchGitHubReleasesCmd(owner, repo, rn.requestID))
+		cmds = append(cmds, fetchGitHubReleasesCmd(rn.ctx, owner, repo, rn.requestID))
 	}
 
 	// NuSpec: we have the version list already; start fetching notes for the latest version.
@@ -83,12 +98,12 @@ func (m *App) openReleaseNotes() bubble_tea.Cmd {
 			// URL (to discover GitHub releases) and inline release notes.
 			rn.ghLoading = true
 			cmds = append(cmds, func() bubble_tea.Msg {
-				body := svc.FetchNuspec(pkgID, latestVer)
+				body := svc.FetchNuspecContext(rn.ctx, pkgID, latestVer)
 				notes := ExtractNuspecReleaseNotes(body)
 				nuspecRepo := ExtractNuspecRepoURL(body)
 				if nuspecOwner, nuspecRepoName := parseGitHubRepo(nuspecRepo); nuspecOwner != "" && nuspecRepoName != "" {
 					logTrace("openReleaseNotes: %s → nuspec has GitHub repo %s/%s", pkgID, nuspecOwner, nuspecRepoName)
-					releases, err := FetchGitHubReleases(nuspecOwner, nuspecRepoName, 20)
+					releases, err := FetchGitHubReleasesContext(rn.ctx, nuspecOwner, nuspecRepoName, 20)
 					return releaseListReadyMsg{
 						requestID: requestID,
 						releases:  releases, err: err,
@@ -103,7 +118,7 @@ func (m *App) openReleaseNotes() bubble_tea.Cmd {
 				}
 			})
 		} else {
-			cmds = append(cmds, fetchNuspecVersionNotesCmd(svc, pkgID, latestVer, requestID))
+			cmds = append(cmds, fetchNuspecVersionNotesCmd(rn.ctx, svc, pkgID, latestVer, requestID))
 		}
 	} else if owner == "" && rn.nsSvc != nil {
 		// No versions available but we can still try to discover GitHub repo from nuspec.
@@ -113,11 +128,11 @@ func (m *App) openReleaseNotes() bubble_tea.Cmd {
 		version := row.info.LatestVersion
 		requestID := rn.requestID
 		cmds = append(cmds, func() bubble_tea.Msg {
-			body := svc.FetchNuspec(pkgID, version)
+			body := svc.FetchNuspecContext(rn.ctx, pkgID, version)
 			nuspecRepo := ExtractNuspecRepoURL(body)
 			if nuspecOwner, nuspecRepoName := parseGitHubRepo(nuspecRepo); nuspecOwner != "" && nuspecRepoName != "" {
 				logTrace("openReleaseNotes: %s → nuspec has GitHub repo %s/%s", pkgID, nuspecOwner, nuspecRepoName)
-				releases, err := FetchGitHubReleases(nuspecOwner, nuspecRepoName, 20)
+				releases, err := FetchGitHubReleasesContext(rn.ctx, nuspecOwner, nuspecRepoName, 20)
 				return releaseListReadyMsg{requestID: requestID, releases: releases, err: err, owner: nuspecOwner, repo: nuspecRepoName}
 			}
 			return releaseListReadyMsg{requestID: requestID, err: fmt.Errorf("no repository found")}
@@ -140,16 +155,16 @@ func (m *App) openReleaseNotes() bubble_tea.Cmd {
 	return bubble_tea.Batch(cmds...)
 }
 
-func fetchGitHubReleasesCmd(owner, repo string, requestID int) bubble_tea.Cmd {
+func fetchGitHubReleasesCmd(ctx context.Context, owner, repo string, requestID int) bubble_tea.Cmd {
 	return func() bubble_tea.Msg {
-		releases, err := FetchGitHubReleases(owner, repo, 20)
+		releases, err := FetchGitHubReleasesContext(ctx, owner, repo, 20)
 		return releaseListReadyMsg{requestID: requestID, releases: releases, err: err}
 	}
 }
 
-func fetchNuspecVersionNotesCmd(svc *NugetService, pkgID, version string, requestID int) bubble_tea.Cmd {
+func fetchNuspecVersionNotesCmd(ctx context.Context, svc *NugetService, pkgID, version string, requestID int) bubble_tea.Cmd {
 	return func() bubble_tea.Msg {
-		body := svc.FetchNuspec(pkgID, version)
+		body := svc.FetchNuspecContext(ctx, pkgID, version)
 		notes := ExtractNuspecReleaseNotes(body)
 		return nuspecVersionNotesReadyMsg{requestID: requestID, version: version, notes: notes}
 	}
@@ -270,7 +285,7 @@ func (s *releaseNotesOverlay) selectCursor(index int) bubble_tea.Cmd {
 		s.nsLoading = true
 		s.nsNotes = ""
 		if s.nsSvc != nil {
-			return fetchNuspecVersionNotesCmd(s.nsSvc, s.nsPkgID, ver, s.requestID)
+			return fetchNuspecVersionNotesCmd(s.ctx, s.nsSvc, s.nsPkgID, ver, s.requestID)
 		}
 	}
 	return nil

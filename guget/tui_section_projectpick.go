@@ -47,7 +47,7 @@ func (m *App) openProjectPicker(pkgName, version string) {
 	}
 	// baseWidth=80, minWidth=60, maxMargin=4
 	m.projectPick = projectPicker{
-		sectionBase: sectionBase{app: m, baseWidth: 80, minWidth: 60, maxMargin: 4, active: true},
+		sectionBase: sectionBase{app: m, baseWidth: 80, minWidth: 60, maxMargin: 4, active: true, requestID: m.nextRequestID()},
 		pkgName:     pkgName,
 		version:     version,
 		items:       items,

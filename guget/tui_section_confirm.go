@@ -9,14 +9,14 @@ import (
 
 func newConfirmRemove(m *App, pkgName string) confirmRemove {
 	return confirmRemove{
-		sectionBase: sectionBase{app: m, baseWidth: 48, minWidth: 36, maxMargin: 4, active: true},
+		sectionBase: sectionBase{app: m, baseWidth: 48, minWidth: 36, maxMargin: 4, active: true, requestID: m.nextRequestID()},
 		pkgName:     pkgName,
 	}
 }
 
 func newConfirmUpdate(m *App, pkgName, newVersion string, project *ParsedProject) confirmUpdate {
 	return confirmUpdate{
-		sectionBase: sectionBase{app: m, baseWidth: 52, minWidth: 40, maxMargin: 4, active: true},
+		sectionBase: sectionBase{app: m, baseWidth: 52, minWidth: 40, maxMargin: 4, active: true, requestID: m.nextRequestID()},
 		pkgName:     pkgName,
 		newVersion:  newVersion,
 		project:     project,
