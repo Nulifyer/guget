@@ -295,6 +295,7 @@ func runNativeConsoleChild(t *testing.T, scenario string) {
 			tick := time.NewTicker(250 * time.Millisecond)
 			defer tick.Stop()
 			buffer := make([]byte, 256*1024)
+			var pingSeen, cancelSeen bool
 			for {
 				select {
 				case <-ctx.Done():
@@ -302,11 +303,35 @@ func runNativeConsoleChild(t *testing.T, scenario string) {
 				case <-tick.C:
 					n := runtime.Stack(buffer, true)
 					_ = os.WriteFile(filepath.Join(component.statusDir, "stacks"), buffer[:n], 0o600)
-					if err := os.Remove(filepath.Join(component.statusDir, "request-ping")); err == nil {
-						r.Send(nativeLoopPing{})
-					}
-					if err := os.Remove(filepath.Join(component.statusDir, "request-cancel")); err == nil {
-						cancel()
+					// Requests are persistent one-shot files. Deleting a file is
+					// not a delivery acknowledgement on Windows: sharing rules or
+					// another open handle can prevent deletion of a readable file.
+					for _, request := range []struct {
+						name string
+						seen *bool
+						run  func()
+					}{
+						{"ping", &pingSeen, func() { r.Send(nativeLoopPing{}) }},
+						{"cancel", &cancelSeen, cancel},
+					} {
+						if *request.seen {
+							continue
+						}
+						data, err := os.ReadFile(filepath.Join(component.statusDir, "request-"+request.name))
+						if os.IsNotExist(err) {
+							continue
+						}
+						if err != nil {
+							_ = os.WriteFile(filepath.Join(component.statusDir, "failure"), []byte(fmt.Sprintf("read %s request: %v", request.name, err)), 0o600)
+							cancel()
+							return
+						}
+						if string(data) != request.name {
+							continue // The parent may still be completing the write.
+						}
+						*request.seen = true
+						_ = os.WriteFile(filepath.Join(component.statusDir, "control-state"), []byte(fmt.Sprintf("ping=%t cancel=%t triggering=%s", pingSeen, cancelSeen, request.name)), 0o600)
+						request.run()
 					}
 				}
 			}

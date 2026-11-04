@@ -141,7 +141,7 @@ func (p *nativeConsole) resumeDraining() { p.resumeOnce.Do(func() { close(p.resu
 
 func (p *nativeConsole) request(t *testing.T, command string) {
 	t.Helper()
-	if err := os.WriteFile(filepath.Join(p.statusDir, "request-"+command), nil, 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(p.statusDir, "request-"+command), []byte(command), 0o600); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -163,7 +163,13 @@ func (p *nativeConsole) expectStatus(t *testing.T, name string) {
 		case <-tick.C:
 		case <-deadline.C:
 			stacks, _ := os.ReadFile(filepath.Join(p.statusDir, "stacks"))
-			t.Fatalf("runtime did not report %s with terminal output paused:\n%s\nNative helper stacks:\n%s", name, p.text(), stacks)
+			control, _ := os.ReadFile(filepath.Join(p.statusDir, "control-state"))
+			entries, directoryErr := os.ReadDir(p.statusDir)
+			var names []string
+			for _, entry := range entries {
+				names = append(names, entry.Name())
+			}
+			t.Fatalf("runtime did not report %s with terminal output paused:\n%s\nControl state: %s\nStatus files: %v (%v)\nNative helper stacks:\n%s", name, p.text(), control, names, directoryErr, stacks)
 		}
 	}
 }
