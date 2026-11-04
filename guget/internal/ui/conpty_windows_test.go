@@ -162,14 +162,27 @@ func (p *nativeConsole) expectStatus(t *testing.T, name string) {
 		select {
 		case <-tick.C:
 		case <-deadline.C:
-			stacks, _ := os.ReadFile(filepath.Join(p.statusDir, "stacks"))
+			// Ask a separate helper goroutine to collect stacks only after a
+			// failed assertion, avoiding repeated stop-the-world diagnostics
+			// on the successful command-delivery path.
+			_ = os.WriteFile(filepath.Join(p.statusDir, "request-stacks"), nil, 0o600)
+			var stacks []byte
+			stackDeadline := time.Now().Add(time.Second)
+			for time.Now().Before(stackDeadline) {
+				if data, err := os.ReadFile(filepath.Join(p.statusDir, "stacks")); err == nil && len(data) > 0 {
+					stacks = data
+					break
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
 			control, _ := os.ReadFile(filepath.Join(p.statusDir, "control-state"))
+			request, requestErr := os.ReadFile(filepath.Join(p.statusDir, "request-cancel"))
 			entries, directoryErr := os.ReadDir(p.statusDir)
 			var names []string
 			for _, entry := range entries {
 				names = append(names, entry.Name())
 			}
-			t.Fatalf("runtime did not report %s with terminal output paused:\n%s\nControl state: %s\nStatus files: %v (%v)\nNative helper stacks:\n%s", name, p.text(), control, names, directoryErr, stacks)
+			t.Fatalf("runtime did not report %s with terminal output paused:\n%s\nControl state: %s\nCancel request: %q (%v)\nStatus files: %v (%v)\nNative helper stacks:\n%s", name, p.text(), control, request, requestErr, names, directoryErr, stacks)
 		}
 	}
 }

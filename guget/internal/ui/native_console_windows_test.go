@@ -287,25 +287,41 @@ func runNativeConsoleChild(t *testing.T, scenario string) {
 	}
 	if component.statusDir != "" {
 		controlDone := make(chan struct{})
-		defer func() { cancel(); <-controlDone }()
-		// Diagnostics use a separate file: a stalled console cannot report its
-		// own stacks through stdout. Keep sampling until Run and cleanup finish.
+		stackDone := make(chan struct{})
+		defer func() { cancel(); <-controlDone; <-stackDone }()
+		// Stack collection is independent of command delivery and only runs
+		// after a failure. A diagnostic must never delay the cancellation it
+		// is meant to diagnose, or perturb successful race-instrumented runs.
+		go func() {
+			defer close(stackDone)
+			tick := time.NewTicker(25 * time.Millisecond)
+			defer tick.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-tick.C:
+					if _, err := os.Stat(filepath.Join(component.statusDir, "request-stacks")); err == nil {
+						buffer := make([]byte, 256*1024)
+						n := runtime.Stack(buffer, true)
+						_ = os.WriteFile(filepath.Join(component.statusDir, "stacks"), buffer[:n], 0o600)
+						return
+					}
+				}
+			}
+		}()
 		go func() {
 			defer close(controlDone)
-			tick := time.NewTicker(250 * time.Millisecond)
+			tick := time.NewTicker(25 * time.Millisecond)
 			defer tick.Stop()
-			buffer := make([]byte, 256*1024)
 			var pingSeen, cancelSeen bool
 			for {
 				select {
 				case <-ctx.Done():
 					return
 				case <-tick.C:
-					n := runtime.Stack(buffer, true)
-					_ = os.WriteFile(filepath.Join(component.statusDir, "stacks"), buffer[:n], 0o600)
-					// Requests are persistent one-shot files. Deleting a file is
-					// not a delivery acknowledgement on Windows: sharing rules or
-					// another open handle can prevent deletion of a readable file.
+					// Persistent one-shot requests avoid requiring Windows file
+					// deletion for IPC delivery. Record each stage before acting.
 					for _, request := range []struct {
 						name string
 						seen *bool
@@ -317,7 +333,12 @@ func runNativeConsoleChild(t *testing.T, scenario string) {
 						if *request.seen {
 							continue
 						}
+						record := func(stage string) {
+							_ = os.WriteFile(filepath.Join(component.statusDir, "control-state"), []byte(fmt.Sprintf("%s ping=%t cancel=%t %s %s", time.Now().Format(time.RFC3339Nano), pingSeen, cancelSeen, request.name, stage)), 0o600)
+						}
+						record("reading")
 						data, err := os.ReadFile(filepath.Join(component.statusDir, "request-"+request.name))
+						record(fmt.Sprintf("read data=%q err=%v", data, err))
 						if os.IsNotExist(err) {
 							continue
 						}
@@ -330,13 +351,15 @@ func runNativeConsoleChild(t *testing.T, scenario string) {
 							continue // The parent may still be completing the write.
 						}
 						*request.seen = true
-						_ = os.WriteFile(filepath.Join(component.statusDir, "control-state"), []byte(fmt.Sprintf("ping=%t cancel=%t triggering=%s", pingSeen, cancelSeen, request.name)), 0o600)
+						record("triggering")
 						request.run()
+						record("returned")
 					}
 				}
 			}
 		}()
 	}
+
 	if scenario == "runtime-escape-cancel" {
 		// Bare Escape leaves KeyReader.pendingPeek waiting for the next console
 		// read. Cancel from its delivered key event without sending another key.
