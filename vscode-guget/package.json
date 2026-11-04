@@ -111,7 +111,7 @@
         "guget.binaryPath": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Absolute path to the `guget` binary. Leave empty to check standard installation locations, then `PATH`."
+          "markdownDescription": "Absolute path to the `guget` binary. An invalid configured path prevents launch. Leave empty to check standard installation locations, then `PATH`."
         },
         "guget.verbosity": {
           "type": "string",
@@ -180,6 +180,9 @@
   "scripts": {
     "vscode:prepublish": "node esbuild.js --production",
     "build": "node esbuild.js",
+    "typecheck": "tsc --noEmit",
+    "test": "npm run build && node --test test/*.test.cjs",
+    "test:host": "npm run build && node test/run-host.cjs",
     "watch": "node esbuild.js --watch",
     "package": "npx @vscode/vsce package"
   },

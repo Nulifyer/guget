@@ -2,31 +2,79 @@ import * as path from "path";
 import * as vscode from "vscode";
 import { resolveGugetBinary } from "./gugetBinary";
 
-let statusBarItem: vscode.StatusBarItem | undefined;
-
 export async function activate(context: vscode.ExtensionContext) {
-  // Set context key for when clauses
-  const hasDotnet = await checkForDotnetProjects();
-  vscode.commands.executeCommand("setContext", "guget:hasDotnetProjects", hasDotnet);
-
-  // Status bar item
-  statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 0);
+  const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 0);
   statusBarItem.text = "$(package) guget";
   statusBarItem.tooltip = "Manage NuGet Packages";
   statusBarItem.command = "guget.manage";
-  if (hasDotnet) {
-    statusBarItem.show();
-  }
+  statusBarItem.hide();
   context.subscriptions.push(statusBarItem);
 
-  // Watch for .csproj/.fsproj/.vbproj additions and deletions to update context dynamically
+  let disposed = false;
+  let generation = 0;
+  let scanning = false;
+  let scanPromise: Promise<void>;
+
+  // Only publish a scan if no newer filesystem or workspace event invalidated it.
+  // A burst of events requests one follow-up scan instead of concurrent scans.
+  async function scanProjects() {
+    try {
+      while (!disposed) {
+        const scanGeneration = generation;
+        let hasDotnet: boolean;
+        try {
+          hasDotnet = await checkForDotnetProjects();
+        } catch (error) {
+          if (scanGeneration !== generation) {
+            continue;
+          }
+          console.warn("guget: could not scan workspace projects", error);
+          return;
+        }
+        if (disposed) {
+          return;
+        }
+        if (scanGeneration !== generation) {
+          continue;
+        }
+        await vscode.commands.executeCommand("setContext", "guget:hasDotnetProjects", hasDotnet);
+        if (disposed) {
+          return;
+        }
+        if (scanGeneration !== generation) {
+          continue;
+        }
+        if (hasDotnet) {
+          statusBarItem.show();
+        } else {
+          statusBarItem.hide();
+        }
+        return;
+      }
+    } catch (error) {
+      console.warn("guget: could not update workspace project context", error);
+    } finally {
+      scanning = false;
+    }
+  }
+
+  function refreshProjects(): Promise<void> {
+    generation++;
+    if (!scanning) {
+      scanning = true;
+      scanPromise = scanProjects();
+    }
+    return scanPromise;
+  }
+
+  context.subscriptions.push({ dispose() { disposed = true; } });
   const watcher = vscode.workspace.createFileSystemWatcher("**/*.{csproj,fsproj,vbproj}");
-  watcher.onDidCreate(() => updateDotnetContext(true));
-  watcher.onDidDelete(async () => {
-    const still = await checkForDotnetProjects();
-    updateDotnetContext(still);
-  });
-  context.subscriptions.push(watcher);
+  context.subscriptions.push(
+    watcher,
+    watcher.onDidCreate(refreshProjects),
+    watcher.onDidDelete(refreshProjects),
+    vscode.workspace.onDidChangeWorkspaceFolders(refreshProjects)
+  );
 
   // guget.manage — command palette / keybinding / status bar
   context.subscriptions.push(
@@ -49,6 +97,9 @@ export async function activate(context: vscode.ExtensionContext) {
       await launchGuget(context, projectDir);
     })
   );
+
+  // Register event handlers before starting discovery so activation cannot miss a save.
+  await refreshProjects();
 }
 
 export function deactivate() {}
@@ -60,15 +111,6 @@ export function deactivate() {}
 async function checkForDotnetProjects(): Promise<boolean> {
   const files = await vscode.workspace.findFiles("**/*.{csproj,fsproj,vbproj}", "**/node_modules/**", 1);
   return files.length > 0;
-}
-
-function updateDotnetContext(hasDotnet: boolean) {
-  vscode.commands.executeCommand("setContext", "guget:hasDotnetProjects", hasDotnet);
-  if (hasDotnet) {
-    statusBarItem?.show();
-  } else {
-    statusBarItem?.hide();
-  }
 }
 
 // ─────────────────────────────────────────────
@@ -133,22 +175,8 @@ async function launchGuget(context: vscode.ExtensionContext, targetFolder: strin
   // explicitly focus the active terminal so keystrokes go to guget immediately.
   vscode.commands.executeCommand("workbench.action.terminal.focus");
 
-  // Close the editor tab immediately when guget exits.
-  const onClose = vscode.window.onDidCloseTerminal((t) => {
-    if (t === terminal) {
-      onClose.dispose();
-      // The terminal process has ended — close its editor tab directly.
-      // Find the tab backing this terminal and close it.
-      for (const group of vscode.window.tabGroups.all) {
-        for (const tab of group.tabs) {
-          if (tab.input instanceof vscode.TabInputTerminal && tab.label === terminalName) {
-            vscode.window.tabGroups.close(tab);
-            return;
-          }
-        }
-      }
-    }
-  });
+  // VS Code removes the editor tab when its terminal closes. Tab labels are
+  // shared by every guget session and cannot identify a session's terminal.
 }
 
 // ─────────────────────────────────────────────

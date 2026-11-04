@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 import { execFile } from "child_process";
-import { access, constants } from "fs/promises";
+import { access, constants, stat } from "fs/promises";
 import * as path from "path";
 
 const BINARY_NAME = process.platform === "win32" ? "guget.exe" : "guget";
@@ -12,12 +12,13 @@ export async function resolveGugetBinary(): Promise<string | undefined> {
     .get<string>("binaryPath", "");
 
   if (configured) {
-    if (await isExecutable(configured)) {
+    if (path.isAbsolute(configured) && await isExecutable(configured)) {
       return configured;
     }
     vscode.window.showWarningMessage(
-      `guget.binaryPath "${configured}" is not a valid executable. Falling back to PATH.`
+      `guget.binaryPath "${configured}" must be an absolute path to an executable file. Correct or clear this setting to launch guget.`
     );
+    return undefined;
   }
 
   // 2. Well-known install locations (match .scripts/install.ps1 and .scripts/install.sh)
@@ -28,7 +29,8 @@ export async function resolveGugetBinary(): Promise<string | undefined> {
   }
 
   // 3. PATH lookup
-  return findOnPath(BINARY_NAME);
+  const fromPath = await findOnPath(BINARY_NAME);
+  return fromPath && await isExecutable(fromPath) ? fromPath : undefined;
 }
 
 function wellKnownPaths(): string[] {
@@ -50,6 +52,9 @@ function wellKnownPaths(): string[] {
 
 async function isExecutable(filePath: string): Promise<boolean> {
   try {
+    if (!(await stat(filePath)).isFile()) {
+      return false;
+    }
     await access(filePath, constants.X_OK);
     return true;
   } catch {

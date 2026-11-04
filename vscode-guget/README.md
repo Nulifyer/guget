@@ -56,8 +56,10 @@ workspace, choose the folder you want to manage.
 
 ## Choose the executable
 
-Set `guget.binaryPath` to use a particular installed binary. Otherwise, the
-extension checks standard installation locations before searching PATH:
+Set `guget.binaryPath` to an absolute executable file path to use a particular
+installed binary. An invalid configured path prevents launch until you correct or
+clear the setting. With an empty setting, the extension checks standard
+installation locations before searching PATH:
 
 - Windows: `%LOCALAPPDATA%\Programs\guget\guget.exe`.
 - Linux and macOS: `/usr/local/bin/guget`, then `~/.local/bin/guget`.
