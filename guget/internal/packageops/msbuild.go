@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/nulifyer/guget/internal/projectedit"
 )
 
 type ProcessRunner interface {
@@ -67,7 +69,7 @@ func (i MSBuildInspector) InspectProject(ctx context.Context, projectPath string
 		frameworks = []string{""}
 	}
 
-	snapshot := ProjectSnapshot{ProjectPath: abs, TargetFrameworks: append([]string(nil), frameworks...), Evaluated: true}
+	snapshot := ProjectSnapshot{CentralPackageManagement: strings.EqualFold(base.Properties["ManagePackageVersionsCentrally"], "true"), ProjectPath: abs, TargetFrameworks: append([]string(nil), frameworks...), Evaluated: true}
 	for _, framework := range frameworks {
 		output := base
 		if len(frameworks) > 1 {
@@ -75,6 +77,9 @@ func (i MSBuildInspector) InspectProject(ctx context.Context, projectPath string
 			if err != nil {
 				return ProjectSnapshot{ProjectPath: abs}, fmt.Errorf("evaluate %s for %s: %w", abs, framework, err)
 			}
+		}
+		if strings.EqualFold(output.Properties["ManagePackageVersionsCentrally"], "true") != snapshot.CentralPackageManagement {
+			return ProjectSnapshot{ProjectPath: abs}, fmt.Errorf("central package management differs across target frameworks")
 		}
 		snapshot.PackageUses = append(snapshot.PackageUses, packageUses(abs, framework, output)...)
 	}
@@ -135,6 +140,23 @@ func packageUses(projectPath, framework string, output msbuildOutput) []PackageU
 			}
 		}
 		support := editSupport(reference.DefiningProjectFullPath, versionOwner)
+		if support.Supported {
+			if _, err := projectedit.LiteralVersion(reference.DefiningProjectFullPath, reference.Identity); err != nil {
+				support = EditSupport{Reason: err.Error()}
+			}
+		}
+		if support.Supported {
+			if expression, err := projectedit.LiteralVersion(versionOwner, reference.Identity); err != nil {
+				support = EditSupport{Reason: err.Error()}
+			} else if expression == "" {
+				support = EditSupport{Reason: "version owner has no editable literal version"}
+			} else if expression != version {
+				support = EditSupport{Reason: "evaluated version differs from the literal source; metadata overrides require explicit owner editing"}
+			}
+		}
+		if strings.EqualFold(reference.IsImplicitlyDefined, "true") {
+			support = EditSupport{Reason: "implicit SDK reference is read-only"}
+		}
 		uses = append(uses, PackageUse{
 			ProjectPath: projectPath, TargetFramework: framework,
 			PackageID: reference.Identity, EvaluatedExpression: version,

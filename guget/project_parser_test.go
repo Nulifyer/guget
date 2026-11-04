@@ -918,3 +918,33 @@ func keys(m map[string]bool) []string {
 	}
 	return result
 }
+
+func TestParseCsprojChildVersionMetadata(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "App.csproj")
+	mustWriteFile(t, path, `<Project><ItemGroup><PackageReference Include="Example"><Version>1.2.3</Version></PackageReference><PackageReference Include="Override" Version="1.0.0"><VersionOverride>2.0.0</VersionOverride></PackageReference></ItemGroup></Project>`)
+	project, err := ParseCsproj(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	versions := make(map[string]string)
+	for reference := range project.Packages {
+		versions[reference.Name] = reference.Requested
+	}
+	if versions["Example"] != "1.2.3" || versions["Override"] != "2.0.0" {
+		t.Fatalf("versions=%v", versions)
+	}
+}
+
+func TestConditionalCPMPropertyRequiresEvaluation(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "App.csproj")
+	mustWriteFile(t, path, `<Project><PropertyGroup><ManagePackageVersionsCentrally Condition="false">true</ManagePackageVersionsCentrally></PropertyGroup></Project>`)
+	project, err := ParseCsproj(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !project.RequiresEvaluation {
+		t.Fatal("conditional property accepted without evaluated ownership")
+	}
+}

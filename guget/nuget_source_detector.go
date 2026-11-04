@@ -1,7 +1,12 @@
 package main
 
 import (
+	"bytes"
+	"crypto/sha256"
 	"encoding/xml"
+	"errors"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -32,9 +37,12 @@ type NugetSource struct {
 }
 
 // DetectedConfig holds everything discovered from the nuget.config hierarchy.
+// Errors make the configuration unusable; source fallback is disabled until repaired.
 type DetectedConfig struct {
-	Sources []NugetSource
-	Mapping *PackageSourceMapping
+	Errors         []error
+	InputRevisions map[string][sha256.Size]byte
+	Sources        []NugetSource
+	Mapping        *PackageSourceMapping
 }
 
 // parsedMappingResult is an internal type returned by sourcesFromNugetConfig
@@ -48,6 +56,8 @@ type parsedMappingResult struct {
 // package-source mapping rules. <clear/> stops inheritance. Falls back to nuget.org.
 func DetectSources(projectDir string) DetectedConfig {
 	seen := NewSet[string]()
+	revisions := make(map[string][sha256.Size]byte)
+	var configErrors []error
 	var sources []NugetSource
 	mapping := &PackageSourceMapping{Entries: make(map[string][]string)}
 	mappingCleared := false
@@ -64,33 +74,79 @@ func DetectSources(projectDir string) DetectedConfig {
 	// Returns true if a <clear/> was found in <packageSources>.
 	// Deduplicates by resolved path so case-insensitive filesystems
 	// (Windows) don't parse the same file twice.
-	seenConfigs := NewSet[string]()
+	var seenConfigs []os.FileInfo
+	readConfig := func(path string) ([]byte, bool) {
+		if path == "" {
+			return nil, false
+		}
+		absolute, err := filepath.Abs(path)
+		if err != nil {
+			configErrors = append(configErrors, fmt.Errorf("resolve source configuration %s: %w", path, err))
+			return nil, false
+		}
+		info, err := os.Stat(absolute)
+		if os.IsNotExist(err) {
+			return nil, false
+		}
+		if err != nil {
+			configErrors = append(configErrors, fmt.Errorf("inspect source configuration %s: %w", absolute, err))
+			return nil, false
+		}
+		if !info.Mode().IsRegular() {
+			configErrors = append(configErrors, fmt.Errorf("source configuration is not a regular file: %s", absolute))
+			return nil, false
+		}
+		for _, previous := range seenConfigs {
+			if os.SameFile(previous, info) {
+				return nil, false
+			}
+		}
+		seenConfigs = append(seenConfigs, info)
+		data, err := os.ReadFile(absolute)
+		if err != nil {
+			configErrors = append(configErrors, fmt.Errorf("read source configuration %s: %w", absolute, err))
+			return nil, false
+		}
+		revisions[absolute] = sha256.Sum256(data)
+		return data, true
+	}
 	addConfig := func(path string) bool {
-		if info, err := os.Stat(path); err != nil || info.IsDir() {
+		data, found := readConfig(path)
+		if !found {
 			return false
 		}
-		resolved, err := filepath.Abs(path)
-		if err == nil {
-			resolved = strings.ToLower(resolved)
-			if seenConfigs.Contains(resolved) {
-				return false
-			}
-			seenConfigs.Add(resolved)
+		srcs, cleared, mr, err := parseNugetConfig(path, data)
+		if err != nil {
+			configErrors = append(configErrors, fmt.Errorf("invalid NuGet configuration %s: %w", path, err))
+			return false
 		}
-		srcs, cleared, mr := sourcesFromNugetConfig(path)
-		for _, s := range srcs {
-			add(s)
+		for _, source := range srcs {
+			add(source)
 		}
 		if !mappingCleared && mr != nil {
 			if mr.cleared {
 				mapping = &PackageSourceMapping{Entries: make(map[string][]string)}
 				mappingCleared = true
 			}
-			for k, v := range mr.entries {
-				mapping.Entries[k] = append(mapping.Entries[k], v...)
+			for key, value := range mr.entries {
+				mapping.Entries[key] = append(mapping.Entries[key], value...)
 			}
 		}
 		return cleared
+	}
+	addBuildProps := func(path string) {
+		data, found := readConfig(path)
+		if !found {
+			return
+		}
+		sources, err := parseBuildPropsSources(path, data)
+		if err != nil {
+			configErrors = append(configErrors, fmt.Errorf("invalid source configuration %s: %w", path, err))
+			return
+		}
+		for _, source := range sources {
+			add(source)
+		}
 	}
 
 	// 1. Walk from projectDir up to root, collecting nuget.config + Directory.Build.props
@@ -106,9 +162,7 @@ func DetectSources(projectDir string) DetectedConfig {
 		if addConfig(filepath.Join(dir, ".nuget", "NuGet.Config")) {
 			cleared = true
 		}
-		for _, s := range sourcesFromBuildProps(filepath.Join(dir, "Directory.Build.props")) {
-			add(s)
-		}
+		addBuildProps(filepath.Join(dir, "Directory.Build.props"))
 
 		if cleared {
 			break // <clear/> found — do not inherit from parent dirs, user, or machine
@@ -134,7 +188,7 @@ func DetectSources(projectDir string) DetectedConfig {
 	}
 
 	// 4. Fallback to nuget.org
-	if len(sources) == 0 {
+	if len(sources) == 0 && !cleared && len(configErrors) == 0 {
 		add(NugetSource{Name: "nuget.org", URL: defaultNugetSource})
 	}
 
@@ -143,21 +197,29 @@ func DetectSources(projectDir string) DetectedConfig {
 		mapping = nil
 	}
 
-	return DetectedConfig{Sources: sources, Mapping: mapping}
+	if len(configErrors) > 0 {
+		sources, mapping = nil, nil
+	}
+	return DetectedConfig{Sources: sources, Mapping: mapping, Errors: configErrors, InputRevisions: revisions}
 }
 
 // sourcesFromNugetConfig parses a single NuGet.Config file.
 func sourcesFromNugetConfig(path string) ([]NugetSource, bool, *parsedMappingResult) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		logTrace("sourcesFromNugetConfig: skipping %q (%v)", path, err)
 		return nil, false, nil
 	}
-	logTrace("sourcesFromNugetConfig: reading %q", path)
-
-	var cfg nugetConfig
-	if err := xml.Unmarshal(data, &cfg); err != nil {
+	sources, cleared, mapping, err := parseNugetConfig(path, data)
+	if err != nil {
 		return nil, false, nil
+	}
+	return sources, cleared, mapping
+}
+
+func parseNugetConfig(path string, data []byte) ([]NugetSource, bool, *parsedMappingResult, error) {
+	var cfg nugetConfig
+	if err := decodeSourceConfigXML(data, &cfg); err != nil {
+		return nil, false, nil, err
 	}
 
 	cleared := len(cfg.PackageSourcesClear) > 0
@@ -225,7 +287,7 @@ func sourcesFromNugetConfig(path string) ([]NugetSource, bool, *parsedMappingRes
 		logTrace("sourcesFromNugetConfig: %q — %d mapping source(s), mapping-cleared=%v", path, len(mr.entries), mr.cleared)
 	}
 
-	return sources, cleared, mr
+	return sources, cleared, mr, nil
 }
 
 func sourcesFromBuildProps(path string) []NugetSource {
@@ -233,18 +295,24 @@ func sourcesFromBuildProps(path string) []NugetSource {
 	if err != nil {
 		return nil
 	}
+	sources, _ := parseBuildPropsSources(path, data)
+	return sources
+}
+
+func parseBuildPropsSources(path string, data []byte) ([]NugetSource, error) {
 
 	// Parse RestoreSources property from MSBuild XML
 	type propertyGroup struct {
 		RestoreSources string `xml:"RestoreSources"`
 	}
 	type msbuild struct {
+		XMLName        xml.Name        `xml:"Project"`
 		PropertyGroups []propertyGroup `xml:"PropertyGroup"`
 	}
 
 	var props msbuild
-	if err := xml.Unmarshal(data, &props); err != nil {
-		return nil
+	if err := decodeSourceConfigXML(data, &props); err != nil {
+		return nil, err
 	}
 
 	var sources []NugetSource
@@ -267,7 +335,7 @@ func sourcesFromBuildProps(path string) []NugetSource {
 			}
 		}
 	}
-	return sources
+	return sources, nil
 }
 
 func userNugetConfigPath() string {
@@ -289,4 +357,39 @@ func machineNugetConfigPath() string {
 		return filepath.Join(programdata, "NuGet", "NuGet.Config")
 	}
 	return "/etc/opt/nuget/NuGet.Config"
+}
+
+// Reject trailing roots/text as well as malformed XML. Errors deliberately omit
+// document content because configuration files can contain source credentials.
+func decodeSourceConfigXML(data []byte, target any) error {
+	decoder := xml.NewDecoder(bytes.NewReader(data))
+	if err := decoder.Decode(target); err != nil {
+		return safeSourceConfigXMLError(err)
+	}
+	for {
+		token, err := decoder.Token()
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		if err != nil {
+			return safeSourceConfigXMLError(err)
+		}
+		switch token := token.(type) {
+		case xml.Comment, xml.ProcInst:
+		case xml.CharData:
+			if len(bytes.TrimSpace(token)) != 0 {
+				return fmt.Errorf("unexpected content outside the configuration root")
+			}
+		default:
+			return fmt.Errorf("expected a single configuration root")
+		}
+	}
+}
+
+func safeSourceConfigXMLError(err error) error {
+	var syntax *xml.SyntaxError
+	if errors.As(err, &syntax) {
+		return fmt.Errorf("malformed XML at line %d", syntax.Line)
+	}
+	return fmt.Errorf("invalid configuration XML")
 }

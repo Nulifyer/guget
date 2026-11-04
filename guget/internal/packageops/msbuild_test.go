@@ -2,6 +2,7 @@ package packageops
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -19,12 +20,14 @@ func TestMSBuildInspectorSeparatesReferenceAndVersionOwners(t *testing.T) {
 	root := t.TempDir()
 	project := filepath.Join(root, "App.csproj")
 	central := filepath.Join(root, "Directory.Packages.props")
-	for _, path := range []string{project, central} {
-		if err := os.WriteFile(path, []byte("<Project />"), 0o644); err != nil {
-			t.Fatal(err)
-		}
+	if err := os.WriteFile(project, []byte(`<Project><ItemGroup><PackageReference Include="Example.Core" /></ItemGroup></Project>`), 0o644); err != nil {
+		t.Fatal(err)
 	}
-	json := strings.NewReplacer("PROJECT", project, "CENTRAL", central).Replace(`{
+	if err := os.WriteFile(central, []byte(`<Project><ItemGroup><PackageVersion Include="Example.Core" Version="[1.2.0,2.0.0)" /></ItemGroup></Project>`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	escapePath := func(path string) string { data, _ := json.Marshal(path); return string(data[1 : len(data)-1]) }
+	json := strings.NewReplacer("PROJECT", escapePath(project), "CENTRAL", escapePath(central)).Replace(`{
   "Properties":{"TargetFramework":"net8.0","TargetFrameworks":"","ManagePackageVersionsCentrally":"true"},
   "Items":{
     "PackageReference":[{"Identity":"Example.Core","DefiningProjectFullPath":"PROJECT"}],
@@ -59,5 +62,17 @@ func TestMSBuildInspectorPropagatesCancellation(t *testing.T) {
 	_, err := inspector.InspectProject(ctx, "App.csproj")
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestEvaluatedOwnershipRefusesSourceMetadataOverrides(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "App.csproj")
+	if err := os.WriteFile(path, []byte(`<Project><ItemGroup><PackageReference Include="Example" Version="1.0.0" /></ItemGroup></Project>`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	output := msbuildOutput{Items: map[string][]msbuildItem{"PackageReference": {{Identity: "Example", Version: "2.0.0", DefiningProjectFullPath: path}}}}
+	uses := packageUses(path, "net8.0", output)
+	if len(uses) != 1 || uses[0].Edit.Supported || !strings.Contains(uses[0].Edit.Reason, "differs") {
+		t.Fatalf("uses=%+v", uses)
 	}
 }

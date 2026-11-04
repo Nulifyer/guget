@@ -19,6 +19,7 @@ func isExactLock(s string) bool {
 }
 
 type packageElement struct {
+	conditional bool
 	tag         string
 	name        string
 	start       int
@@ -35,6 +36,7 @@ func scanPackageElements(data []byte) ([]packageElement, error) {
 	decoder := xml.NewDecoder(bytes.NewReader(data))
 	var active []packageElement
 	var found []packageElement
+	var conditions []bool
 	for {
 		before := int(decoder.InputOffset())
 		tok, err := decoder.Token()
@@ -47,6 +49,16 @@ func scanPackageElements(data []byte) ([]packageElement, error) {
 		}
 		switch token := tok.(type) {
 		case xml.StartElement:
+			conditional := len(conditions) > 0 && conditions[len(conditions)-1]
+			for _, attr := range token.Attr {
+				if strings.EqualFold(attr.Name.Local, "Condition") && strings.TrimSpace(attr.Value) != "" {
+					conditional = true
+				}
+			}
+			conditions = append(conditions, conditional)
+			if conditional && len(active) > 0 {
+				active[len(active)-1].conditional = true
+			}
 			if !strings.EqualFold(token.Name.Local, "PackageReference") &&
 				!strings.EqualFold(token.Name.Local, "PackageVersion") {
 				continue
@@ -59,9 +71,10 @@ func scanPackageElements(data []byte) ([]packageElement, error) {
 				}
 			}
 			active = append(active, packageElement{
-				tag: token.Name.Local, name: name, start: before, startTagEnd: after,
+				tag: token.Name.Local, name: name, start: before, startTagEnd: after, conditional: conditional,
 			})
 		case xml.EndElement:
+			conditions = conditions[:len(conditions)-1]
 			if len(active) == 0 || !strings.EqualFold(active[len(active)-1].tag, token.Name.Local) {
 				continue
 			}
@@ -88,21 +101,17 @@ func replaceElementVersion(raw []byte, tag, version string) ([]byte, bool) {
 		return raw, false
 	}
 	startTag := raw[:startEnd+1]
-	attrs := []string{"Version"}
-	children := []string{"Version"}
+	fields := []string{"Version"}
 	if strings.EqualFold(tag, "PackageReference") {
-		attrs = []string{"VersionOverride", "Version"}
-		children = []string{"VersionOverride", "Version"}
+		fields = []string{"VersionOverride", "Version"}
 	}
-	for _, attr := range attrs {
-		re := attrPattern(attr)
+	for _, field := range fields {
+		re := attrPattern(field)
 		if re.Match(startTag) {
 			updated := replaceVersionMatch(re, startTag, version)
 			return append(append([]byte(nil), updated...), raw[startEnd+1:]...), true
 		}
-	}
-	for _, child := range children {
-		re := childPattern(child)
+		re = childPattern(field)
 		if re.Match(raw) {
 			return replaceVersionMatch(re, raw, version), true
 		}
@@ -168,6 +177,9 @@ func PlanRemovePackageReference(filePath, pkgName string) (editplan.Change, erro
 	matches := 0
 	for _, element := range elements {
 		if strings.EqualFold(element.tag, "PackageReference") && strings.EqualFold(element.name, pkgName) {
+			if element.conditional {
+				return editplan.Change{}, fmt.Errorf("package %q in %s has conditional ownership and is read-only", pkgName, filePath)
+			}
 			matches++
 		}
 	}
@@ -202,6 +214,9 @@ func UpdatePackageVersion(filePath, pkgName, newVersion string) error {
 }
 
 func PlanUpdatePackageVersion(filePath, pkgName, newVersion string) (editplan.Change, error) {
+	if err := ValidateVersion(newVersion); err != nil {
+		return editplan.Change{}, err
+	}
 	if strings.Contains(newVersion, "$(") {
 		return editplan.Change{}, fmt.Errorf("MSBuild property expressions are read-only edit targets: %q", newVersion)
 	}
@@ -218,6 +233,9 @@ func PlanUpdatePackageVersion(filePath, pkgName, newVersion string) (editplan.Ch
 	matches := 0
 	for _, element := range elements {
 		if strings.EqualFold(element.name, pkgName) {
+			if element.conditional {
+				return editplan.Change{}, fmt.Errorf("package %q in %s has conditional ownership and is read-only", pkgName, filePath)
+			}
 			matches++
 		}
 	}
@@ -238,6 +256,9 @@ func PlanUpdatePackageVersion(filePath, pkgName, newVersion string) (editplan.Ch
 		replacement := newVersion
 		if isExactLock(expression) && !isExactLock(replacement) {
 			replacement = "[" + replacement + "]"
+			if err := ValidateVersion(replacement); err != nil {
+				return editplan.Change{}, fmt.Errorf("cannot replace an exact pin with %q", newVersion)
+			}
 		}
 		raw, ok := replaceElementVersion(elementBytes, element.tag, replacement)
 		if ok {
@@ -263,7 +284,7 @@ func packageElementVersionExpression(raw []byte, tag string) string {
 		return ""
 	}
 	if strings.EqualFold(tag, "PackageReference") {
-		for _, value := range []string{element.VersionOverrideAttr, element.VersionAttr, element.OverrideChild, element.VersionChild} {
+		for _, value := range []string{element.VersionOverrideAttr, element.OverrideChild, element.VersionAttr, element.VersionChild} {
 			if value != "" {
 				return value
 			}
@@ -311,6 +332,11 @@ func addXMLElement(filePath, elementTag, pkgName, version string) error {
 }
 
 func planAddXMLElement(filePath, elementTag, pkgName, version string) (editplan.Change, error) {
+	if version != "" {
+		if err := ValidateVersion(version); err != nil {
+			return editplan.Change{}, err
+		}
+	}
 	if strings.Contains(version, "$(") {
 		return editplan.Change{}, fmt.Errorf("MSBuild property expressions are read-only edit targets: %q", version)
 	}

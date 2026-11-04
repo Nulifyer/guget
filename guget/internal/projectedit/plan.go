@@ -88,3 +88,34 @@ func hasPackageElement(path, packageID, tag string) (bool, error) {
 	}
 	return false, nil
 }
+
+// LiteralVersion returns the single unconditional source expression used by
+// planning. Conditional, duplicate, or property-backed definitions are read-only.
+func LiteralVersion(path, packageID string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	elements, err := scanPackageElements(data)
+	if err != nil {
+		return "", err
+	}
+	var matches []packageElement
+	for _, element := range elements {
+		if strings.EqualFold(element.name, packageID) {
+			matches = append(matches, element)
+		}
+	}
+	if len(matches) != 1 {
+		return "", fmt.Errorf("package %q in %s has %d definitions; ownership is not unique", packageID, path, len(matches))
+	}
+	element := matches[0]
+	if element.conditional {
+		return "", fmt.Errorf("package %q in %s has conditional ownership and is read-only", packageID, path)
+	}
+	expression := packageElementVersionExpression(data[element.start:element.end], element.tag)
+	if strings.Contains(expression, "$(") {
+		return "", fmt.Errorf("package %q in %s uses property expression %q and is read-only", packageID, path, expression)
+	}
+	return expression, nil
+}

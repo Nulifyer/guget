@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"errors"
 	"fmt"
 	"io/fs"
 	"path/filepath"
@@ -13,7 +15,10 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
+var errWorkspaceInputsChanged = errors.New("workspace inputs changed while scanning")
+
 type workspaceSnapshot struct {
+	InputRevisions map[string][sha256.Size]byte
 	ProjectDir     string
 	ParsedProjects []*ParsedProject
 	PropsProjects  []*ParsedProject
@@ -86,8 +91,7 @@ func scanWorkspace(projectDir string) (*workspaceSnapshot, error) {
 	for _, file := range projectFiles {
 		project, err := ParseCsproj(file)
 		if err != nil {
-			logWarn("Skipping unparseable project %s: %v", file, err)
-			continue
+			return nil, fmt.Errorf("incomplete workspace discovery: project %s could not be parsed: %w", file, err)
 		}
 		parsedProjects = append(parsedProjects, project)
 	}
@@ -104,6 +108,9 @@ func scanWorkspace(projectDir string) (*workspaceSnapshot, error) {
 	}
 
 	detected := DetectSources(fullProjectPath)
+	if len(detected.Errors) > 0 {
+		return nil, fmt.Errorf("invalid NuGet source configuration: %w", errors.Join(detected.Errors...))
+	}
 	sources := detected.Sources
 	sourceMapping := detected.Mapping
 	logInfo("Detected %d NuGet source(s)", len(sources))
@@ -112,6 +119,7 @@ func scanWorkspace(projectDir string) (*workspaceSnapshot, error) {
 	}
 
 	return &workspaceSnapshot{
+		InputRevisions: detected.InputRevisions,
 		ProjectDir:     fullProjectPath,
 		ParsedProjects: parsedProjects,
 		PropsProjects:  propsProjects,

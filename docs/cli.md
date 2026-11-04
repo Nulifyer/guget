@@ -137,9 +137,10 @@ before retrying; restore failure does not roll the edit back.
 
 ## Choose output for scripts
 
-Read commands and mutation dry runs accept `table`, `tsv`, `json`, and `jsonl`.
+Read commands and package mutations accept `table`, `tsv`, `json`, and `jsonl`.
 Terminal output defaults to a table, while redirected output defaults to TSV.
-JSON includes the surrounding document and warnings. JSONL contains rows only.
+JSON includes the surrounding document and warnings. Read commands and dry runs
+emit rows in JSONL; mutation apply emits one result document.
 
 A listing document uses these top-level fields:
 
@@ -154,22 +155,28 @@ A listing document uses these top-level fields:
 ```
 
 Other commands use their own row collections: `sources`, `results` for search,
-and `changes` for dry runs. Read commands write data to stdout. Mutation apply
-currently reports changed paths on stderr and does not produce a JSON result,
-even if `--format json` is supplied.
+and `changes` for dry runs. Mutation apply returns `status` (`changed`,
+`unchanged`, or `failed`), `changed` paths, and a `restore` outcome. With
+`--restore`, the outcome is `succeeded`, `failed`, or `skipped` when no edit was
+needed; otherwise it is `not-requested`. A failed edit can also include
+`rolledBack`, `conflicting`, and `unrecovered` paths. Inspect unrecovered files
+and preserved external edits before retrying.
 
-Save read output with `--output`, or capture stdout:
+Save output with `--output`, or capture stdout:
 
 ```bash
 guget list --project ./src --format json --output packages.json
 guget list --project ./src --format json > packages.json
 ```
 
-Check the exit status and JSON warnings before consuming the file. Current
-search failures or interruption can replace an existing `--output` destination;
-use a new destination when the previous result must be preserved. For useful
-partial results, exit 7 is expected. Table, TSV, and JSONL do not carry the full
-JSON warning document.
+Check the exit status and warnings before consuming the file. A failed or
+interrupted search preserves an existing output file. A useful partial search
+result replaces the output and exits with code 7. Every format sends warnings
+to stderr; JSON also includes them in its document.
+
+Output format and file destinations are checked before a package mutation.
+If writing the result fails after an edit, the command exits with code 5 and
+explains that changes were already applied. Inspect the project before retrying.
 
 For example, consume a JSON listing in Python while retaining partial results:
 

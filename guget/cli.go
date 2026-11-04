@@ -224,6 +224,21 @@ func (r cliRuntime) runHelp(args []string) ExitCode {
 }
 
 func commandUsage(verb string) string {
+	usage := commandSynopsis(verb)
+	switch verb {
+	case "list", "show":
+		usage += "Options: --framework TFM (repeatable), --direct, --include-transitive, --source NAME, --timeout DURATION, --no-color, --help\n"
+	case "search":
+		usage += "Options: --source NAME (repeatable), --output FILE, --timeout DURATION, --no-color, --help\n"
+	case "sources":
+		usage += "Options: --output FILE, --timeout DURATION, --no-color, --help\n"
+	case "add", "update", "remove":
+		usage += "Options: --project DIR, --format table|tsv|json|jsonl, --output FILE, --timeout DURATION, --no-color, --help\n"
+	}
+	return usage
+}
+
+func commandSynopsis(verb string) string {
 	switch verb {
 	case "list":
 		return "Usage: guget list [--project DIR] [--format table|tsv|json|jsonl] [--output FILE]\n"
@@ -337,10 +352,6 @@ func rowsFromSnapshot(ctx context.Context, snapshot *workspaceSnapshot, onlyPack
 	msbuild := packageops.MSBuildInspector{}
 	graph := packageops.NuGetGraphInspector{}
 	for _, project := range snapshot.ParsedProjects {
-		declared := make(map[string]PackageReference)
-		for ref := range project.Packages {
-			declared[strings.ToLower(ref.Name)] = ref
-		}
 		evaluated, evalErr := msbuild.InspectProject(ctx, project.FilePath)
 		resolved, graphErr := graph.ResolveProject(ctx, project.FilePath, includeTransitive)
 		resolvedByKey := make(map[string]packageops.PackageUse)
@@ -356,20 +367,19 @@ func rowsFromSnapshot(ctx context.Context, snapshot *workspaceSnapshot, onlyPack
 					continue
 				}
 				requested := use.EvaluatedExpression
-				ref := declared[strings.ToLower(use.PackageID)]
-				if ref.Requested != "" {
-					requested = ref.Requested
-				}
 				resolvedVersion := ""
 				if graphUse, ok := resolvedByKey[packageUseKey(use.PackageID, use.TargetFramework, true)]; ok {
 					resolvedVersion = graphUse.ResolvedVersion
+				}
+				if graphErr == nil && resolvedVersion == "" && !use.Implicit {
+					warnings = append(warnings, fmt.Sprintf("%s: resolved version for %s (%s) is missing; restore metadata is incomplete", project.FileName, use.PackageID, use.TargetFramework))
 				}
 				rows = append(rows, cliPackageRow{
 					Project: project.FileName, ProjectPath: project.FilePath,
 					Package: use.PackageID, RequestedExpression: requested, ResolvedVersion: resolvedVersion,
 					OwnerPath: use.VersionOwner, ReferenceOwner: use.ReferenceOwner, VersionOwner: use.VersionOwner,
 					TargetFrameworks: []string{use.TargetFramework}, Direct: true, Implicit: use.Implicit,
-					EditSupported: use.Edit.Supported, EditReason: use.Edit.Reason, Locked: ref.Locked,
+					EditSupported: use.Edit.Supported, EditReason: use.Edit.Reason, Locked: isExactLock(requested),
 				})
 			}
 		} else {
@@ -492,12 +502,16 @@ func (r cliRuntime) runList(ctx context.Context, verb string, argv []string) Exi
 	for _, artifact := range snapshot.Unsupported {
 		warnings = append(warnings, fmt.Sprintf("%s: %s", artifact.Path, artifact.Reason))
 	}
+	if ctx.Err() != nil {
+		return ExitInterrupted
+	}
 	doc := listDocument{SchemaVersion: 1, Command: verb, Workspace: snapshot.ProjectDir, Packages: rows, Warnings: warnings}
 	data, err := renderPackageRows(doc, outputFormat(args, r.stdout))
 	if err != nil {
 		fmt.Fprintln(r.stderr, err)
 		return ExitUsage
 	}
+	r.emitWarnings(warnings)
 	code := r.writeOutput(args.value("output", ""), data)
 	if code == ExitSuccess && len(warnings) > 0 {
 		return ExitPartial
@@ -588,7 +602,10 @@ type sourcesDocument struct {
 }
 
 func (r cliRuntime) runSources(ctx context.Context, argv []string) ExitCode {
-	args, err := parseCLIArgs(argv, commonValueFlags, commonBoolFlags)
+	values := cloneFlags(commonValueFlags)
+	delete(values, "framework")
+	delete(values, "source")
+	args, err := parseCLIArgs(argv, values, commonBoolFlags)
 	if err != nil || len(args.positionals) != 0 {
 		if err != nil {
 			fmt.Fprintln(r.stderr, err)
@@ -682,18 +699,20 @@ func renderSources(doc sourcesDocument, format string) ([]byte, error) {
 }
 
 func (r cliRuntime) runSearch(ctx context.Context, argv []string) ExitCode {
-	args, err := parseCLIArgs(argv, commonValueFlags, commonBoolFlags)
-	if err != nil || len(args.positionals) != 1 {
-		if err != nil {
-			fmt.Fprintln(r.stderr, err)
-		} else {
-			fmt.Fprint(r.stderr, commandUsage("search"))
-		}
+	values := cloneFlags(commonValueFlags)
+	delete(values, "framework")
+	args, err := parseCLIArgs(argv, values, commonBoolFlags)
+	if err != nil {
+		fmt.Fprintln(r.stderr, err)
 		return ExitUsage
 	}
 	if args.bools["help"] {
 		fmt.Fprint(r.stdout, commandUsage("search"))
 		return ExitSuccess
+	}
+	if len(args.positionals) != 1 {
+		fmt.Fprint(r.stderr, commandUsage("search"))
+		return ExitUsage
 	}
 	ctx, cancel, err := withTimeout(ctx, args.value("timeout", "30s"))
 	if err != nil {
@@ -714,6 +733,19 @@ func (r cliRuntime) runSearch(ctx context.Context, argv []string) ExitCode {
 	wantedSources := make(map[string]bool)
 	for _, name := range args.values["source"] {
 		wantedSources[strings.ToLower(name)] = true
+	}
+	for name := range wantedSources {
+		found := false
+		for _, source := range snapshot.Sources {
+			if strings.EqualFold(source.Name, name) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			fmt.Fprintf(r.stderr, "guget: unknown --source %q\n", name)
+			return ExitSource
+		}
 	}
 	query := args.positionals[0]
 	document := searchDocument{SchemaVersion: 1, Command: "search", Workspace: root, Query: query, Results: []searchRow{}, Warnings: []string{}}
@@ -768,6 +800,13 @@ func (r cliRuntime) runSearch(ctx context.Context, argv []string) ExitCode {
 		}
 		return strings.ToLower(document.Results[i].Package) < strings.ToLower(document.Results[j].Package)
 	})
+	r.emitWarnings(document.Warnings)
+	if ctx.Err() != nil {
+		return ExitInterrupted
+	}
+	if attempted > 0 && failed == attempted {
+		return ExitSource
+	}
 	data, err := renderSearch(document, outputFormat(args, r.stdout))
 	if err != nil {
 		fmt.Fprintln(r.stderr, err)
@@ -775,9 +814,6 @@ func (r cliRuntime) runSearch(ctx context.Context, argv []string) ExitCode {
 	}
 	if code := r.writeOutput(args.value("output", ""), data); code != ExitSuccess {
 		return code
-	}
-	if attempted > 0 && failed == attempted {
-		return ExitSource
 	}
 	if len(document.Warnings) > 0 {
 		return ExitPartial
@@ -856,6 +892,13 @@ type planRow struct {
 }
 
 type planDocument struct {
+	RolledBack    []string  `json:"rolledBack,omitempty"`
+	Conflicting   []string  `json:"conflicting,omitempty"`
+	Unrecovered   []string  `json:"unrecovered,omitempty"`
+	Error         string    `json:"error,omitempty"`
+	Status        string    `json:"status"`
+	Changed       []string  `json:"changed"`
+	Restore       string    `json:"restore"`
 	SchemaVersion int       `json:"schemaVersion"`
 	Command       string    `json:"command"`
 	Workspace     string    `json:"workspace"`
@@ -884,6 +927,10 @@ func (r cliRuntime) runMutation(ctx context.Context, verb string, argv []string)
 	if len(args.positionals) != 1 {
 		fmt.Fprint(r.stderr, commandUsage(verb))
 		return ExitUsage
+	}
+	if len(args.values["framework"]) > 0 || len(args.values["source"]) > 0 {
+		fmt.Fprintln(r.stderr, "--framework and --source do not define a supported mutation scope; use --file or --all")
+		return ExitRefused
 	}
 	files := args.values["file"]
 	if args.bools["all"] == (len(files) > 0) {
@@ -944,12 +991,21 @@ func (r cliRuntime) runMutation(ctx context.Context, verb string, argv []string)
 	}
 	packageID := args.positionals[0]
 	requestedVersion := args.value("version", "")
-	plan, rows, err := buildMutationPlan(verb, packageID, requestedVersion, targets)
+	plan, rows, err := buildMutationPlanContext(ctx, verb, packageID, requestedVersion, targets)
 	if err != nil {
 		fmt.Fprintf(r.stderr, "guget: edit refused: %v\n", err)
 		return ExitRefused
 	}
-	doc := planDocument{SchemaVersion: 1, Command: verb, Workspace: root, DryRun: args.bools["dry-run"], Changes: rows, Warnings: []string{}}
+	doc := planDocument{SchemaVersion: 1, Command: verb, Workspace: root, DryRun: args.bools["dry-run"], Changes: rows, Warnings: []string{}, Status: "dry-run", Changed: []string{}, Restore: "not-requested"}
+	format := outputFormat(args, r.stdout)
+	if _, err := renderPlan(doc, format); err != nil {
+		fmt.Fprintln(r.stderr, err)
+		return ExitUsage
+	}
+	if err := preflightMutationOutput(args.value("output", ""), snapshot); err != nil {
+		fmt.Fprintf(r.stderr, "guget: output unavailable before apply: %v\n", err)
+		return ExitWrite
+	}
 	if args.bools["dry-run"] {
 		data, err := renderPlan(doc, outputFormat(args, r.stdout))
 		if err != nil {
@@ -961,9 +1017,24 @@ func (r cliRuntime) runMutation(ctx context.Context, verb string, argv []string)
 	if err := ctx.Err(); err != nil {
 		return ExitInterrupted
 	}
-	result, err := plan.Apply()
+	result, err := plan.ApplyContext(ctx)
 	if err != nil {
 		fmt.Fprintf(r.stderr, "guget: apply failed: %v\n", err)
+		doc.Status, doc.Error = "failed", err.Error()
+		doc.Changed = append(doc.Changed, result.Changed...)
+		doc.RolledBack, doc.Conflicting, doc.Unrecovered = result.RolledBack, result.Conflicting, result.Unrecovered
+		if len(result.Unrecovered) > 0 {
+			fmt.Fprintf(r.stderr, "guget: inspect and recover these files before retrying: %s\n", strings.Join(result.Unrecovered, ", "))
+		}
+		if len(result.Conflicting) > 0 {
+			fmt.Fprintf(r.stderr, "guget: external edits were preserved; inspect these conflicts before retrying: %s\n", strings.Join(result.Conflicting, ", "))
+		}
+		if data, renderErr := renderPlan(doc, format); renderErr == nil {
+			r.writeOutput(args.value("output", ""), data)
+		}
+		if ctx.Err() != nil {
+			return ExitInterrupted
+		}
 		return ExitWrite
 	}
 	for _, path := range result.Changed {
@@ -972,12 +1043,32 @@ func (r cliRuntime) runMutation(ctx context.Context, verb string, argv []string)
 	if len(result.Changed) == 0 {
 		fmt.Fprintln(r.stderr, "no changes needed")
 	}
-	if args.bools["restore"] && len(result.Changed) > 0 {
-		if code := r.restoreProjects(ctx, targets, args.bools["interactive"]); code != ExitSuccess {
-			return code
+	doc.Status = "unchanged"
+	if len(result.Changed) > 0 {
+		doc.Status = "changed"
+	}
+	doc.Changed = append(doc.Changed, result.Changed...)
+	code := ExitSuccess
+	if args.bools["restore"] {
+		doc.Restore = "skipped"
+		if len(result.Changed) > 0 {
+			code = r.restoreProjects(ctx, targets, args.bools["interactive"])
+			doc.Restore = "succeeded"
+			if code != ExitSuccess {
+				doc.Restore = "failed"
+			}
 		}
 	}
-	return ExitSuccess
+	data, err := renderPlan(doc, format)
+	if err != nil {
+		fmt.Fprintf(r.stderr, "guget: changes applied but result rendering failed: %v\n", err)
+		return ExitWrite
+	}
+	if outputCode := r.writeOutput(args.value("output", ""), data); outputCode != ExitSuccess {
+		fmt.Fprintln(r.stderr, "guget: package changes were applied; result output failed, inspect files before retrying")
+		return outputCode
+	}
+	return code
 }
 
 func mutationTargets(snapshot *workspaceSnapshot, root string, files []string, all bool) ([]*ParsedProject, error) {
@@ -1027,6 +1118,12 @@ func renderPlan(doc planDocument, format string) ([]byte, error) {
 		}
 	case "jsonl":
 		encoder := json.NewEncoder(&buffer)
+		if !doc.DryRun {
+			if err := encoder.Encode(doc); err != nil {
+				return nil, err
+			}
+			break
+		}
 		for _, row := range doc.Changes {
 			if err := encoder.Encode(row); err != nil {
 				return nil, err
@@ -1053,7 +1150,7 @@ func renderPlan(doc planDocument, format string) ([]byte, error) {
 }
 
 func (r cliRuntime) runRestore(ctx context.Context, argv []string) ExitCode {
-	values := cloneFlags(commonValueFlags, "file")
+	values := map[string]bool{"project": true, "timeout": true, "file": true}
 	bools := cloneFlags(commonBoolFlags, "all", "interactive")
 	args, err := parseCLIArgs(argv, values, bools)
 	if err != nil || len(args.positionals) != 0 {
@@ -1116,4 +1213,55 @@ func (r cliRuntime) restoreProjects(ctx context.Context, projects []*ParsedProje
 		}
 	}
 	return ExitSuccess
+}
+
+func (r cliRuntime) emitWarnings(warnings []string) {
+	for _, warning := range warnings {
+		fmt.Fprintf(r.stderr, "guget: warning: %s\n", warning)
+	}
+}
+
+func preflightMutationOutput(path string, snapshot *workspaceSnapshot) error {
+	if path == "" || path == "-" {
+		return nil
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return err
+	}
+	existing, statErr := os.Stat(abs)
+	if statErr == nil && !existing.Mode().IsRegular() {
+		return fmt.Errorf("output is not a regular file: %s", abs)
+	}
+	if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
+		return statErr
+	}
+	for _, source := range workspaceInputPaths(snapshot.ProjectDir, snapshot) {
+		sourceAbs, _ := filepath.Abs(source)
+		info, err := os.Stat(sourceAbs)
+		if outputPathIdentity(sourceAbs) == outputPathIdentity(abs) || existing != nil && err == nil && os.SameFile(existing, info) {
+			return fmt.Errorf("output would overwrite a workspace input: %s", abs)
+		}
+	}
+	temporary, err := os.CreateTemp(filepath.Dir(abs), ".guget-output-check-*")
+	if err != nil {
+		return err
+	}
+	name := temporary.Name()
+	closeErr := temporary.Close()
+	removeErr := os.Remove(name)
+	if closeErr != nil {
+		return closeErr
+	}
+	return removeErr
+}
+
+func outputPathIdentity(path string) string {
+	if canonical, err := filepath.EvalSymlinks(path); err == nil {
+		return canonical
+	}
+	if parent, err := filepath.EvalSymlinks(filepath.Dir(path)); err == nil {
+		return filepath.Join(parent, filepath.Base(path))
+	}
+	return filepath.Clean(path)
 }

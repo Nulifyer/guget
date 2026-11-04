@@ -20,9 +20,10 @@ type PackageUse struct {
 }
 
 type ProjectSnapshot struct {
-	ProjectPath      string       `json:"projectPath"`
-	TargetFrameworks []string     `json:"targetFrameworks"`
-	PackageUses      []PackageUse `json:"packageUses"`
-	Evaluated        bool         `json:"evaluated"`
-	Warnings         []string     `json:"warnings"`
+	CentralPackageManagement bool         `json:"centralPackageManagement"`
+	ProjectPath              string       `json:"projectPath"`
+	TargetFrameworks         []string     `json:"targetFrameworks"`
+	PackageUses              []PackageUse `json:"packageUses"`
+	Evaluated                bool         `json:"evaluated"`
+	Warnings                 []string     `json:"warnings"`
 }

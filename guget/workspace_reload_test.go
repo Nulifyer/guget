@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -224,5 +225,23 @@ func mustWriteFile(t *testing.T, path, content string) {
 	}
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("WriteFile(%s): %v", path, err)
+	}
+}
+
+func TestScanWorkspaceRefusesIncompleteDiscovery(t *testing.T) {
+	root := t.TempDir()
+	good := writeCLIProject(t, root, "Good", `<Project><ItemGroup><PackageReference Include="Example" Version="1.0.0" /></ItemGroup></Project>`)
+	bad := writeCLIProject(t, root, "Bad", `<Project><ItemGroup>`)
+	snapshot, err := scanWorkspace(root)
+	if err == nil || snapshot != nil || !strings.Contains(err.Error(), bad) {
+		t.Fatalf("snapshot=%+v err=%v", snapshot, err)
+	}
+	code, _, diagnostic := runCLIForTest(t, "update", "Example", "--all", "--version", "2.0.0", "--project", root)
+	if code != ExitWorkspace || !strings.Contains(diagnostic, "incomplete workspace discovery") {
+		t.Fatalf("code=%d diagnostic=%s", code, diagnostic)
+	}
+	data, _ := os.ReadFile(good)
+	if !strings.Contains(string(data), `Version="1.0.0"`) {
+		t.Fatal("partial discovery mutation wrote surviving project")
 	}
 }

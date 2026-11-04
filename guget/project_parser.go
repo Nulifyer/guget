@@ -1,7 +1,9 @@
 package main
 
 import (
+	"crypto/sha256"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -14,6 +16,10 @@ type ImportElement struct {
 }
 
 type Project struct {
+	SDK         string `xml:"Sdk,attr"`
+	SDKElements []struct {
+		Name string `xml:"Name,attr"`
+	} `xml:"Sdk"`
 	XMLName        xml.Name        `xml:"Project"`
 	PropertyGroups []PropertyGroup `xml:"PropertyGroup"`
 	ItemGroups     []ItemGroup     `xml:"ItemGroup"`
@@ -25,10 +31,11 @@ type Project struct {
 // The custom unmarshaller is needed because encoding/xml cannot map arbitrary
 // element names to a map with a struct tag alone.
 type PropertyGroup struct {
-	TargetFramework  string
-	TargetFrameworks string
-	Properties       map[string]string // all other child elements
-	Condition        string
+	TargetFramework          string
+	TargetFrameworks         string
+	Properties               map[string]string // all other child elements
+	Condition                string
+	HasConditionalProperties bool
 }
 
 func (pg *PropertyGroup) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error {
@@ -45,6 +52,11 @@ func (pg *PropertyGroup) UnmarshalXML(d *xml.Decoder, start xml.StartElement) er
 		}
 		switch t := tok.(type) {
 		case xml.StartElement:
+			for _, attr := range t.Attr {
+				if attr.Name.Local == "Condition" && strings.TrimSpace(attr.Value) != "" {
+					pg.HasConditionalProperties = true
+				}
+			}
 			var value string
 			if err := d.DecodeElement(&value, &t); err != nil {
 				return err
@@ -76,10 +88,22 @@ type ItemGroup struct {
 // Both Include (new entry) and Update (modify existing) are captured so that
 // unconditional Update elements are not silently dropped.
 type rawPackageReference struct {
+	Condition       string `xml:"Condition,attr"`
 	Include         string `xml:"Include,attr"`
 	Update          string `xml:"Update,attr"`
 	Version         string `xml:"Version,attr"`
 	VersionOverride string `xml:"VersionOverride,attr"`
+	VersionChild    string `xml:"Version"`
+	OverrideChild   string `xml:"VersionOverride"`
+}
+
+func (r rawPackageReference) versionExpression() string {
+	for _, value := range []string{r.VersionOverride, r.OverrideChild, r.Version, r.VersionChild} {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 // effectiveName returns the package name from Include, falling back to Update.
@@ -142,12 +166,16 @@ type AddTarget struct {
 }
 
 type ParsedProject struct {
-	FileName         string
-	FilePath         string // full path to the .csproj/.fsproj file
-	TargetFrameworks Set[TargetFramework]
-	Packages         Set[PackageReference]
-	PackageSources   map[string]string // lowercase pkg name → absolute path of defining file
-	AddTargets       []AddTarget       // possible locations for adding new packages
+	FileName               string
+	RequiresEvaluation     bool // conditional declarations/imports cannot establish active ownership from XML alone
+	DiscoveryErrors        []error
+	FilePath               string // full path to the .csproj/.fsproj file
+	TargetFrameworks       Set[TargetFramework]
+	Packages               Set[PackageReference]
+	PackageSources         map[string]string            // lowercase pkg name → absolute path of defining file
+	InputRevisions         map[string][sha256.Size]byte // exact bytes consumed by project/import parsing
+	PackageOwnerIdentities map[string]string            // recorded owner path → canonical file identity, resolved during discovery
+	AddTargets             []AddTarget                  // possible locations for adding new packages
 }
 
 // SourceFileForPackage returns the file path where pkgName is defined.
@@ -184,6 +212,10 @@ func ParseCsproj(filePath string) (*ParsedProject, error) {
 		PackageSources:   make(map[string]string),
 	}
 
+	if err := recordProjectInput(result, absFilePath, data); err != nil {
+		return nil, err
+	}
+	result.RequiresEvaluation = projectNeedsEvaluation(project)
 	mergePropertyGroups(result, project.PropertyGroups)
 
 	projectDir := filepath.Dir(filePath)
@@ -193,17 +225,23 @@ func ParseCsproj(filePath string) (*ParsedProject, error) {
 	// Build CPM version map from Directory.Packages.props if present.
 	// CPM projects declare <PackageReference Include="Pkg" /> without a Version;
 	// the version is defined centrally as <PackageVersion Include="Pkg" Version="x" />.
+	if central := findDirectoryPackagesProps(projectDir); central != "" {
+		markProjectEvaluation(result, central)
+	}
 	cpmVersions := make(map[string]string) // lowercase name → version string
 	var cpmFilePath string
-	if dpp := activeDirectoryPackagesProps(projectDir, project.PropertyGroups, dbp); dpp != "" {
+	if dpp := activeDirectoryPackagesProps(projectDir, project.PropertyGroups, dbp, result); dpp != "" {
 		if absDpp, err := filepath.Abs(dpp); err == nil {
 			cpmFilePath = absDpp
-			if refs, _, _, err := parsePropsFile(absDpp); err == nil {
+			if refs, _, _, err := parsePropsFileRecording(absDpp, result); err == nil {
+				markProjectEvaluation(result, absDpp)
 				for _, r := range refs {
 					if r.Version != "" {
 						cpmVersions[strings.ToLower(r.Include)] = r.Version
 					}
 				}
+			} else {
+				return nil, fmt.Errorf("central package file %s: %w", absDpp, err)
 			}
 		}
 	}
@@ -214,7 +252,7 @@ func ParseCsproj(filePath string) (*ParsedProject, error) {
 			if name == "" {
 				continue
 			}
-			version := raw.Version
+			version := raw.versionExpression()
 			sourceFile := filePath
 			switch {
 			case version != "":
@@ -251,6 +289,9 @@ func ParseCsproj(filePath string) (*ParsedProject, error) {
 		resolved, err := resolveImportPath(imp.Project, projectDir, projectDir)
 		if err != nil {
 			logDebug("Skipping import in %s: %v", filePath, err)
+			continue
+		}
+		if _, err := os.Stat(resolved); os.IsNotExist(err) && imp.Condition != "" {
 			continue
 		}
 		collectPropsPackages(result, resolved, projectDir, visited)
@@ -338,7 +379,60 @@ func ParseCsproj(filePath string) (*ParsedProject, error) {
 		})
 	}
 
+	if len(result.DiscoveryErrors) > 0 {
+		return nil, fmt.Errorf("incomplete package discovery for %s: %w", filePath, errors.Join(result.DiscoveryErrors...))
+	}
+	cachePackageOwnerIdentities(result)
 	return result, nil
+}
+
+func projectNeedsEvaluation(project Project) bool {
+	if project.SDK != "" || len(project.SDKElements) > 0 || len(project.Imports) > 0 {
+		return true
+	}
+	seen := make(map[string]bool)
+	for _, group := range project.PropertyGroups {
+		if group.Condition != "" || group.HasConditionalProperties {
+			return true
+		}
+		for name, value := range group.Properties {
+			if strings.EqualFold(name, "ManagePackageVersionsCentrally") && !strings.EqualFold(strings.TrimSpace(value), "true") && !strings.EqualFold(strings.TrimSpace(value), "false") {
+				return true
+			}
+		}
+	}
+	for _, group := range project.ItemGroups {
+		if group.Condition != "" {
+			return true
+		}
+		for _, ref := range append(group.PackageReferences, group.PackageVersions...) {
+			key := strings.ToLower(ref.effectiveName())
+			if seen[key] {
+				return true
+			}
+			seen[key] = true
+			if ref.Condition != "" || ref.Update != "" || strings.ContainsAny(ref.effectiveName(), "$*;?") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func markProjectEvaluation(result *ParsedProject, path string) {
+	data, err := os.ReadFile(path)
+	var project Project
+	if err == nil {
+		err = recordProjectInput(result, path, data)
+	}
+	if err == nil {
+		err = xml.Unmarshal(data, &project)
+	}
+	if err != nil {
+		result.DiscoveryErrors = append(result.DiscoveryErrors, fmt.Errorf("%s: %w", path, err))
+		return
+	}
+	result.RequiresEvaluation = result.RequiresEvaluation || projectNeedsEvaluation(project)
 }
 
 // mergePropertyGroups extracts target frameworks from PropertyGroup elements.
@@ -394,7 +488,7 @@ func findDirectoryPackagesProps(startDir string) string {
 // when CPM is enabled by a literal, unconditional property. NuGet imports the
 // central file before Directory.Build.props and the project, so later values
 // override earlier ones here as they do during evaluation.
-func activeDirectoryPackagesProps(startDir string, projectGroups []PropertyGroup, buildPropsPath string) string {
+func activeDirectoryPackagesProps(startDir string, projectGroups []PropertyGroup, buildPropsPath string, recording ...*ParsedProject) string {
 	dpp := findDirectoryPackagesProps(startDir)
 	if dpp == "" {
 		return ""
@@ -408,11 +502,11 @@ func activeDirectoryPackagesProps(startDir string, projectGroups []PropertyGroup
 			known = true
 		}
 	}
-	if value, ok := literalBoolPropertyFromFile(dpp, startDir, "ManagePackageVersionsCentrally", make(map[string]bool)); ok {
+	if value, ok := literalBoolPropertyFromFile(dpp, startDir, "ManagePackageVersionsCentrally", make(map[string]bool), recording...); ok {
 		enabled, known = value, true
 	}
 	if buildPropsPath != "" {
-		if value, ok := literalBoolPropertyFromFile(buildPropsPath, startDir, "ManagePackageVersionsCentrally", make(map[string]bool)); ok {
+		if value, ok := literalBoolPropertyFromFile(buildPropsPath, startDir, "ManagePackageVersionsCentrally", make(map[string]bool), recording...); ok {
 			enabled, known = value, true
 		}
 	}
@@ -423,15 +517,22 @@ func activeDirectoryPackagesProps(startDir string, projectGroups []PropertyGroup
 	return dpp
 }
 
-func literalBoolPropertyFromFile(path, projectDir, name string, visited map[string]bool) (bool, bool) {
+func literalBoolPropertyFromFile(path, projectDir, name string, visited map[string]bool, recording ...*ParsedProject) (bool, bool) {
 	absPath, err := filepath.Abs(path)
 	if err != nil || visited[absPath] {
 		return false, false
 	}
 	visited[absPath] = true
 
-	_, imports, groups, err := parsePropsFile(absPath)
+	var result *ParsedProject
+	if len(recording) > 0 {
+		result = recording[0]
+	}
+	_, imports, groups, err := parsePropsFileRecording(absPath, result)
 	if err != nil {
+		if result != nil {
+			result.DiscoveryErrors = append(result.DiscoveryErrors, fmt.Errorf("property input %s: %w", absPath, err))
+		}
 		return false, false
 	}
 	value := false
@@ -447,7 +548,7 @@ func literalBoolPropertyFromFile(path, projectDir, name string, visited map[stri
 		if resolved == "" {
 			continue
 		}
-		if importedValue, ok := literalBoolPropertyFromFile(resolved, projectDir, name, visited); ok {
+		if importedValue, ok := literalBoolPropertyFromFile(resolved, projectDir, name, visited, recording...); ok {
 			value, found = importedValue, true
 		}
 	}
@@ -480,7 +581,7 @@ func literalBoolProperty(groups []PropertyGroup, name string) (bool, bool) {
 			if !strings.EqualFold(property, name) {
 				continue
 			}
-			if strings.TrimSpace(group.Condition) != "" {
+			if strings.TrimSpace(group.Condition) != "" || group.HasConditionalProperties {
 				value, found = false, true
 				continue
 			}
@@ -522,9 +623,16 @@ func resolveImportPath(rawPath, referringFileDir, projectDir string) (string, er
 // parsePropsFile parses a .props file and returns its PackageReferences, Import
 // elements, and PropertyGroups.
 func parsePropsFile(filePath string) ([]rawPackageReference, []ImportElement, []PropertyGroup, error) {
+	return parsePropsFileRecording(filePath, nil)
+}
+
+func parsePropsFileRecording(filePath string, result *ParsedProject) ([]rawPackageReference, []ImportElement, []PropertyGroup, error) {
 	data, err := os.ReadFile(filePath)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("failed to read props file: %w", err)
+	}
+	if err := recordProjectInput(result, filePath, data); err != nil {
+		return nil, nil, nil, err
 	}
 	var project Project
 	if err := xml.Unmarshal(data, &project); err != nil {
@@ -548,14 +656,14 @@ func parsePropsFile(filePath string) ([]rawPackageReference, []ImportElement, []
 			if r.effectiveName() == "" {
 				continue
 			}
-			r.Version = resolveProps(r.Version, props)
+			r.Version = resolveProps(r.versionExpression(), props)
 			refs = append(refs, r)
 		}
 		for _, r := range ig.PackageVersions {
 			if r.effectiveName() == "" {
 				continue
 			}
-			r.Version = resolveProps(r.Version, props)
+			r.Version = resolveProps(r.versionExpression(), props)
 			refs = append(refs, r)
 		}
 	}
@@ -574,7 +682,7 @@ func parsePropsFile(filePath string) ([]rawPackageReference, []ImportElement, []
 			if name == "" || seen[name] {
 				continue
 			}
-			r.Version = resolveProps(r.Version, props)
+			r.Version = resolveProps(r.versionExpression(), props)
 			refs = append(refs, r)
 			seen[name] = true
 		}
@@ -583,7 +691,7 @@ func parsePropsFile(filePath string) ([]rawPackageReference, []ImportElement, []
 			if name == "" || seen[name] {
 				continue
 			}
-			r.Version = resolveProps(r.Version, props)
+			r.Version = resolveProps(r.versionExpression(), props)
 			refs = append(refs, r)
 			seen[name] = true
 		}
@@ -606,8 +714,10 @@ func collectPropsPackages(result *ParsedProject, propsPath, projectDir string, v
 	}
 	visited[absPath] = true
 
-	refs, imports, propertyGroups, err := parsePropsFile(absPath)
+	markProjectEvaluation(result, absPath)
+	refs, imports, propertyGroups, err := parsePropsFileRecording(absPath, result)
 	if err != nil {
+		result.DiscoveryErrors = append(result.DiscoveryErrors, fmt.Errorf("import %s: %w", absPath, err))
 		logDebug("Failed to parse props file %s: %v", absPath, err)
 		return
 	}
@@ -621,6 +731,9 @@ func collectPropsPackages(result *ParsedProject, propsPath, projectDir string, v
 		}
 		result.Packages.Add(ref)
 		key := strings.ToLower(raw.effectiveName())
+		if _, exists := result.PackageSources[key]; exists {
+			result.RequiresEvaluation = true
+		}
 		// Only set source if not already defined (.csproj takes precedence)
 		if _, exists := result.PackageSources[key]; !exists {
 			result.PackageSources[key] = absPath
@@ -637,6 +750,9 @@ func collectPropsPackages(result *ParsedProject, propsPath, projectDir string, v
 			logDebug("Skipping nested import in %s: %v", absPath, err)
 			continue
 		}
+		if _, err := os.Stat(resolved); os.IsNotExist(err) && imp.Condition != "" {
+			continue
+		}
 		collectPropsPackages(result, resolved, projectDir, visited)
 	}
 }
@@ -649,11 +765,6 @@ func ParsePropsAsProject(filePath string) (*ParsedProject, error) {
 		return nil, fmt.Errorf("failed to resolve path: %w", err)
 	}
 
-	refs, _, propertyGroups, err := parsePropsFile(absPath)
-	if err != nil {
-		return nil, err
-	}
-
 	result := &ParsedProject{
 		FileName:         filepath.Base(absPath),
 		FilePath:         absPath,
@@ -662,6 +773,10 @@ func ParsePropsAsProject(filePath string) (*ParsedProject, error) {
 		PackageSources:   make(map[string]string),
 	}
 
+	refs, _, propertyGroups, err := parsePropsFileRecording(absPath, result)
+	if err != nil {
+		return nil, err
+	}
 	mergePropertyGroups(result, propertyGroups)
 
 	for _, raw := range refs {
@@ -674,5 +789,43 @@ func ParsePropsAsProject(filePath string) (*ParsedProject, error) {
 		result.PackageSources[strings.ToLower(raw.effectiveName())] = absPath
 	}
 
+	cachePackageOwnerIdentities(result)
 	return result, nil
+}
+
+// Resolve ownership once during discovery. Render and event handlers can compare
+// these identities without probing potentially slow network-mounted filesystems.
+func cachePackageOwnerIdentities(project *ParsedProject) {
+	project.PackageOwnerIdentities = make(map[string]string)
+	for _, source := range project.PackageSources {
+		if _, known := project.PackageOwnerIdentities[source]; known {
+			continue
+		}
+		identity, err := canonicalMutationPath(source)
+		if err != nil {
+			identity = filepath.Clean(source)
+		}
+		project.PackageOwnerIdentities[source] = identity
+	}
+}
+
+// Record the bytes actually consumed, not a later reread of the same path. This
+// distinguishes a B-then-A editor save from parsing the stable A revision.
+func recordProjectInput(project *ParsedProject, path string, data []byte) error {
+	if project == nil {
+		return nil
+	}
+	if project.InputRevisions == nil {
+		project.InputRevisions = make(map[string][sha256.Size]byte)
+	}
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return err
+	}
+	digest := sha256.Sum256(data)
+	if prior, known := project.InputRevisions[absolute]; known && prior != digest {
+		return fmt.Errorf("%w: %s was read at multiple revisions", errWorkspaceInputsChanged, absolute)
+	}
+	project.InputRevisions[absolute] = digest
+	return nil
 }

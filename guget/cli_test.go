@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"os"
@@ -74,8 +75,8 @@ func TestDispatchCLI_ListJSONPreservesRequestedExpression(t *testing.T) {
 	if code != ExitPartial {
 		t.Fatalf("code = %d, stderr = %q", code, stderr)
 	}
-	if stderr != "" {
-		t.Fatalf("stderr = %q", stderr)
+	if !strings.Contains(stderr, "guget: warning:") {
+		t.Fatalf("missing partial-result warning: %q", stderr)
 	}
 	var document listDocument
 	if err := json.Unmarshal([]byte(stdout), &document); err != nil {
@@ -227,7 +228,7 @@ func TestDispatchCLI_OutputFileIsWrittenAfterSuccessfulRender(t *testing.T) {
 	output := filepath.Join(root, "packages.json")
 
 	code, stdout, stderr := runCLIForTest(t, "list", "--project", root, "--format", "json", "--output", output)
-	if code != ExitPartial || stdout != "" || stderr != "" {
+	if code != ExitPartial || stdout != "" || !strings.Contains(stderr, "guget: warning:") {
 		t.Fatalf("code = %d, stdout = %q, stderr = %q", code, stdout, stderr)
 	}
 	data, err := os.ReadFile(output)
@@ -306,5 +307,162 @@ func TestDispatchCLI_CanceledContextReturnsInterrupted(t *testing.T) {
 	code := dispatchCLI(ctx, []string{"search", "Example"}, strings.NewReader(""), &stdout, &stderr)
 	if code != ExitInterrupted {
 		t.Fatalf("code = %d, stderr = %q", code, stderr.String())
+	}
+}
+
+func TestMutationOutputIsValidatedBeforeWrites(t *testing.T) {
+	for _, mode := range []string{"invalid-format", "missing-parent", "workspace-input", "invalid-version"} {
+		t.Run(mode, func(t *testing.T) {
+			root := t.TempDir()
+			project := writeCLIProject(t, root, "App", `<Project><ItemGroup><PackageReference Include="Example" Version="1.0.0" /></ItemGroup></Project>`)
+			before, _ := os.ReadFile(project)
+			args := []string{"update", "Example", "--file", project, "--version", "2.0.0", "--project", root}
+			expected := ExitWrite
+			switch mode {
+			case "invalid-format":
+				args = append(args, "--format", "invalid")
+				expected = ExitUsage
+			case "missing-parent":
+				args = append(args, "--output", filepath.Join(root, "missing", "result.json"))
+			case "workspace-input":
+				args = append(args, "--output", project)
+			case "invalid-version":
+				args = append(args, "--version", "not-a-version")
+				expected = ExitRefused
+			}
+			code, _, diagnostic := runCLIForTest(t, args...)
+			if code != expected {
+				t.Fatalf("code=%d expected=%d diagnostic=%s", code, expected, diagnostic)
+			}
+			after, _ := os.ReadFile(project)
+			if !bytes.Equal(before, after) {
+				t.Fatal("validation failure changed project")
+			}
+		})
+	}
+}
+
+func TestMutationApplyReturnsChangedAndNoOpResults(t *testing.T) {
+	root := t.TempDir()
+	project := writeCLIProject(t, root, "App", `<Project><ItemGroup><PackageReference Include="Example" Version="1.0.0" /></ItemGroup></Project>`)
+	args := []string{"update", "Example", "--file", project, "--version", "2.0.0", "--project", root, "--format", "json"}
+	for _, expected := range []string{"changed", "unchanged"} {
+		code, stdout, diagnostic := runCLIForTest(t, args...)
+		if code != ExitSuccess {
+			t.Fatalf("code=%d diagnostic=%s", code, diagnostic)
+		}
+		var result planDocument
+		if err := json.Unmarshal([]byte(stdout), &result); err != nil {
+			t.Fatal(err)
+		}
+		if result.DryRun || result.Status != expected || result.Restore != "not-requested" {
+			t.Fatalf("result=%+v", result)
+		}
+		if expected == "changed" && len(result.Changed) != 1 || expected == "unchanged" && len(result.Changed) != 0 {
+			t.Fatalf("changed=%v", result.Changed)
+		}
+	}
+}
+
+func TestSearchFailurePreservesOutputAndReportsWarnings(t *testing.T) {
+	root := t.TempDir()
+	writeCLIProject(t, root, "App", `<Project />`)
+	mustWriteFile(t, filepath.Join(root, "NuGet.Config"), `<configuration><packageSources><clear/><add key="test" value="https://packages.example.test/index.json"/></packageSources></configuration>`)
+	output := filepath.Join(root, "results.json")
+	mustWriteFile(t, output, "previous-results")
+	var stdout, stderr bytes.Buffer
+	runtime := cliRuntime{stdout: &stdout, stderr: &stderr, newService: func(context.Context, NugetSource) (*NugetService, error) { return nil, errors.New("offline") }}
+	code := runtime.runSearch(context.Background(), []string{"Example", "--project", root, "--output", output})
+	if code != ExitSource || !strings.Contains(stderr.String(), "source test unavailable") {
+		t.Fatalf("code=%d stderr=%s", code, stderr.String())
+	}
+	after, _ := os.ReadFile(output)
+	if string(after) != "previous-results" || stdout.Len() != 0 {
+		t.Fatal("fatal search replaced output")
+	}
+	stderr.Reset()
+	code = runtime.runSearch(context.Background(), []string{"Example", "--project", root, "--source", "test", "--source", "typo"})
+	if code != ExitSource || !strings.Contains(stderr.String(), `unknown --source "typo"`) {
+		t.Fatalf("code=%d stderr=%s", code, stderr.String())
+	}
+}
+
+func TestSearchHelpNeedsNoQuery(t *testing.T) {
+	code, output, diagnostic := runCLIForTest(t, "search", "--help")
+	if code != ExitSuccess || !strings.Contains(output, "Usage: guget search") || diagnostic != "" {
+		t.Fatalf("code=%d output=%s diagnostic=%s", code, output, diagnostic)
+	}
+}
+
+type failingCLIWriter struct{}
+
+func (failingCLIWriter) Write([]byte) (int, error) { return 0, errors.New("closed result stream") }
+
+func TestMutationReportingFailureExplainsCommittedChanges(t *testing.T) {
+	root := t.TempDir()
+	project := writeCLIProject(t, root, "App", `<Project><ItemGroup><PackageReference Include="Example" Version="1.0.0" /></ItemGroup></Project>`)
+	var stderr bytes.Buffer
+	runtime := cliRuntime{stdout: failingCLIWriter{}, stderr: &stderr}
+	code := runtime.runMutation(context.Background(), "update", []string{"Example", "--project", root, "--file", project, "--version", "2.0.0", "--format", "json"})
+	data, _ := os.ReadFile(project)
+	if code != ExitWrite || !strings.Contains(string(data), `Version="2.0.0"`) || !strings.Contains(stderr.String(), "package changes were applied") {
+		t.Fatalf("code=%d project=%s stderr=%s", code, data, stderr.String())
+	}
+}
+
+func TestMutationRestoreFailureHasMachineResult(t *testing.T) {
+	root := t.TempDir()
+	project := writeCLIProject(t, root, "App", `<Project><ItemGroup><PackageReference Include="Example" Version="1.0.0" /></ItemGroup></Project>`)
+	var stdout, stderr bytes.Buffer
+	runtime := cliRuntime{stdout: &stdout, stderr: &stderr, runCommand: func(context.Context, string, []string, io.Reader, io.Writer, io.Writer) error {
+		return errors.New("restore unavailable")
+	}}
+	code := runtime.runMutation(context.Background(), "update", []string{"Example", "--project", root, "--file", project, "--version", "2.0.0", "--restore", "--format", "jsonl"})
+	var result planDocument
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if code != ExitRestore || result.Status != "changed" || result.Restore != "failed" || len(result.Changed) != 1 {
+		t.Fatalf("code=%d result=%+v stderr=%s", code, result, stderr.String())
+	}
+}
+
+func TestUnsupportedReadAndRestoreFlagsAreRejected(t *testing.T) {
+	for _, args := range [][]string{
+		{"restore", "--all", "--format", "json"},
+		{"restore", "--all", "--output", "result.json"},
+		{"restore", "--all", "--framework", "net8.0"},
+		{"sources", "--source", "typo"},
+		{"search", "Example", "--framework", "net8.0"},
+	} {
+		code, _, diagnostic := runCLIForTest(t, args...)
+		if code != ExitUsage || !strings.Contains(diagnostic, "unknown flag") {
+			t.Fatalf("args=%v code=%d diagnostic=%s", args, code, diagnostic)
+		}
+	}
+}
+
+func TestMutationOutputCannotOverwriteNuGetConfiguration(t *testing.T) {
+	for _, preexisting := range []bool{false, true} {
+		root := t.TempDir()
+		project := writeCLIProject(t, root, "App", `<Project><ItemGroup><PackageReference Include="Example" Version="1.0.0" /></ItemGroup></Project>`)
+		config := filepath.Join(root, "NuGet.Config")
+		content := `<configuration><packageSources><clear /></packageSources></configuration>`
+		if preexisting {
+			mustWriteFile(t, config, content)
+		}
+		before, _ := os.ReadFile(project)
+		code, _, diagnostic := runCLIForTest(t, "update", "Example", "--project", root, "--file", project, "--version", "2.0.0", "--output", config)
+		if code != ExitWrite || !strings.Contains(diagnostic, "overwrite a workspace input") {
+			t.Fatalf("code=%d diagnostic=%s", code, diagnostic)
+		}
+		after, _ := os.ReadFile(project)
+		if !bytes.Equal(before, after) {
+			t.Fatal("output refusal edited project")
+		}
+		data, err := os.ReadFile(config)
+		if preexisting && (err != nil || string(data) != content) || !preexisting && !os.IsNotExist(err) {
+			t.Fatalf("configuration changed: data=%s err=%v", data, err)
+		}
 	}
 }
