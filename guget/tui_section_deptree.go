@@ -30,7 +30,7 @@ func newDepTreeOverlay(m *App, title string, loading bool) depTreeOverlay {
 	}
 	m.depTree = dt // assign so depTreeOverlaySize() reads the correct Width()
 	overlayW, overlayH := m.depTreeOverlaySize()
-	dt.vp = bubbles_viewport.New(bubbles_viewport.WithWidth(overlayW-6), bubbles_viewport.WithHeight(overlayH-8))
+	dt.vp = bubbles_viewport.New(bubbles_viewport.WithWidth(overlayW-6), bubbles_viewport.WithHeight(max(1, overlayH-2)))
 	return dt
 }
 
@@ -52,6 +52,7 @@ func (m *App) openDepTree() bubble_tea.Cmd {
 		}
 	}
 	dt := newDepTreeOverlay(m, row.ref.Name+" "+row.ref.Version.String(), false)
+	dt.packageVersion = installedVer
 	dt.content = dt.formatDepGroups(installedVer)
 	dt.vp.SetContent(dt.content)
 	m.depTree = dt
@@ -158,13 +159,24 @@ func (s *depTreeOverlay) formatDepGroups(v *PackageVersion) string {
 				}
 				rangeStr := formatVersionRange(dep.Range)
 				sb.WriteString("  " + iconStyle.Render(icon) + " ")
-				sb.WriteString(styleText.Render(padRight(dep.ID, maxNameW)) +
-					styleSubtle.Render(rangeStr) + "\n")
+				rangeW := min(lipgloss.Width(rangeStr), max(1, s.vp.Width()/2))
+				nameW := max(1, min(maxNameW, s.vp.Width()-4-rangeW))
+				sb.WriteString(styleText.Render(padRight(truncate(dep.ID, max(1, nameW-1)), nameW)) +
+					styleSubtle.Render(truncate(rangeStr, rangeW)) + "\n")
 			}
 		}
 		sb.WriteString("\n")
 	}
 	return sb.String()
+}
+
+func (s *depTreeOverlay) refreshContent() {
+	if s.packageVersion != nil {
+		s.content = s.formatDepGroups(s.packageVersion)
+	} else if len(s.dotnetProjects) > 0 {
+		s.content = s.renderParsedDotnetList(s.dotnetProjects)
+	}
+	s.vp.SetContent(s.buildContent())
 }
 
 func (s *depTreeOverlay) buildContent() string {
@@ -291,31 +303,33 @@ func rejoinIntervals(fields []string) []string {
 func (s *depTreeOverlay) renderParsedDotnetList(projects []dotnetListProject) string {
 	// Compute max package name width across all frameworks so the version
 	// column starts at the same position regardless of name length.
-	maxNameW := 20
+	maxNameW, maxResolvedW, maxRequestedW := 20, 10, 0
 	for _, proj := range projects {
 		for _, fw := range proj.Frameworks {
-			for _, pkg := range fw.TopLevel {
-				if w := lipgloss.Width(pkg.Name); w > maxNameW {
-					maxNameW = w
-				}
-			}
-			for _, pkg := range fw.Transitive {
-				if w := lipgloss.Width(pkg.Name); w > maxNameW {
-					maxNameW = w
+			for _, group := range [][]dotnetListPkg{fw.TopLevel, fw.Transitive} {
+				for _, pkg := range group {
+					maxNameW = max(maxNameW, lipgloss.Width(pkg.Name)+2)
+					maxResolvedW = max(maxResolvedW, lipgloss.Width(pkg.Resolved))
+					if pkg.Requested != "" && !strings.ContainsAny(pkg.Requested, "[]()") && pkg.Requested != pkg.Resolved {
+						maxRequestedW = max(maxRequestedW, lipgloss.Width(pkg.Requested)+2)
+					}
 				}
 			}
 		}
 	}
-	maxNameW += 2 // breathing room
+	versionBudget := max(1, (s.vp.Width()-4)/3)
+	resolvedW := min(maxResolvedW, versionBudget)
+	requestedW := min(maxRequestedW, versionBudget)
+	nameW := max(1, min(maxNameW, s.vp.Width()-4-resolvedW-requestedW))
 
 	var sb strings.Builder
 	for pi, proj := range projects {
 		if pi > 0 {
 			sb.WriteString("\n")
 		}
-		sb.WriteString(styleAccentBold.Render("◈ "+proj.Name) + "\n")
+		sb.WriteString(styleAccentBold.Render(truncate("◈ "+proj.Name, s.vp.Width())) + "\n")
 		for _, fw := range proj.Frameworks {
-			sb.WriteString("\n" + styleAccentBold.Render(fw.Name) + "\n")
+			sb.WriteString("\n" + styleAccentBold.Render(truncate(fw.Name, s.vp.Width())) + "\n")
 			if len(fw.TopLevel) > 0 {
 				sb.WriteString(styleSubtle.Render("  top-level") + "\n")
 				for _, pkg := range fw.TopLevel {
@@ -324,22 +338,22 @@ func (s *depTreeOverlay) renderParsedDotnetList(projects []dotnetListProject) st
 						icon, iconStyle = row.statusIcon(), row.statusStyle()
 					}
 					sb.WriteString("  " + iconStyle.Render(icon) + " ")
-					sb.WriteString(styleText.Render(padRight(pkg.Name, maxNameW)))
+					sb.WriteString(styleText.Render(padRight(truncate(pkg.Name, max(1, nameW-1)), nameW)))
 					// Only show Requested when it is a specific pinned version
 					// (not a range like "[2.0.3, )") that differs from Resolved.
 					isRange := strings.ContainsAny(pkg.Requested, "[]()")
 					showReq := pkg.Requested != "" && !isRange && pkg.Requested != pkg.Resolved
 					if showReq {
-						sb.WriteString(styleMuted.Render(padRight(pkg.Requested, 14)))
+						sb.WriteString(styleSubtle.Render(padRight(truncate(pkg.Requested, max(1, requestedW-1)), requestedW)))
 					} else {
-						sb.WriteString(strings.Repeat(" ", 14))
+						sb.WriteString(strings.Repeat(" ", requestedW))
 					}
 					if pkg.Resolved != "" {
-						vs := styleMuted
+						vs := styleSubtle
 						if showReq {
 							vs = styleYellow
 						}
-						sb.WriteString(vs.Render(pkg.Resolved))
+						sb.WriteString(vs.Render(truncate(pkg.Resolved, resolvedW)))
 					}
 					sb.WriteString("\n")
 				}
@@ -352,9 +366,9 @@ func (s *depTreeOverlay) renderParsedDotnetList(projects []dotnetListProject) st
 						icon, iconStyle = row.statusIcon(), row.statusStyle()
 					}
 					sb.WriteString("  " + iconStyle.Render(icon) + " ")
-					sb.WriteString(styleSubtle.Render(padRight(pkg.Name, maxNameW)))
+					sb.WriteString(styleSubtle.Render(padRight(truncate(pkg.Name, max(1, nameW-1)), nameW)))
 					if pkg.Resolved != "" {
-						sb.WriteString(styleMuted.Render(formatVersionRange(pkg.Resolved)))
+						sb.WriteString(strings.Repeat(" ", requestedW) + styleSubtle.Render(truncate(formatVersionRange(pkg.Resolved), resolvedW)))
 					}
 					sb.WriteString("\n")
 				}
@@ -374,10 +388,16 @@ func (s *depTreeOverlay) FooterKeys() []kv {
 func (s *depTreeOverlay) HandleKey(msg bubble_tea.KeyMsg) bubble_tea.Cmd {
 	switch msg.String() {
 	case "[":
-		s.Resize(-4)
+		if s.Resize(-4) {
+			s.app.relayout()
+			s.refreshContent()
+		}
 		return nil
 	case "]":
-		s.Resize(4)
+		if s.Resize(4) {
+			s.app.relayout()
+			s.refreshContent()
+		}
 		return nil
 	case "esc", "q":
 		s.closeOverlay()
@@ -407,7 +427,7 @@ func (s *depTreeOverlay) Render() string {
 				styleSubtle.Render("Loading dependency tree..."),
 		)
 		// pad to fill viewport height
-		vpH := overlayH - 8
+		vpH := max(1, overlayH-2)
 		for i := 1; i < vpH; i++ {
 			lines = append(lines, "")
 		}

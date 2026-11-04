@@ -106,7 +106,7 @@ func (s *locationPicker) Render() string {
 
 	lines := []string{
 		overlayTitleLine("Add to which file?", innerW),
-		styleSubtle.Render(s.pkgName + " " + s.version),
+		overlayPackageLine(s.pkgName, s.version, innerW),
 		"",
 	}
 	rowStart := len(lines)
@@ -140,21 +140,24 @@ func (s *locationPicker) Render() string {
 		}
 	}
 
+	kindW := maxKind + 3
+	nameW := min(maxName+1, max(10, (innerW-2-kindW)*2/3))
+	descW := max(0, innerW-2-nameW-kindW)
 	maxVisible := max(1, s.app.overlayHeight()-rowStart-6)
 	start := max(0, s.cursor-maxVisible+1)
 	end := min(len(rows), start+maxVisible)
 	for i := start; i < end; i++ {
 		r := rows[i]
 		prefix := "  "
-		nameStyle := styleMuted
+		nameStyle := styleSubtle
 		if i == s.cursor {
 			prefix = "▶ "
 			nameStyle = styleAccentBold
 		}
 		line := prefix +
-			padRight(nameStyle.Render(r.fileName), maxName+1) +
-			padRight(styleMuted.Render("["+r.kindLabel+"]"), maxKind+3) +
-			styleSubtle.Render(r.desc)
+			padRight(nameStyle.Render(truncate(r.fileName, nameW-1)), nameW) +
+			padRight(styleSubtle.Render("["+r.kindLabel+"]"), kindW) +
+			styleSubtle.Render(truncate(r.desc, descW))
 		lines = append(lines, line)
 		index := i
 		regions = append(regions, mouseRegion{

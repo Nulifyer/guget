@@ -153,6 +153,12 @@ func (s *sectionBase) MouseRegions() []mouseRegion {
 	return regions
 }
 
+func overlayPackageLine(name, version string, width int) string {
+	version = truncate(version, max(1, width-2))
+	name = truncate(name, max(1, width-lipgloss.Width(version)-1))
+	return styleSubtle.Render(name + " " + version)
+}
+
 func overlayTitleLine(title string, innerW int) string {
 	const closeLabel = "[×]"
 	if innerW <= lipgloss.Width(closeLabel) {
@@ -281,7 +287,7 @@ func clampListScroll(cursor int, scroll *int, visible, total, extraPad int) {
 	}
 	pad := 0
 	if extraPad > 0 && cursor == total-1 {
-		pad = extraPad
+		pad = min(extraPad, max(0, visible-1))
 	}
 	if cursor+pad >= *scroll+visible {
 		*scroll = cursor + pad - visible + 1
@@ -305,7 +311,11 @@ func renderToPanel(s lipgloss.Style, outerW, outerH int, content string) string 
 	if contentH < 1 {
 		contentH = 1
 	}
+	contentW := max(0, outerW-s.GetHorizontalFrameSize())
 	lines := strings.Split(content, "\n")
+	for i := range lines {
+		lines[i] = truncateStyled(lines[i], contentW)
+	}
 	if len(lines) > contentH {
 		lines = lines[:contentH]
 	}

@@ -19,10 +19,7 @@ func newReleaseNotesOverlay(m *App, title string) releaseNotesOverlay {
 	}
 	_, rightW := rn.panelWidths()
 	_, overlayH := rn.overlaySize()
-	vpH := overlayH - 5 // title + tabBar + divider + colHeader + colDivider
-	if vpH < 4 {
-		vpH = 4
-	}
+	vpH := max(1, overlayH-rn.headerLines())
 	rn.vp = bubbles_viewport.New(bubbles_viewport.WithWidth(rightW), bubbles_viewport.WithHeight(vpH))
 	return rn
 }
@@ -295,6 +292,14 @@ func (s *releaseNotesOverlay) overlaySize() (w, h int) {
 	return
 }
 
+func (s *releaseNotesOverlay) headerLines() int {
+	_, contentHeight := s.overlaySize()
+	if contentHeight < 8 {
+		return 3
+	}
+	return 5
+}
+
 func (s *releaseNotesOverlay) panelWidths() (listW, rightW int) {
 	overlayW, _ := s.overlaySize()
 	innerW := overlayW - 6 // subtract styleOverlay border(2) + padding(4)
@@ -309,15 +314,16 @@ func (s *releaseNotesOverlay) panelWidths() (listW, rightW int) {
 	return
 }
 
-func (s *releaseNotesOverlay) resizeViewport() {
+func (s *releaseNotesOverlay) layoutViewport() {
 	_, rightW := s.panelWidths()
 	_, overlayH := s.overlaySize()
-	vpH := overlayH - 5 // title + tabBar + divider + colHeader + colDivider
-	if vpH < 4 {
-		vpH = 4
-	}
+	vpH := max(1, overlayH-s.headerLines())
 	s.vp.SetWidth(rightW)
 	s.vp.SetHeight(vpH)
+}
+
+func (s *releaseNotesOverlay) resizeViewport() {
+	s.layoutViewport()
 	if !s.isLoading() {
 		s.updateViewportContent()
 	}
@@ -348,24 +354,27 @@ func (s *releaseNotesOverlay) buildGitHubContent() string {
 	var sb strings.Builder
 	rel := s.ghReleases[s.ghCursor]
 
-	title := rel.TagName
-	if rel.Name != "" && rel.Name != rel.TagName {
-		title = rel.Name + " (" + rel.TagName + ")"
-	}
-	sb.WriteString(styleAccentBold.Render(title))
-
-	if rel.PublishedAt != "" {
-		if t, err := time.Parse(time.RFC3339, rel.PublishedAt); err == nil {
-			sb.WriteString("  " + styleMuted.Render(t.Format("2006-01-02")))
+	if s.vp.Height() > 4 {
+		title := rel.TagName
+		if rel.Name != "" && rel.Name != rel.TagName {
+			title = rel.Name + " (" + rel.TagName + ")"
 		}
-	}
+		sb.WriteString(styleAccentBold.Render(title))
 
-	if s.ghNotesURL != "" {
-		sb.WriteString("  " + hyperlink(s.ghNotesURL, styleSubtle.Render("view on GitHub")))
-	}
+		if rel.PublishedAt != "" {
+			if t, err := time.Parse(time.RFC3339, rel.PublishedAt); err == nil {
+				sb.WriteString("  " + styleMuted.Render(t.Format("2006-01-02")))
+			}
+		}
 
-	sb.WriteString("\n")
-	sb.WriteString(styleBorder.Render(strings.Repeat("─", s.vp.Width())) + "\n")
+		if s.ghNotesURL != "" {
+			sb.WriteString("  " + hyperlink(s.ghNotesURL, styleSubtle.Render("view on GitHub")))
+		}
+
+		sb.WriteString("\n")
+		sb.WriteString(styleBorder.Render(strings.Repeat("─", s.vp.Width())) + "\n")
+
+	}
 
 	body := s.ghNotes
 	if body == "" {
@@ -387,10 +396,13 @@ func (s *releaseNotesOverlay) buildNuSpecContent() string {
 	}
 
 	var sb strings.Builder
-	ver := s.nsVersions[s.nsCursor]
-	sb.WriteString(styleAccentBold.Render(ver))
-	sb.WriteString("\n")
-	sb.WriteString(styleBorder.Render(strings.Repeat("─", s.vp.Width())) + "\n")
+	if s.vp.Height() > 4 {
+		ver := s.nsVersions[s.nsCursor]
+		sb.WriteString(styleAccentBold.Render(ver))
+		sb.WriteString("\n")
+		sb.WriteString(styleBorder.Render(strings.Repeat("─", s.vp.Width())) + "\n")
+
+	}
 
 	body := s.nsNotes
 	if body == "" {
@@ -428,6 +440,7 @@ func (s *releaseNotesOverlay) tabLabel(tab releaseNotesTab) string {
 }
 
 func (s *releaseNotesOverlay) Render() string {
+	s.layoutViewport()
 	overlayW, overlayH := s.overlaySize()
 	innerW := overlayW - 6
 	listW, rightW := s.panelWidths()
@@ -435,7 +448,8 @@ func (s *releaseNotesOverlay) Render() string {
 	div := styleBorder.Render("│")
 
 	// bodyH = overlayH minus title(1) + tabBar(1) + divider(1) + colHeaders(1) + colDivider(1)
-	bodyH := overlayH - 5
+	headerH := s.headerLines()
+	bodyH := overlayH - headerH
 	if bodyH < 1 {
 		bodyH = 1
 	}
@@ -491,22 +505,24 @@ func (s *releaseNotesOverlay) Render() string {
 	}
 	headerLine := padRight(leftHdr, listW) + div + padRight(rightHdr, rightW+2)
 	headerDivider := styleBorder.Render(strings.Repeat("─", listW) + "┼" + strings.Repeat("─", rightW+2))
-	regions = append(regions,
-		mouseRegion{
-			rect: mouseRect{x: overlayContentX, y: overlayContentY + 3, w: listW, h: 1},
-			click: func(bubble_tea.MouseMsg) bubble_tea.Cmd {
-				s.focusRight = false
-				return nil
+	if headerH == 5 {
+		regions = append(regions,
+			mouseRegion{
+				rect: mouseRect{x: overlayContentX, y: overlayContentY + 3, w: listW, h: 1},
+				click: func(bubble_tea.MouseMsg) bubble_tea.Cmd {
+					s.focusRight = false
+					return nil
+				},
 			},
-		},
-		mouseRegion{
-			rect: mouseRect{x: overlayContentX + listW + 1, y: overlayContentY + 3, w: rightW + 2, h: 1},
-			click: func(bubble_tea.MouseMsg) bubble_tea.Cmd {
-				s.focusRight = true
-				return nil
+			mouseRegion{
+				rect: mouseRect{x: overlayContentX + listW + 1, y: overlayContentY + 3, w: rightW + 2, h: 1},
+				click: func(bubble_tea.MouseMsg) bubble_tea.Cmd {
+					s.focusRight = true
+					return nil
+				},
 			},
-		},
-	)
+		)
+	}
 
 	// ── Left panel ──
 	maxTagW := listW - 3 // prefix "▶ " (2) + left margin (1)
@@ -526,7 +542,7 @@ func (s *releaseNotesOverlay) Render() string {
 			if i == s.ghCursor {
 				allLeft = append(allLeft, styleAccent.Render("▶ "+tag))
 			} else {
-				allLeft = append(allLeft, styleMuted.Render("  "+tag))
+				allLeft = append(allLeft, styleSubtle.Render("  "+tag))
 			}
 		}
 	case tabNuSpec:
@@ -538,7 +554,7 @@ func (s *releaseNotesOverlay) Render() string {
 			if i == s.nsCursor {
 				allLeft = append(allLeft, styleAccent.Render("▶ "+tag))
 			} else {
-				allLeft = append(allLeft, styleMuted.Render("  "+tag))
+				allLeft = append(allLeft, styleSubtle.Render("  "+tag))
 			}
 		}
 	}
@@ -559,7 +575,7 @@ func (s *releaseNotesOverlay) Render() string {
 		leftLines = append(leftLines, padRight(allLeft[i], listW))
 		index := i
 		regions = append(regions, mouseRegion{
-			rect: mouseRect{x: overlayContentX, y: overlayContentY + 5 + i - scrollStart, w: listW, h: 1},
+			rect: mouseRect{x: overlayContentX, y: overlayContentY + headerH + i - scrollStart, w: listW, h: 1},
 			click: func(bubble_tea.MouseMsg) bubble_tea.Cmd {
 				return s.selectCursor(index)
 			},
@@ -596,19 +612,17 @@ func (s *releaseNotesOverlay) Render() string {
 		bodyLines = append(bodyLines, left+div+right)
 	}
 
-	content := lipgloss.JoinVertical(lipgloss.Left,
-		title,
-		tabBar,
-		titleDivider,
-		headerLine,
-		headerDivider,
-		strings.Join(bodyLines, "\n"),
-	)
+	header := []string{title, tabBar, titleDivider}
+	if headerH == 5 {
+		header = append(header, headerLine, headerDivider)
+	}
+	header = append(header, strings.Join(bodyLines, "\n"))
+	content := lipgloss.JoinVertical(lipgloss.Left, header...)
 
 	box := styleOverlay.
 		Width(overlayW).
 		Render(content)
-	bodyY := overlayContentY + 5
+	bodyY := overlayContentY + headerH
 	regions = append(regions,
 		mouseRegion{
 			rect: mouseRect{x: overlayContentX, y: bodyY, w: listW, h: bodyH},

@@ -46,10 +46,14 @@ func (s *sourcesOverlay) Render() string {
 	} else {
 		for _, src := range s.app.ctx.Sources {
 			nameStyle := styleTextBold
-			name := nameStyle.Render(truncate(src.Name, innerW-18))
+			nameW := innerW
+			if src.Username != "" {
+				nameW = max(1, innerW/2)
+			}
+			name := nameStyle.Render(truncate(src.Name, nameW))
 			auth := ""
 			if src.Username != "" {
-				auth = "  " + styleMuted.Render("🔒 "+src.Username)
+				auth = "  " + styleSubtle.Render(truncate("[auth] "+src.Username, max(1, innerW-lipgloss.Width(name)-2)))
 			}
 			lines = append(lines, name+auth)
 			lines = append(lines,

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	lipgloss "charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // advisoryLabel extracts a short display label from an advisory URL.
@@ -18,23 +19,7 @@ func advisoryLabel(url string) string {
 }
 
 func wordWrap(s string, width int) string {
-	words := strings.Fields(s)
-	var lines []string
-	var cur strings.Builder
-	for _, w := range words {
-		if cur.Len()+len(w)+1 > width {
-			lines = append(lines, cur.String())
-			cur.Reset()
-		}
-		if cur.Len() > 0 {
-			cur.WriteString(" ")
-		}
-		cur.WriteString(w)
-	}
-	if cur.Len() > 0 {
-		lines = append(lines, cur.String())
-	}
-	return strings.Join(lines, "\n")
+	return ansi.Wrap(s, max(1, width), "")
 }
 
 func (m *App) renderDetailPanel(w int) string {
@@ -53,7 +38,7 @@ func (m *App) renderDetailPanel(w int) string {
 
 func (m *App) renderDetail(row packageRow) string {
 	if row.err != nil {
-		return styleRed.Render("Error: " + row.err.Error())
+		return styleRed.Render(wordWrap("Error: "+row.err.Error(), max(1, m.detail.vp.Width())))
 	}
 	if row.loading {
 		return m.ctx.Spinner.View() + " " + styleAccent.Render("Loading package data...")
@@ -76,7 +61,7 @@ func (m *App) renderDetail(row packageRow) string {
 	s.WriteString(m.renderDetailProjectVersions(row))
 	s.WriteString(m.renderDetailVersionList(row, w))
 	s.WriteString(m.renderDetailFrameworks(row))
-	return s.String()
+	return ansi.Wrap(s.String(), max(1, m.detail.vp.Width()), "")
 }
 
 func (m *App) renderDetailHeader(row packageRow, w int) string {
@@ -291,7 +276,7 @@ func (m *App) renderDetailVersionList(row packageRow, w int) string {
 			marker = "↑ "
 		case isLatest:
 			vStyle = stylePurple
-			marker = "⬆ "
+			marker = "⇑ "
 		}
 
 		extras := ""

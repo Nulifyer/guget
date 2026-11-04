@@ -155,7 +155,7 @@ Available themes include `auto`, `auto-light`, `auto-dark`, `dracula`,
 | `▲` | A known vulnerability is reported for an installed version. |
 | `~` | The feed marks the package deprecated. |
 | `↑` | A compatible update is available. |
-| `⬆` | A newer stable version is available beyond the compatible choice. |
+| `⇑` | A newer stable version is available beyond the compatible choice. |
 | `✓` | No newer version is indicated by the available metadata. |
 
 Missing vulnerability metadata does not establish that a package is safe.

@@ -125,7 +125,7 @@ func (s *versionPicker) Render() string {
 		overlayTitleLine("Select version", innerW),
 	)
 	lines = append(lines,
-		styleSubtle.Render(s.pkgName),
+		styleSubtle.Render(truncate(s.pkgName, innerW)),
 	)
 	// Deprecation notice directly under the name.
 	if pkgInfo != nil && pkgInfo.Deprecated {
@@ -134,11 +134,11 @@ func (s *versionPicker) Render() string {
 			notice += styleMuted.
 				Render("  use: " + pkgInfo.AlternatePackageID)
 		}
-		lines = append(lines, notice)
+		lines = append(lines, truncateStyled(notice, innerW))
 	}
-	lines = append(lines,
-		styleBorder.Render(strings.Repeat("─", innerW)),
-	)
+	if s.app.overlayHeight() >= len(lines)+7 {
+		lines = append(lines, styleBorder.Render(strings.Repeat("─", innerW)))
+	}
 	rowStart := len(lines)
 	compact := s.app.overlayHeight() < 14
 	trailingLines := 4 // blank, legend, blank, buttons
@@ -210,7 +210,7 @@ func (s *versionPicker) Render() string {
 
 		ago := timeAgo(v.Published)
 		if ago != "" {
-			agoRendered := styleMuted.Render(ago)
+			agoRendered := styleSubtle.Render(ago)
 			leftW := lipgloss.Width(verText)
 			agoW := lipgloss.Width(agoRendered)
 			innerW := w - 6

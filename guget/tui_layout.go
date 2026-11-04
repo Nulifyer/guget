@@ -15,6 +15,11 @@ func (m *App) footerKeys() []kv {
 		}
 	}
 
+	// Leave enough space for a log entry and both panel borders on short terminals.
+	if m.ctx.ShowLogs && m.ctx.Height < 16 {
+		return []kv{{"tab", "focus"}, {"↑↓", "nav/scroll"}, {"l", "close logs"}, {"?", "help"}, {"esc/q", "quit"}}
+	}
+
 	// Main screen — varies by focused panel.
 	isAllProjects := m.selectedProject() == nil
 
@@ -118,16 +123,28 @@ func (m *App) bodyOuterHeight() int {
 	// footerLines() content + 1 top border.
 	h := m.ctx.Height - m.footerLines() - 1
 	if m.ctx.ShowLogs {
-		h -= logPanelOuterHeight
+		h -= m.logOuterHeight()
 	}
-	return imax(4, h)
+	return imax(5, h)
+}
+
+// logOuterHeight keeps both the log border and the main panels on screen.
+func (m *App) logOuterHeight() int {
+	return min(logPanelOuterHeight, max(4, m.ctx.Height-m.footerLines()-1-5))
+}
+
+func (m *App) logContentHeight() int {
+	frame := 4 // two borders, title, divider
+	if m.logOuterHeight() < 5 {
+		frame = 3 // omit the divider to keep a log entry and a package row visible
+	}
+	return max(1, m.logOuterHeight()-frame)
 }
 
 // panelContentHeight returns the usable content lines inside a panel.
-// Panels use stylePanel/stylePanelNoPad with BorderTop(false), so
-// vertical border = 1 (bottom). Content = outer - 1.
+// Panels have top and bottom borders, so content = outer - 2.
 func (m *App) panelContentHeight() int {
-	return m.bodyOuterHeight() - 1
+	return m.bodyOuterHeight() - 2
 }
 
 func (m *App) packageListHeight() int {
@@ -158,12 +175,18 @@ func (m *App) relayout() {
 	if m.depTree.active {
 		w, h := m.depTreeOverlaySize()
 		m.depTree.vp.SetWidth(max(1, w-6))
-		m.depTree.vp.SetHeight(max(1, h-8))
+		m.depTree.vp.SetHeight(max(1, h-2))
 	}
 	if m.ctx.ShowLogs {
+		follow := m.log.vp.AtBottom()
 		m.log.vp.SetWidth(m.layoutWidth() - 4) // stylePanel: hBorder(2) + hPadding(2) = 4
-		m.log.vp.SetHeight(logPanelLines)
+		m.log.vp.SetHeight(m.logContentHeight())
+		if follow {
+			m.log.vp.GotoBottom()
+		}
 	}
+	m.clampOffset()
+	m.clampProjectOffset()
 }
 
 func (m *App) panelWidths() (left, mid, right int) {
@@ -189,7 +212,10 @@ func (m *App) panelWidths() (left, mid, right int) {
 	// Keep package names and requested versions readable on narrow terminals.
 	// Share the remaining columns between the side panels in their chosen ratio.
 	const minW = 10
-	const minPackageW = 40
+	minPackageW := 40
+	if lw >= 100 {
+		minPackageW = 64
+	}
 	if mid < minPackageW {
 		sideW := lw - minPackageW
 		left = max(minW, min(sideW-minW, sideW*left/max(1, left+right)))
@@ -278,6 +304,7 @@ func (m *App) renderFooter() string {
 		statusStr += styleSubtle.Render(notice)
 	}
 
+	statusStr = truncateStyled(statusStr, w)
 	return styleFooterBar.
 		Width(m.layoutWidth()).
 		Render(statusStr + "\n" + keybinds)

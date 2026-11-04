@@ -1,6 +1,7 @@
 package main
 
 import (
+	lipgloss "charm.land/lipgloss/v2"
 	"strings"
 
 	bubble_tea "charm.land/bubbletea/v2"
@@ -91,7 +92,7 @@ func (s *confirmRemove) Render() string {
 	innerW := w - 6
 	lines := []string{
 		overlayTitleLine("Remove package?", innerW),
-		styleSubtle.Render(s.pkgName),
+		styleSubtle.Render(truncate(s.pkgName, innerW)),
 		"",
 	}
 	buttonLine, buttonRegions := renderOverlayButtons(innerW, len(lines), s.HandleKey,
@@ -117,12 +118,16 @@ func (s *confirmUpdate) Render() string {
 			break
 		}
 	}
+	pinnedVer = truncate(pinnedVer, max(1, innerW/2-2))
 	lines := []string{
 		overlayTitleLine("Version is pinned", innerW),
-		styleSubtle.Render(s.pkgName) + "  " + styleYellow.Render("["+pinnedVer+"]"),
+		styleSubtle.Render(truncate(s.pkgName, max(1, innerW-lipgloss.Width(pinnedVer)-4))) + "  " + styleYellow.Render("["+pinnedVer+"]"),
 		"",
-		styleMuted.Render("Update to " + s.newVersion + " anyway?"),
+		styleSubtle.Render(truncate("Update to "+s.newVersion+" anyway?", innerW)),
 		"",
+	}
+	if s.app.overlayHeight() < 10 {
+		lines = []string{lines[0], lines[1], lines[3]}
 	}
 	buttonLine, buttonRegions := renderOverlayButtons(innerW, len(lines), s.HandleKey,
 		overlayButton{label: "Cancel", code: bubble_tea.KeyEscape},

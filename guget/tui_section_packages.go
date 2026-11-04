@@ -199,8 +199,8 @@ func (m *App) renderPackagePanel(w int) string {
 	// rows
 	if len(m.packages.rows) == 0 {
 		lines = append(lines, "")
-		lines = append(lines, styleMuted.Render("  No packages found"))
-		lines = append(lines, styleMuted.Render("  Press / to search NuGet"))
+		lines = append(lines, styleSubtle.Render("  No packages found"))
+		lines = append(lines, styleSubtle.Render("  Press / to search NuGet"))
 	}
 
 	end := m.packages.scroll + visibleH
@@ -238,7 +238,7 @@ func (m *App) renderPackagePanel(w int) string {
 		}
 
 		if showSource {
-			line += styleMuted.Render(row.source)
+			line += styleSubtle.Render(row.source)
 		}
 
 		lines = append(lines, line)

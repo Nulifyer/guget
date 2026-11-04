@@ -163,7 +163,7 @@ func (s *projectPicker) Render() string {
 
 	lines := []string{
 		overlayTitleLine("Add to which projects?", innerW),
-		styleSubtle.Render(s.pkgName + " " + s.version),
+		overlayPackageLine(s.pkgName, s.version, innerW),
 		"",
 	}
 	rowStart := len(lines)
@@ -224,8 +224,8 @@ func (s *projectPicker) Render() string {
 			}
 		}
 
-		// innerW-10 accounts for: cursor (2) + check (2) + suffix padding (6)
-		name := truncate(it.project.FileName, innerW-10)
+		// Reserve suffix width before truncating the project name.
+		name := it.project.FileName
 		suffix := ""
 		if it.incompatible {
 			suffix = styleRed.Render(" incompatible")
@@ -239,6 +239,8 @@ func (s *projectPicker) Render() string {
 			suffix = verStyle.Render(" " + it.currentVersion + " → " + s.version)
 		}
 
+		suffix = truncateStyled(suffix, max(0, innerW-6))
+		name = truncate(name, max(1, innerW-4-lipgloss.Width(suffix)))
 		lines = append(lines, cursor+check+nameStyle.Render(name)+suffix)
 		index := i
 		regions = append(regions, mouseRegion{

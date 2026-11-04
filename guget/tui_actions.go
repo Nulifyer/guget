@@ -57,7 +57,7 @@ func (m *App) updatePackage(useStable bool, scope actionScope) bubble_tea.Cmd {
 	}
 	if !needsUpdate {
 		if skippedLocked > 0 {
-			return m.setStatus(fmt.Sprintf("🔒 %d skipped (version locked)", skippedLocked), false)
+			return m.setStatus(fmt.Sprintf("%d skipped (version locked)", skippedLocked), false)
 		}
 		return nil
 	}

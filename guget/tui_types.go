@@ -241,12 +241,14 @@ type logPanel struct {
 // --- Overlay state types ---
 
 type depTreeOverlay struct {
-	sectionBase      // basePct=80, minWidth=40, maxMargin=4
-	loading     bool // true while dotnet list is running (T key)
-	content     string
-	err         error
-	vp          bubbles_viewport.Model
-	title       string
+	sectionBase         // basePct=80, minWidth=40, maxMargin=4
+	loading        bool // true while dotnet list is running (T key)
+	content        string
+	err            error
+	vp             bubbles_viewport.Model
+	title          string
+	packageVersion *PackageVersion
+	dotnetProjects []dotnetListProject
 }
 
 type releaseNotesTab int
@@ -370,7 +372,7 @@ func (r packageRow) statusIcon() string {
 	if check != nil && check.SemVer.IsNewerThan(ver) {
 		if r.latestStable != nil && r.latestCompatible != nil &&
 			r.latestStable.SemVer.IsNewerThan(r.latestCompatible.SemVer) {
-			return "⬆"
+			return "⇑"
 		}
 		return "↑"
 	}

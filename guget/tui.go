@@ -15,7 +15,7 @@ import (
 
 const (
 	logPanelLines       = 6
-	logPanelOuterHeight = logPanelLines + 3 // bottom border(1) + title(1) + divider(1)
+	logPanelOuterHeight = logPanelLines + 4 // borders(2) + title(1) + divider(1)
 )
 
 // layoutWidth returns the effective width for the main content area.
@@ -170,6 +170,12 @@ func (m *App) Init() bubble_tea.Cmd {
 }
 
 func (m *App) Update(msg bubble_tea.Msg) (bubble_tea.Model, bubble_tea.Cmd) {
+	previousFooterLines := m.footerLines()
+	defer func() {
+		if m.footerLines() != previousFooterLines {
+			m.relayout()
+		}
+	}()
 	var cmds []bubble_tea.Cmd
 
 	switch msg := msg.(type) {
@@ -191,11 +197,17 @@ func (m *App) Update(msg bubble_tea.Msg) (bubble_tea.Model, bubble_tea.Cmd) {
 
 	case resizeDebounceMsg:
 		if msg.id == m.resizeDebounceID {
+			offset := m.detail.vp.YOffset()
+			m.refreshDetail()
+			m.detail.vp.SetYOffset(offset)
 			if m.help.active {
 				m.help.refreshView()
 			}
 			if m.releaseNotes.active {
 				m.releaseNotes.resizeViewport()
+			}
+			if m.depTree.active {
+				m.depTree.refreshContent()
 			}
 		}
 
@@ -246,7 +258,7 @@ func (m *App) Update(msg bubble_tea.Msg) (bubble_tea.Model, bubble_tea.Cmd) {
 			if msg.written > 0 && msg.skipped > 0 {
 				status = fmt.Sprintf("✓ Saved %d, %d locked", msg.written, msg.skipped)
 			} else if msg.skipped > 0 {
-				status = fmt.Sprintf("🔒 %d skipped (version locked)", msg.skipped)
+				status = fmt.Sprintf("%d skipped (version locked)", msg.skipped)
 			}
 			cmds = append(cmds, m.setStatus(status, false))
 		}
@@ -414,7 +426,8 @@ func (m *App) Update(msg bubble_tea.Msg) (bubble_tea.Model, bubble_tea.Cmd) {
 		m.depTree.loading = false
 		m.depTree.err = msg.err
 		if msg.err == nil {
-			m.depTree.content = m.depTree.renderParsedDotnetList(parseDotnetListOutput(msg.content))
+			m.depTree.dotnetProjects = parseDotnetListOutput(msg.content)
+			m.depTree.content = m.depTree.renderParsedDotnetList(m.depTree.dotnetProjects)
 		}
 		m.depTree.vp.SetContent(m.depTree.buildContent())
 
@@ -429,7 +442,8 @@ func (m *App) Update(msg bubble_tea.Msg) (bubble_tea.Model, bubble_tea.Cmd) {
 			return m, bubble_tea.Quit
 		}
 		if m.ctx.Width > 0 && (m.ctx.Width < 80 || m.ctx.Height < 12) {
-			if mainKey(msg.String()) == "ctrl+c" {
+			switch mainKey(msg.String()) {
+			case "ctrl+c", "esc", "q":
 				return m, bubble_tea.Quit
 			}
 			return m, nil

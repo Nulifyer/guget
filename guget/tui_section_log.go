@@ -56,7 +56,12 @@ func (m *App) renderLogPanel() string {
 
 	title := styleAccentBold.Render("Logs")
 	div := styleBorder.Render(strings.Repeat("─", m.layoutWidth()-4))
-	content := lipgloss.JoinVertical(lipgloss.Left, title, div, m.log.vp.View())
+	parts := []string{title}
+	if m.logOuterHeight() >= 5 {
+		parts = append(parts, div)
+	}
+	parts = append(parts, m.log.vp.View())
+	content := lipgloss.JoinVertical(lipgloss.Left, parts...)
 
-	return renderToPanel(s, m.layoutWidth(), logPanelOuterHeight, content)
+	return renderToPanel(s, m.layoutWidth(), m.logOuterHeight(), content)
 }

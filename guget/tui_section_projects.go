@@ -37,7 +37,7 @@ func (m *App) renderProjectPanel(w int) string {
 			lines = append(lines, "   "+styleSubtle.Render(desc))
 		} else {
 			lines = append(lines, " "+styleText.Render(title))
-			lines = append(lines, "   "+styleMuted.Render(desc))
+			lines = append(lines, "   "+styleSubtle.Render(desc))
 		}
 		if i < end-1 {
 			lines = append(lines, "")

@@ -73,7 +73,7 @@ func (m *App) mainMouseLayout(leftW, midW, rightW int) mouseLayout {
 		packageScroll: m.packages.scroll,
 	}
 	if m.ctx.ShowLogs {
-		layout.log = mouseRect{x: 0, y: bodyH, w: m.layoutWidth(), h: logPanelOuterHeight}
+		layout.log = mouseRect{x: 0, y: bodyH, w: m.layoutWidth(), h: m.logOuterHeight()}
 	}
 
 	columns := m.packageColumns(midW)

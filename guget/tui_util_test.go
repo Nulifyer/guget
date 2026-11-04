@@ -32,3 +32,11 @@ func TestTruncateStyledPreservesANSIAndWidth(t *testing.T) {
 		t.Fatalf("width = %d; output %q", width, got)
 	}
 }
+
+func TestSingleRowViewportKeepsLastItemVisible(t *testing.T) {
+	scroll := 0
+	clampListScroll(4, &scroll, 1, 5, 1)
+	if scroll != 4 {
+		t.Fatalf("last selected item scrolled out of one-row viewport: offset=%d", scroll)
+	}
+}

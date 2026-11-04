@@ -87,7 +87,9 @@ func (s *helpOverlay) refreshView() {
 	var lines []string
 
 	for _, sec := range sections {
-		lines = append(lines, "")
+		if len(lines) > 0 {
+			lines = append(lines, "")
+		}
 		lines = append(lines, titleStyle.Render(sec.title))
 		lines = append(lines, dimStyle.Render(strings.Repeat("─", innerW)))
 		for _, row := range sec.rows {
@@ -116,6 +118,8 @@ func (s *helpOverlay) refreshView() {
 func (s *helpOverlay) Render() string {
 	w := s.Width()
 	innerW := w - 6
+	s.vp.SetWidth(innerW)
+	s.vp.SetHeight(max(1, s.app.overlayHeight()-6))
 
 	content := strings.Join([]string{
 		overlayTitleLine("Keybindings", innerW),
