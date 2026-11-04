@@ -993,6 +993,10 @@ func (r cliRuntime) runMutation(ctx context.Context, verb string, argv []string)
 	requestedVersion := args.value("version", "")
 	plan, rows, err := buildMutationPlanContext(ctx, verb, packageID, requestedVersion, targets)
 	if err != nil {
+		if ctx.Err() != nil {
+			fmt.Fprintf(r.stderr, "guget: %s interrupted: %v\n", verb, ctx.Err())
+			return ExitInterrupted
+		}
 		fmt.Fprintf(r.stderr, "guget: edit refused: %v\n", err)
 		return ExitRefused
 	}
@@ -1205,7 +1209,8 @@ func (r cliRuntime) restoreProjects(ctx context.Context, projects []*ParsedProje
 			args = append(args, "--interactive")
 		}
 		if err := runCommand(ctx, "dotnet", args, r.stdin, r.stderr, r.stderr); err != nil {
-			if errors.Is(ctx.Err(), context.Canceled) {
+			if ctx.Err() != nil {
+				fmt.Fprintf(r.stderr, "guget: restore interrupted: %v\n", ctx.Err())
 				return ExitInterrupted
 			}
 			fmt.Fprintf(r.stderr, "guget: restore %s: %v\n", project.FilePath, err)

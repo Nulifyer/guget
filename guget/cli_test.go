@@ -475,3 +475,36 @@ func canonicalTestOwnerPath(t *testing.T, path string) string {
 	}
 	return canonical
 }
+
+func TestMutationTimeoutPreservesInputsAndReportsInterruption(t *testing.T) {
+	root := t.TempDir()
+	project := writeCLIProject(t, root, "App", `<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup><ItemGroup><PackageReference Include="Dapper" Version="2.1.72"/></ItemGroup></Project>`)
+	before, err := os.ReadFile(project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := filepath.Join(root, "result.json")
+	if err := os.WriteFile(output, []byte("existing output"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code, stdout, stderr := runCLIForTest(t, "update", "Dapper", "--project", root, "--file", project, "--version", "2.1.89", "--timeout", "1ns", "--format", "json", "--output", output)
+	if code != ExitInterrupted || stdout != "" {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	after, _ := os.ReadFile(project)
+	result, _ := os.ReadFile(output)
+	if !bytes.Equal(before, after) || string(result) != "existing output" {
+		t.Fatal("interrupted planning changed inputs or output")
+	}
+}
+
+func TestRestoreDeadlineReportsInterruption(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 0)
+	defer cancel()
+	runtime := cliRuntime{stdin: strings.NewReader(""), stdout: io.Discard, stderr: io.Discard,
+		runCommand: func(ctx context.Context, _ string, _ []string, _ io.Reader, _, _ io.Writer) error { return ctx.Err() },
+	}
+	if code := runtime.restoreProjects(ctx, []*ParsedProject{{FilePath: "App.csproj"}}, false); code != ExitInterrupted {
+		t.Fatalf("deadline returned %d", code)
+	}
+}
