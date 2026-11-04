@@ -1,2 +1,16 @@
-*.go text eol=lf
-*.sh text eol=lf
+# Keep source, configuration, documentation, and .NET fixtures consistent.
+* text=auto eol=lf
+
+# Preserve the UTF-8 BOM in these scripts for Windows PowerShell 5.1.
+*.ps1 text eol=crlf
+
+# Use language-aware hunk headers when reviewing source and documentation.
+*.go diff=golang
+*.md diff=markdown
+
+# SVG remains reviewable text; raster assets are binary.
+*.svg text
+*.png binary
+
+# Keep the committed lockfile, but collapse its generated diff on GitHub.
+vscode-guget/package-lock.json linguist-generated=true
