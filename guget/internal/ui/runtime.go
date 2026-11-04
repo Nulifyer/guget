@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -83,7 +84,7 @@ func (r *Runtime) Run() (err error) {
 		r.cancel()
 		return err
 	}
-	defer terminal.Restore()
+	defer func() { err = errors.Join(err, terminal.Restore()) }()
 	defer r.shutdown()
 	output, err := newTerminalOutput(r.ctx)
 	if err != nil {

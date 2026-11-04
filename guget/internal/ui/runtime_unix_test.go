@@ -101,60 +101,71 @@ func TestRuntimeNativePTYChild(t *testing.T) {
 	if mode == "" {
 		t.Skip("subprocess helper for native PTY lifecycle test")
 	}
-	before, err := xterm.GetState(int(os.Stdin.Fd()))
-	if err != nil {
-		t.Fatal(err)
-	}
-	inputFlags, err := unix.FcntlInt(os.Stdin.Fd(), unix.F_GETFL, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	outputFlags, err := unix.FcntlInt(os.Stdout.Fd(), unix.F_GETFL, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sink, err := openTerminalOutput()
-	if err != nil {
-		t.Fatal(err)
-	}
-	owned := sink.(*unixTerminalIO)
-	ownedFlags, flagErr := unix.FcntlInt(uintptr(owned.fd), unix.F_GETFL, 0)
-	closeErr := sink.Close()
-	if flagErr != nil || ownedFlags&unix.O_NONBLOCK == 0 || closeErr != nil {
-		t.Fatalf("owned output is not independently nonblocking: flags=%d error=%v close=%v", ownedFlags, flagErr, closeErr)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	probe := &nativePTYProbe{before: before, resized: make(chan struct{}), flood: mode == "output-backpressure"}
+	var status *os.File
 	if raw := os.Getenv("GUGET_RUNTIME_PTY_STATUS_FD"); raw != "" {
 		descriptor, err := strconv.Atoi(raw)
 		if err != nil {
 			t.Fatal(err)
 		}
-		probe.status = os.NewFile(uintptr(descriptor), "native-pty-status")
-		defer probe.status.Close()
+		status = os.NewFile(uintptr(descriptor), "native-pty-status")
+		defer status.Close()
 	}
+	fail := func(format string, args ...any) {
+		t.Helper()
+		message := fmt.Sprintf(format, args...)
+		if status != nil {
+			// Report before Fatal: terminal output can deliberately be full.
+			fmt.Fprintln(status, "NATIVE_PTY_FAILURE: "+message)
+		}
+		t.Fatal(message)
+	}
+	before, err := xterm.GetState(int(os.Stdin.Fd()))
+	if err != nil {
+		fail("%v", err)
+	}
+	inputFlags, err := unix.FcntlInt(os.Stdin.Fd(), unix.F_GETFL, 0)
+	if err != nil {
+		fail("%v", err)
+	}
+	outputFlags, err := unix.FcntlInt(os.Stdout.Fd(), unix.F_GETFL, 0)
+	if err != nil {
+		fail("%v", err)
+	}
+	sink, err := openTerminalOutput()
+	if err != nil {
+		fail("%v", err)
+	}
+	owned := sink.(*unixTerminalIO)
+	ownedFlags, flagErr := unix.FcntlInt(uintptr(owned.fd), unix.F_GETFL, 0)
+	closeErr := sink.Close()
+	if flagErr != nil || ownedFlags&unix.O_NONBLOCK == 0 || closeErr != nil {
+		fail("owned output is not independently nonblocking: flags=%d error=%v close=%v", ownedFlags, flagErr, closeErr)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	probe := &nativePTYProbe{before: before, resized: make(chan struct{}), flood: mode == "output-backpressure"}
+	probe.status = status
 	if mode == "cancel-without-input" {
 		go func() { <-probe.resized; time.Sleep(250 * time.Millisecond); cancel() }()
 	}
 	runtime := NewRuntime(ctx, probe)
 	if err := runtime.Run(); err != nil {
-		t.Fatal(err)
+		fail("%v", err)
 	}
 	after, err := xterm.GetState(int(os.Stdin.Fd()))
 	if err != nil {
-		t.Fatal(err)
+		fail("%v", err)
 	}
 	if !reflect.DeepEqual(before, after) {
-		t.Fatal("terminal mode was not restored")
+		fail("terminal mode was not restored: before=%#v after=%#v", before, after)
 	}
 	finalInputFlags, inputErr := unix.FcntlInt(os.Stdin.Fd(), unix.F_GETFL, 0)
 	finalOutputFlags, outputErr := unix.FcntlInt(os.Stdout.Fd(), unix.F_GETFL, 0)
 	if inputErr != nil || outputErr != nil || inputFlags != finalInputFlags || outputFlags != finalOutputFlags {
-		t.Fatalf("runtime changed caller descriptor flags: stdin %d→%d stdout %d→%d errors=%v,%v", inputFlags, finalInputFlags, outputFlags, finalOutputFlags, inputErr, outputErr)
+		fail("runtime changed caller descriptor flags: stdin %d→%d stdout %d→%d errors=%v,%v", inputFlags, finalInputFlags, outputFlags, finalOutputFlags, inputErr, outputErr)
 	}
 	if !probe.rawActive || !probe.disconnected {
-		t.Fatalf("raw mode or disconnect missing: raw=%t disconnected=%t", probe.rawActive, probe.disconnected)
+		fail("raw mode or disconnect missing: raw=%t disconnected=%t", probe.rawActive, probe.disconnected)
 	}
 	if probe.status != nil {
 		fmt.Fprintln(probe.status, "NATIVE_PTY_RAW_RESTORED")
@@ -171,23 +182,33 @@ pid, master = pty.fork()
 if pid == 0:
     os.close(status_read)
     fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
-    env = dict(os.environ, GUGET_RUNTIME_PTY_MODE=mode)
-    if mode == "output-backpressure":
-        env["GUGET_RUNTIME_PTY_STATUS_FD"] = str(status_write)
-    else:
-        os.close(status_write)
+    env = dict(os.environ, GUGET_RUNTIME_PTY_MODE=mode,
+               GUGET_RUNTIME_PTY_STATUS_FD=str(status_write))
     os.execve(binary, [binary, "-test.run=^TestRuntimeNativePTYChild$", "-test.timeout=20s"], env)
 os.close(status_write)
 content = bytearray()
 status_content = bytearray()
 reaped = False
+status_open = True
+def read_status():
+    global status_open
+    chunk = os.read(status_read, 4096)
+    if not chunk:
+        status_open = False
+        return
+    status_content.extend(chunk)
+    if b"NATIVE_PTY_FAILURE: " in status_content:
+        raise RuntimeError("native helper failed: %r" % (bytes(status_content),))
 def receive_until(marker):
     deadline = time.monotonic() + 15
     while marker not in content:
         if time.monotonic() >= deadline:
             raise RuntimeError("timed out waiting for %r; output=%r" % (marker, bytes(content)))
-        ready, _, _ = select.select([master], [], [], 0.1)
-        if not ready:
+        watched = [master, status_read] if status_open else [master]
+        ready, _, _ = select.select(watched, [], [], 0.1)
+        if status_read in ready:
+            read_status()
+        if master not in ready:
             continue
         try:
             chunk = os.read(master, 65536)
@@ -205,10 +226,9 @@ def receive_status(marker):
             raise RuntimeError("runtime stalled behind unread output while waiting for %r; status=%r" % (marker, bytes(status_content)))
         ready, _, _ = select.select([status_read], [], [], 0.1)
         if ready:
-            chunk = os.read(status_read, 4096)
-            if not chunk:
-                raise RuntimeError("status EOF before %r" % (marker,))
-            status_content.extend(chunk)
+            read_status()
+            if not status_open and marker not in status_content:
+                raise RuntimeError("status EOF before %r; status=%r" % (marker, bytes(status_content)))
 try:
     receive_until(b"PTY_SIZE=80x24 RAW_ACTIVE=true")
     fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))

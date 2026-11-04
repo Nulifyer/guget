@@ -51,13 +51,16 @@ func OpenTerminal() (*Terminal, error) {
 	return &Terminal{InFd: inFd, OutFd: outFd, oldState: st, restoreOutput: restoreOutput, Width: w, Height: h}, nil
 }
 
-func (t *Terminal) Restore() {
+func (t *Terminal) Restore() error {
 	if t == nil || t.oldState == nil {
-		return
+		return nil
 	}
 	t.restoreOutput()
-	_ = term.Restore(t.InFd, t.oldState)
+	if err := term.Restore(t.InFd, t.oldState); err != nil {
+		return fmt.Errorf("restore terminal input: %w", err)
+	}
 	t.oldState = nil
+	return nil
 }
 
 // Size reads native dimensions without changing terminal state. Console APIs
