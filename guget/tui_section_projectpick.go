@@ -9,9 +9,7 @@ import (
 )
 
 func (m *App) openProjectPicker(pkgName, version string) {
-	allProjects := make([]*ParsedProject, 0, len(m.ctx.ParsedProjects)+len(m.ctx.PropsProjects))
-	allProjects = append(allProjects, m.ctx.ParsedProjects...)
-	allProjects = append(allProjects, m.ctx.PropsProjects...)
+	projects := buildProjectItems(m.ctx.ParsedProjects, m.ctx.PropsProjects)
 
 	targetVer := ParseSemVer(version)
 
@@ -26,8 +24,9 @@ func (m *App) openProjectPicker(pkgName, version string) {
 		}
 	}
 
-	items := make([]projectPickItem, 0, len(allProjects))
-	for _, p := range allProjects {
+	items := make([]projectPickItem, 0, len(projects)-1)
+	for _, entry := range projects[1:] {
+		p := entry.project
 		item := projectPickItem{project: p}
 		for ref := range p.Packages {
 			if strings.EqualFold(ref.Name, pkgName) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -173,6 +174,9 @@ func buildProjectItems(parsedProjects []*ParsedProject, propsProjects []*ParsedP
 	for _, p := range propsProjects {
 		items = append(items, projectItem{name: p.FileName, project: p})
 	}
+	slices.SortStableFunc(items[1:], func(a, b projectItem) int {
+		return strings.Compare(filepath.Dir(a.project.FilePath), filepath.Dir(b.project.FilePath))
+	})
 	return items
 }
 
