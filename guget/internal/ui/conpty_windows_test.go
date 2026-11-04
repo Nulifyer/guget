@@ -9,6 +9,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -30,10 +32,8 @@ type nativeConsole struct {
 	mu            sync.Mutex
 	transcript    bytes.Buffer
 	changed       chan struct{}
-	pause         chan chan struct{}
-	resume        chan struct{}
-	resumeOnce    sync.Once
 	drainDelay    atomic.Int64
+	drained       atomic.Int64
 	statusDir     string
 	consoleClosed bool
 }
@@ -63,18 +63,13 @@ func startNativeConsole(t *testing.T, scenario string) *nativeConsole {
 	if err := windows.CreatePseudoConsole(windows.Coord{X: 120, Y: 30}, windows.Handle(inRead.Fd()), windows.Handle(outWrite.Fd()), 0, &console); err != nil {
 		t.Fatalf("create native ConPTY: %v", err)
 	}
-	p := &nativeConsole{console: console, input: inWrite, output: outRead, changed: make(chan struct{}, 1), pause: make(chan chan struct{}, 1), resume: make(chan struct{}), statusDir: t.TempDir()}
+	p := &nativeConsole{console: console, input: inWrite, output: outRead, changed: make(chan struct{}, 1), statusDir: t.TempDir()}
 	go func() {
 		var buffer [4096]byte
 		for {
-			select {
-			case paused := <-p.pause:
-				close(paused)
-				<-p.resume
-			default:
-			}
 			n, err := outRead.Read(buffer[:])
 			if n > 0 {
+				p.drained.Add(int64(n))
 				p.mu.Lock()
 				_, _ = p.transcript.Write(buffer[:n])
 				p.mu.Unlock()
@@ -93,7 +88,6 @@ func startNativeConsole(t *testing.T, scenario string) *nativeConsole {
 	}()
 	t.Cleanup(func() {
 		p.drainDelay.Store(0)
-		p.resumeDraining()
 		if p.process != 0 {
 			_ = windows.TerminateProcess(p.process, 1)
 		}
@@ -137,7 +131,37 @@ func startNativeConsole(t *testing.T, scenario string) *nativeConsole {
 	return p
 }
 
-func (p *nativeConsole) resumeDraining() { p.resumeOnce.Do(func() { close(p.resume) }) }
+func (p *nativeConsole) expectOutput(t *testing.T, minimum int64) {
+	t.Helper()
+	deadline := time.NewTimer(8 * time.Second)
+	defer deadline.Stop()
+	for p.drained.Load() < minimum {
+		select {
+		case <-p.changed:
+		case <-deadline.C:
+			t.Fatalf("slow ConPTY host received %d bytes, want at least %d", p.drained.Load(), minimum)
+		}
+	}
+}
+
+func (p *nativeConsole) expectPrivateModesRestored(t *testing.T) {
+	t.Helper()
+	// ConPTY can combine or split DEC mode sequences. Check their final
+	// meaning, rather than relying on byte-for-byte forwarding by the host.
+	states := make(map[string]bool)
+	sequence := regexp.MustCompile("\x1b\\[\\?([0-9;]+)([hl])")
+	for _, match := range sequence.FindAllStringSubmatch(p.text(), -1) {
+		for _, mode := range strings.Split(match[1], ";") {
+			states[mode] = match[2] == "h"
+		}
+	}
+	for mode, enabled := range map[int]bool{1049: false, 2004: false, 25: true, 1002: false, 1006: false} {
+		actual, seen := states[strconv.Itoa(mode)]
+		if !seen || actual != enabled {
+			t.Errorf("native exit DEC mode %d: seen=%t enabled=%t, want enabled=%t", mode, seen, actual, enabled)
+		}
+	}
+}
 
 func (p *nativeConsole) request(t *testing.T, command string) {
 	t.Helper()
@@ -182,7 +206,7 @@ func (p *nativeConsole) expectStatus(t *testing.T, name string) {
 			for _, entry := range entries {
 				names = append(names, entry.Name())
 			}
-			t.Fatalf("runtime did not report %s with terminal output paused:\n%s\nControl state: %s\nCancel request: %q (%v)\nStatus files: %v (%v)\nNative helper stacks:\n%s", name, p.text(), control, request, requestErr, names, directoryErr, stacks)
+			t.Fatalf("runtime did not report %s with terminal output throttled:\n%s\nControl state: %s\nCancel request: %q (%v)\nStatus files: %v (%v)\nNative helper stacks:\n%s", name, p.text(), control, request, requestErr, names, directoryErr, stacks)
 		}
 	}
 }

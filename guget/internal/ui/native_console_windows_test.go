@@ -32,39 +32,30 @@ func TestNativeConPTYTerminal(t *testing.T) {
 				console.expect(t, "INPUT-READY")
 				console.resize(t, 300, 120)
 				console.expect(t, "HIGH-OUTPUT-READY")
-				paused := make(chan struct{})
-				console.pause <- paused
-				console.send(t, "f") // Changing large frames wake the output drainer.
-				select {
-				case <-paused:
-				case <-time.After(8 * time.Second):
-					t.Fatal("could not pause ConPTY output")
-				}
-				console.expectStatus(t, "OUTPUT-BLOCKED")
-				// ConPTY hosts must keep draining both channels. Windows console
-				// input, size and mode calls can share the host's output lock;
-				// an undrained host can therefore delay native key delivery too.
-				// Prove the application loop itself still advances using IPC.
+				// ConPTY requires a serviced host. Its console APIs share host
+				// locks, so stopping the output consumer can stop native input
+				// and even process diagnostics. Test sustained slow consumption;
+				// generic runtime tests separately cover a fully blocked sink.
 				// https://learn.microsoft.com/windows/console/creating-a-pseudoconsole-session
-				// https://github.com/microsoft/terminal/blob/main/src/host/_stream.cpp
+				baseline := console.drained.Load()
+				console.drainDelay.Store(int64(25 * time.Millisecond))
+				console.send(t, "f")
+				console.expectStatus(t, "FLOOD-RENDERED")
+				console.expectOutput(t, baseline+64*1024)
 				console.request(t, "ping")
 				console.expectStatus(t, "APP-EVENT-HANDLED")
+				console.send(t, "k")
+				console.expectStatus(t, "KEY-HANDLED")
+				console.resize(t, 280, 100)
+				console.expect(t, "LOAD-RESIZE-OK")
 				if scenario == "output-backpressure-cancel" {
 					console.request(t, "cancel")
 					console.expectStatus(t, "CANCEL-REQUESTED")
 				} else {
-					console.send(t, "k") // Queued while output is still paused.
-					// Resume a deliberately slow consumer, so native keyboard
-					// delivery is checked while large changing frames continue.
-					console.drainDelay.Store(int64(5 * time.Millisecond))
-				}
-				console.resumeDraining()
-				if scenario == "output-backpressure" {
-					console.expectStatus(t, "KEY-HANDLED")
-					console.drainDelay.Store(0)
 					console.send(t, "q")
 				}
 				console.expectStatus(t, "RUN-RETURNED")
+
 			case "runtime-ctrl-c":
 				console.expect(t, "INPUT-READY")
 				console.send(t, "\x03")
@@ -105,6 +96,9 @@ func TestNativeConPTYTerminal(t *testing.T) {
 			}
 			console.expect(t, "NATIVE-SCENARIO-PASSED")
 			console.wait(t, true)
+			if strings.HasPrefix(scenario, "output-backpressure") {
+				console.expectPrivateModesRestored(t)
+			}
 		})
 	}
 }
@@ -164,32 +158,20 @@ func expectNativeModes(t *testing.T, want nativeModes) {
 // Establish that ReadConsoleW is actually pending, rather than letting Close
 // race before a reader goroutine has ever entered the native console API.
 func waitForNativeRead() error {
-	return waitForNativeConsoleCall("windows.ReadConsole(", 0)
-}
-
-func waitForNativeConsoleCall(call string, sustained time.Duration) error {
 	deadline := time.NewTimer(5 * time.Second)
 	defer deadline.Stop()
 	tick := time.NewTicker(time.Millisecond)
 	defer tick.Stop()
 	buffer := make([]byte, 128*1024)
-	var pendingSince time.Time
 	for {
 		n := runtime.Stack(buffer, true)
-		if strings.Contains(string(buffer[:n]), call) {
-			if pendingSince.IsZero() {
-				pendingSince = time.Now()
-			}
-			if time.Since(pendingSince) >= sustained {
-				return nil
-			}
-		} else {
-			pendingSince = time.Time{}
+		if strings.Contains(string(buffer[:n]), "windows.ReadConsole(") {
+			return nil
 		}
 		select {
 		case <-tick.C:
 		case <-deadline.C:
-			return fmt.Errorf("native call %s did not remain pending:\n%s", call, buffer[:n])
+			return fmt.Errorf("native ReadConsole did not become pending:\n%s", buffer[:n])
 		}
 	}
 }
@@ -398,6 +380,7 @@ type nativeProbe struct {
 	statusDir     string
 	flood         bool
 	ticks         int
+	floodRenders  int
 	width, height int
 	disconnected  atomic.Int32
 }
@@ -424,17 +407,9 @@ func (p *nativeProbe) HandleEvent(event Event) Effect {
 		case "f":
 			if p.statusDir != "" {
 				p.flood = true
-				return Batch(Tick(time.Millisecond, func(time.Time) Event { return nativeFloodTick{} }), func() Event {
-					if err := waitForNativeConsoleCall("windows.WriteConsole(", 50*time.Millisecond); err != nil {
-						_ = os.WriteFile(filepath.Join(p.statusDir, "failure"), []byte(err.Error()), 0o600)
-						return effectFailed{err}
-					}
-					if err := writeNativeStatus(p.statusDir, "OUTPUT-BLOCKED"); err != nil {
-						return effectFailed{err}
-					}
-					return nil
-				})
+				return Tick(time.Millisecond, func(time.Time) Event { return nativeFloodTick{} })
 			}
+
 		case "k":
 			if p.statusDir != "" {
 				if err := writeNativeStatus(p.statusDir, "KEY-HANDLED"); err != nil {
@@ -459,6 +434,9 @@ func (p *nativeProbe) HandleEvent(event Event) Effect {
 		if event.Width == 300 && event.Height == 120 {
 			fmt.Println("HIGH-OUTPUT-READY")
 		}
+		if event.Width == 280 && event.Height == 100 {
+			fmt.Println("LOAD-RESIZE-OK")
+		}
 		if event.Width == 80 && event.Height == 20 {
 			fmt.Println("RESIZE-OK")
 		}
@@ -478,7 +456,13 @@ func (p *nativeProbe) Render() Frame {
 	frame := NewFrame("INPUT-READY")
 	if p.flood {
 		row := fmt.Sprintf("FRAME=%08d ", p.ticks)
-		row += strings.Repeat("X", max(0, p.width-len(row)))
+		// Change every cell, rather than just the counter: the console host
+		// must produce substantial output even if it diffs the screen itself.
+		row += strings.Repeat(string(rune('A'+p.ticks%26)), max(0, p.width-len(row)))
+		p.floodRenders++
+		if p.floodRenders == 3 {
+			_ = writeNativeStatus(p.statusDir, "FLOOD-RENDERED")
+		}
 		frame.Content = strings.TrimSuffix(strings.Repeat(row+"\n", max(1, p.height)), "\n")
 	}
 	if p.interactive {
