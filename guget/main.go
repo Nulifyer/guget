@@ -270,9 +270,8 @@ func main() {
 	logInfo("Starting guget with project directory: %s", fullProjectPath)
 
 	m := NewApp(fullProjectPath, &workspaceSnapshot{}, buf.Lines(), builtFlags)
-	m.lifecycle = tuiCtx
-
 	p := ui.NewRuntime(tuiCtx, m)
+	m.lifecycle = p.Context()
 
 	// Wire up live log forwarding to the TUI now that the program exists.
 	buf.mu.Lock()

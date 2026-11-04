@@ -3,15 +3,20 @@
 package term
 
 import (
+	"fmt"
 	"io"
 	"os"
+	"runtime"
 	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
 
-// StdinReader returns a byte source that reads console input via
+// OpenStdinReader owns a duplicate of stdin and reads console input via
 // ReadConsoleW. Two layers on Windows translate ^Z -> EOF and close
 // the app on Ctrl+Z:
 //  1. Go's internal/poll console wrapper (golang/go#3530) -- bypassed
@@ -22,18 +27,29 @@ import (
 // ReadConsoleW is the only documented API that never processes ^Z,
 // so we use it and decode the UTF-16 result to UTF-8 bytes.
 //
-// The handle is os.Stdin's existing handle, which term.MakeRaw
-// already put into raw mode (console modes are per-handle, so a
-// fresh CONIN$ open would come back cooked).
-func StdinReader() io.Reader {
-	return &conInReader{h: windows.Handle(os.Stdin.Fd())}
+// The duplicate shares the existing console input buffer and its raw mode.
+// Close cancels and joins an active native read without closing os.Stdin or
+// restoring console modes; the runtime restores modes after its decoder exits.
+func OpenStdinReader() (io.ReadCloser, error) {
+	var handle windows.Handle
+	if err := windows.DuplicateHandle(windows.CurrentProcess(), windows.Handle(os.Stdin.Fd()), windows.CurrentProcess(), &handle, 0, false, windows.DUPLICATE_SAME_ACCESS); err != nil {
+		return nil, fmt.Errorf("duplicate console input: %w", err)
+	}
+	return &conInReader{h: handle}, nil
 }
 
 type conInReader struct {
+	readMu                 sync.Mutex
+	mu                     sync.Mutex
+	closed                 bool
+	readThread             windows.Handle
+	readDone               chan struct{}
+	closeOnce              sync.Once
+	closeErr               error
 	h                      windows.Handle
 	wbuf                   [256]uint16
 	buf                    []byte
-	suppressPasteSynthesis bool
+	suppressPasteSynthesis atomic.Bool
 	textDecoder            utf16InputDecoder
 	readErr                error
 }
@@ -49,10 +65,81 @@ func (c *conInReader) Read(p []byte) (int, error) {
 	if len(p) == 0 {
 		return 0, nil
 	}
+	c.readMu.Lock()
+	defer c.readMu.Unlock()
+	c.mu.Lock()
+	closed := c.closed
+	c.mu.Unlock()
+	if closed {
+		return 0, io.EOF
+	}
+	// CancelSynchronousIo targets an OS thread, not a goroutine. Keep the
+	// registering thread until the read and its cancellation are both finished.
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	var thread windows.Handle
+	if err := windows.DuplicateHandle(windows.CurrentProcess(), windows.CurrentThread(), windows.CurrentProcess(), &thread, 0, false, windows.DUPLICATE_SAME_ACCESS); err != nil {
+		return 0, fmt.Errorf("register console read thread: %w", err)
+	}
+	defer windows.CloseHandle(thread)
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return 0, io.EOF
+	}
+	done := make(chan struct{})
+	c.readThread, c.readDone = thread, done
+	c.mu.Unlock()
+	defer func() {
+		c.mu.Lock()
+		c.readThread = 0
+		close(done)
+		c.mu.Unlock()
+	}()
+	n, err := c.read(p)
+	c.mu.Lock()
+	closed = c.closed
+	c.mu.Unlock()
+	if closed {
+		return 0, io.EOF
+	}
+	return n, err
+}
+
+// Close repeats cancellation until the registered read completes. A single
+// cancellation can report ERROR_NOT_FOUND in the interval just before the
+// registered thread enters ReadConsoleW. Retrying closes that interval.
+func (c *conInReader) Close() error {
+	c.closeOnce.Do(func() {
+		c.mu.Lock()
+		c.closed = true
+		done := c.readDone
+		c.mu.Unlock()
+		if done != nil {
+			for {
+				c.mu.Lock()
+				if c.readThread != 0 {
+					procCancelSynchronousIo.Call(uintptr(c.readThread))
+				}
+				c.mu.Unlock()
+				select {
+				case <-done:
+					c.closeErr = windows.CloseHandle(c.h)
+					return
+				case <-time.After(time.Millisecond):
+				}
+			}
+		}
+		c.closeErr = windows.CloseHandle(c.h)
+	})
+	return c.closeErr
+}
+
+func (c *conInReader) read(p []byte) (int, error) {
 	if len(c.buf) == 0 && c.readErr != nil {
 		return 0, c.readErr
 	}
-	if len(c.buf) == 0 && !c.suppressPasteSynthesis {
+	if len(c.buf) == 0 && !c.suppressPasteSynthesis.Load() {
 		// ReadConsoleW often does not relay the terminal's ESC[200~
 		// brackets. When the console queue already looks paste-like,
 		// drain that queue directly and synthesize bracketed paste
@@ -82,7 +169,7 @@ func (c *conInReader) Read(p []byte) (int, error) {
 }
 
 func (c *conInReader) setPasteSynthesisEnabled(enabled bool) {
-	c.suppressPasteSynthesis = !enabled
+	c.suppressPasteSynthesis.Store(!enabled)
 }
 
 // pendingKeyCount returns the number of key-down events with
@@ -217,7 +304,8 @@ type keyEventRecord struct {
 }
 
 var (
-	modKernel32           = windows.NewLazySystemDLL("kernel32.dll")
-	procPeekConsoleInputW = modKernel32.NewProc("PeekConsoleInputW")
-	procReadConsoleInputW = modKernel32.NewProc("ReadConsoleInputW")
+	modKernel32             = windows.NewLazySystemDLL("kernel32.dll")
+	procPeekConsoleInputW   = modKernel32.NewProc("PeekConsoleInputW")
+	procReadConsoleInputW   = modKernel32.NewProc("ReadConsoleInputW")
+	procCancelSynchronousIo = modKernel32.NewProc("CancelSynchronousIo")
 )

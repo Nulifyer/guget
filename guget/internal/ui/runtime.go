@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -17,15 +18,26 @@ import (
 // Runtime serializes component mutations, runs effects asynchronously, and
 // commits bounded frames. Send applies backpressure without spawning goroutines.
 type Runtime struct {
-	ctx    context.Context
-	cancel context.CancelFunc
-	root   Component
-	events chan Event
+	ctx     context.Context
+	cancel  context.CancelFunc
+	root    Component
+	events  chan Event
+	effects sync.WaitGroup
 }
 
 func NewRuntime(parent context.Context, root Component) *Runtime {
 	ctx, cancel := context.WithCancel(parent)
 	return &Runtime{ctx: ctx, cancel: cancel, root: root, events: make(chan Event, 256)}
+}
+
+// Context belongs to this runtime, including a user-requested quit. Components
+// use it for background work so shutdown can cancel and drain file recovery.
+func (r *Runtime) Context() context.Context { return r.ctx }
+
+func (r *Runtime) shutdown() {
+	r.cancel()
+	r.root.Disconnect()
+	r.effects.Wait()
 }
 func (r *Runtime) Send(e Event) {
 	if e == nil {
@@ -37,10 +49,12 @@ func (r *Runtime) Send(e Event) {
 	}
 }
 func (r *Runtime) schedule(effect Effect) {
-	if effect == nil {
+	if effect == nil || r.ctx.Err() != nil {
 		return
 	}
+	r.effects.Add(1)
 	go func() {
+		defer r.effects.Done()
 		defer func() {
 			if p := recover(); p != nil {
 				r.Send(effectFailed{fmt.Errorf("background operation: %v", p)})
@@ -70,15 +84,12 @@ func (r *Runtime) Run() (err error) {
 		return err
 	}
 	defer terminal.Restore()
-	defer r.cancel()
-	defer r.root.Disconnect()
-	out := os.Stdout
-	defer func() {
-		_, _ = io.WriteString(out, "\x1b[0m\x1b]8;;\x1b\\\x1b[?1002;1006l\x1b[?2004l\x1b[?25h\x1b[?1049l")
-	}()
-	if _, err = io.WriteString(out, "\x1b[?1049h\x1b[?25l\x1b[?2004h"); err != nil {
+	defer r.shutdown()
+	output, err := newTerminalOutput(r.ctx)
+	if err != nil {
 		return err
 	}
+	defer output.Close()
 	resize, stopResize := term.WatchResize()
 	defer stopResize()
 	signals := make(chan os.Signal, 1)
@@ -88,9 +99,15 @@ func (r *Runtime) Run() (err error) {
 	if err != nil {
 		return err
 	}
-	defer closeInput()
+	inputDone := make(chan struct{})
+	defer func() {
+		r.cancel()
+		closeInput()
+		<-inputDone
+	}()
 	reader := term.NewKeyReader(input)
 	go func() {
+		defer close(inputDone)
 		for {
 			e, err := reader.Read()
 			if err != nil {
@@ -109,12 +126,9 @@ func (r *Runtime) Run() (err error) {
 	}()
 	r.schedule(r.root.HandleEvent(ResizeEvent{terminal.Width, terminal.Height}))
 	r.schedule(r.root.Connect())
-	screen := NewScreen(out)
 	var frame Frame
-	draw := func() error { frame = r.root.Render(); return screen.Draw(frame, terminal.Width, terminal.Height) }
-	if err = draw(); err != nil {
-		return err
-	}
+	draw := func() { output.Submit(r.root.Render(), terminal.Width, terminal.Height) }
+	draw()
 	// A frame is committed at most every 16ms while input and result events keep
 	// flowing. Continuous metadata or log events cannot starve keyboard handling.
 	tick := time.NewTicker(16 * time.Millisecond)
@@ -126,10 +140,15 @@ func (r *Runtime) Run() (err error) {
 			return nil
 		case <-signals:
 			return nil
+		case commit := <-output.Committed():
+			if commit.err != nil {
+				return commit.err
+			}
+			frame = commit.frame
 		case <-resize:
 			if terminal.RefreshSize() {
 				r.schedule(r.root.HandleEvent(ResizeEvent{terminal.Width, terminal.Height}))
-				screen.Invalidate()
+				output.Invalidate()
 				dirty = true
 			}
 		case e := <-r.events:
@@ -144,20 +163,39 @@ func (r *Runtime) Run() (err error) {
 				}
 				return e.err
 			case MouseEvent:
-				if frame.OnMouse != nil {
-					r.schedule(frame.OnMouse(e))
+				effect, mouseErr := dispatchCommittedMouse(&frame, output.Committed(), e)
+				if mouseErr != nil {
+					return mouseErr
 				}
+				r.schedule(effect)
 			default:
 				r.schedule(r.root.HandleEvent(e))
 			}
 			dirty = true
 		case <-tick.C:
 			if dirty {
-				if err = draw(); err != nil {
-					return err
-				}
+				draw()
 				dirty = false
 			}
+		}
+	}
+}
+
+func dispatchCommittedMouse(frame *Frame, commits <-chan outputCommit, event MouseEvent) (Effect, error) {
+	// A select may choose input while a newer visible frame acknowledgement is
+	// also ready. Bind the click to the newest committed geometry first.
+	for {
+		select {
+		case commit := <-commits:
+			if commit.err != nil {
+				return nil, commit.err
+			}
+			*frame = commit.frame
+		default:
+			if frame.OnMouse != nil {
+				return frame.OnMouse(event), nil
+			}
+			return nil, nil
 		}
 	}
 }
