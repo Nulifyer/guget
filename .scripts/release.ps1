@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 # ──────────────────────────────────────────────────────────────────────────────
 # release.ps1 — tag and push a release (GitHub Actions runs goreleaser)
 #   Usage: .\.scripts\release.ps1 [version]   e.g.  .\.scripts\release.ps1 0.2.0

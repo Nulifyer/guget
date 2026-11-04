@@ -38,7 +38,9 @@ echo -e "  ${BOLD}${CYAN}▸ Building...${RESET}"
 
 export CGO_ENABLED=0
 LDFLAGS="-s -w -X main.version=$VERSION"
-OUT_PATH="$REPO_ROOT/guget-build"
+BUILD_DIR="$(mktemp -d "${TMPDIR:-/tmp}/guget-build.XXXXXX")"
+trap 'rm -rf "$BUILD_DIR"' EXIT
+OUT_PATH="$BUILD_DIR/guget"
 
 ( cd "$SOURCE_DIR" && go build -ldflags "$LDFLAGS" -o "$OUT_PATH" . )
 ok "Built $OUT_PATH"
@@ -88,7 +90,9 @@ esac
 
 # ── Verify ───────────────────────────────────────────────────────────────────
 echo ""
-VER_OUTPUT=$("$INSTALL_DIR/guget" --version 2>&1 || true)
+if ! VER_OUTPUT=$("$INSTALL_DIR/guget" --version 2>&1); then
+    fail "Installed binary did not run: $VER_OUTPUT"
+fi
 ok "Verified: $VER_OUTPUT"
 
 echo -e "\n  ${BOLD}${GREEN}Done!${RESET}\n"
