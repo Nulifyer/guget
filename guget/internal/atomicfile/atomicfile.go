@@ -15,6 +15,18 @@ var ErrAfterReplace = errors.New("destination replaced before durability check f
 // WriteFile replaces path only after data has been written and synced to a
 // same-directory temporary file. Existing permissions are preserved.
 func WriteFile(path string, data []byte, fallbackMode os.FileMode) error {
+	return WriteFileChecked(path, data, fallbackMode, nil)
+}
+
+// WriteFileChecked calls check immediately before every replacement attempt,
+// after preparing the temporary file. A failed check leaves the destination
+// unchanged. The check and replacement are not an atomic compare-and-swap
+// against writers that do not cooperate with the caller's locking protocol.
+func WriteFileChecked(path string, data []byte, fallbackMode os.FileMode, check func() error) error {
+	return writeFile(path, data, fallbackMode, check, replaceFile)
+}
+
+func writeFile(path string, data []byte, fallbackMode os.FileMode, check func() error, replace func(string, string) error) error {
 	dir := filepath.Dir(path)
 	base := filepath.Base(path)
 	tmp, err := os.CreateTemp(dir, "."+base+".tmp-*")
@@ -50,7 +62,12 @@ func WriteFile(path string, data []byte, fallbackMode os.FileMode) error {
 	}
 	const maxAttempts = 5
 	for attempt := 0; ; attempt++ {
-		err = replaceFile(tmpPath, path)
+		if check != nil {
+			if err := check(); err != nil {
+				return fmt.Errorf("check %s before replacement: %w", path, err)
+			}
+		}
+		err = replace(tmpPath, path)
 		if err == nil {
 			break
 		}
