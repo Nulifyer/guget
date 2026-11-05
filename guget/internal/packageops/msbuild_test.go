@@ -92,7 +92,19 @@ func TestMSBuildInspectorIncludesImportedPackageWithEvaluatedOwner(t *testing.T)
 		if use.PackageID != "Polly" {
 			continue
 		}
-		if use.ReferenceOwner != owner || use.VersionOwner != owner || use.EvaluatedExpression != "8.5.2" || !use.Edit.Supported {
+		// Windows runners can give Go an 8.3 temp path while MSBuild returns
+		// its long form. Compare the actual files, not their path spelling.
+		expected, err := os.Stat(owner)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, actual := range []string{use.ReferenceOwner, use.VersionOwner} {
+			info, err := os.Stat(actual)
+			if err != nil || !os.SameFile(expected, info) {
+				t.Fatalf("imported owner = %q, want file %q: %v", actual, owner, err)
+			}
+		}
+		if use.EvaluatedExpression != "8.5.2" || !use.Edit.Supported {
 			t.Fatalf("imported package ownership = %+v", use)
 		}
 		return
