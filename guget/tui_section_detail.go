@@ -81,6 +81,7 @@ func (m *App) renderDetailHeader(row packageRow, w int) string {
 	}
 	name := hyperlink(pkgLink, styleAccentBold.Render(row.info.ID))
 	s.WriteString(name + "\n\n")
+	s.WriteString(m.renderDetailUpdateRequirements(row))
 
 	// description
 	if row.info.Description != "" {
@@ -98,6 +99,35 @@ func (m *App) renderDetailHeader(row packageRow, w int) string {
 		s.WriteString(styleText.Render(strings.Join(authors, ", ")) + "\n\n")
 	}
 
+	return s.String()
+}
+
+func (m *App) renderDetailUpdateRequirements(row packageRow) string {
+	var s strings.Builder
+	if m.selectedProject() != nil && row.ref.Locked {
+		s.WriteString(styleYellow.Render("Version pinned") + "\n")
+		s.WriteString(styleSubtle.Render("Updating this project asks for confirmation. Bulk updates skip it.") + "\n\n")
+	}
+	if len(row.updateRequirements) == 0 {
+		return s.String()
+	}
+	s.WriteString(styleYellowBold.Render("Update requirements") + "\n")
+	s.WriteString(styleText.Render("For "+row.latestCompatible.SemVer.String()+":") + "\n")
+	lastProject := ""
+	for _, requirement := range row.updateRequirements {
+		if requirement.project.FilePath != lastProject {
+			path := requirement.project.FilePath
+			if relative, err := filepath.Rel(m.projectDir, path); err == nil {
+				path = relative
+			}
+			s.WriteString(styleSubtle.Render(path) + "\n")
+			lastProject = requirement.project.FilePath
+		}
+		s.WriteString(styleYellow.Render("  "+requirement.packageID+" "+requirement.requiredVersion()) + "\n")
+		s.WriteString(styleMuted.Render("  requested "+requirement.requested) + "\n")
+	}
+	s.WriteString(styleSubtle.Render("Update these dependencies first, then press u again.") + "\n")
+	s.WriteString(styleMuted.Render("v/a can override this check; restore and test afterward.") + "\n\n")
 	return s.String()
 }
 
@@ -199,14 +229,29 @@ func (m *App) renderDetailProjectVersions(row packageRow) string {
 	s.WriteString(styleMuted.Render("Project versions") + "\n")
 	for _, p := range m.ctx.ParsedProjects {
 		for ref := range p.Packages {
-			if ref.Name == row.ref.Name {
-				proj := styleSubtle.Render(fmt.Sprintf("  %-20s", truncate(p.FileName, 20)))
+			if strings.EqualFold(ref.Name, row.ref.Name) {
 				requested := ref.Requested
 				if requested == "" {
 					requested = ref.Version.String()
 				}
 				ver := styleText.Render(requested)
-				line := proj + " " + ver
+				versions := ver
+				if ref.Locked {
+					versions += styleYellow.Render(" pinned")
+				}
+				for _, requirement := range row.updateRequirements {
+					if requirement.project.FilePath == p.FilePath {
+						versions += styleYellow.Render(" [deps]")
+						break
+					}
+				}
+				nameWidth := min(20, m.detail.vp.Width()-style.Width(versions)-3)
+				line := ""
+				if nameWidth >= 8 {
+					line = "  " + styleSubtle.Render(padRight(truncate(p.FileName, nameWidth), nameWidth)) + " " + versions
+				} else {
+					line = styleSubtle.Render(p.FileName) + "\n  " + versions
+				}
 				sourceFile := p.SourceFileForPackage(ref.Name)
 				if sourceFile != p.FilePath {
 					line += " " + styleCyan.Render("("+filepath.Base(sourceFile)+")")

@@ -55,6 +55,17 @@ Compatible quick updates consider every affected project's frameworks, including
 projects that consume the same shared version. Latest stable and explicit picker
 choices can require newer frameworks; restore and test each affected project.
 
+An available version marked `[deps]` needs a dependency changed first. The
+detail panel's **Update requirements** lists the affected projects, required
+dependency versions, and their current requests. Update those dependencies,
+then press `u` again. The marker uses known direct dependency metadata; restore
+still validates the full dependency graph. Choosing a version with `v` or `a`
+can override this check.
+
+A requested version marked `pin` is an explicit exact-version pin such as
+`[13.0.1]`. This is separate from a dependency requirement. All Projects shows
+pins beside each affected project's version in the detail panel.
+
 The saved package state refreshes before the next change becomes available.
 You can continue navigating while saving, reloading, or fetching package information.
 

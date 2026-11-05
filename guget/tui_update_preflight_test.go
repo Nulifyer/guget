@@ -25,7 +25,7 @@ func TestCompatibleQuickUpdatePreflightsDirectDependency(t *testing.T) {
 	if cmd := m.HandleEvent(ui.KeyPress(ui.Key{Code: 'u'})); cmd != nil || m.ctx.Saving {
 		t.Fatal("known direct downgrade started a write")
 	}
-	for _, text := range []string{"Update B:", "1.0.0 -> >=2.0.0", "v/a override"} {
+	for _, text := range []string{"Update B first:", "1.0.0 -> >=2.0.0", "App.csproj"} {
 		if !m.ctx.StatusIsErr || !strings.Contains(m.renderFooter(), text) {
 			t.Fatalf("missing actionable conflict %q: %q", text, m.renderFooter())
 		}
@@ -76,7 +76,7 @@ func TestExplicitUpdatesBypassCompatiblePreflight(t *testing.T) {
 
 func TestAllProjectsQuickUpdatePreflightsDirectDependency(t *testing.T) {
 	m, _ := preflightTestApp(t)
-	if cmd := m.HandleEvent(ui.KeyPress(ui.Key{Code: 'U'})); cmd != nil || m.ctx.Saving || !m.ctx.StatusIsErr || !strings.Contains(m.ctx.StatusLine, "Update B:") {
+	if cmd := m.HandleEvent(ui.KeyPress(ui.Key{Code: 'U'})); cmd != nil || m.ctx.Saving || !m.ctx.StatusIsErr || !strings.Contains(m.ctx.StatusLine, "Update B first:") {
 		t.Fatalf("all-project update did not refuse known downgrade: %q", m.ctx.StatusLine)
 	}
 }

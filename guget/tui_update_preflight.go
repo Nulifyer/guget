@@ -8,10 +8,74 @@ import (
 	"github.com/nulifyer/guget/internal/projectedit"
 )
 
-// quickUpdateDependencyConflict detects only known direct-version downgrades.
+type updateDependencyRequirement struct {
+	project   *ParsedProject
+	packageID string
+	requested string
+	minimum   SemVer
+	inclusive bool
+}
+
+func (r updateDependencyRequirement) requiredVersion() string {
+	operator := ">="
+	if !r.inclusive {
+		operator = ">"
+	}
+	return operator + r.minimum.String()
+}
+
+func (m *App) quickUpdateDependencyConflict(packageID string, candidate *PackageVersion, scope actionScope) string {
+	requirements := m.quickUpdateDependencyRequirements(packageID, candidate, scope)
+	if len(requirements) == 0 {
+		return ""
+	}
+	r := requirements[0]
+	return fmt.Sprintf("Update %s first: %s -> %s (%s)", r.packageID, r.requested, r.requiredVersion(), r.project.FileName)
+}
+
+// Index declarations once per refresh, rather than sorting every project's
+// complete package list separately for each available version.
+type updateDependencyReferences map[*ParsedProject]map[string][]PackageReference
+
+func indexUpdateDependencyReferences(projects []*ParsedProject) updateDependencyReferences {
+	index := make(updateDependencyReferences, len(projects))
+	for _, project := range projects {
+		references := make(map[string][]PackageReference, len(project.Packages))
+		for ref := range project.Packages {
+			id := strings.ToLower(ref.Name)
+			references[id] = append(references[id], ref)
+		}
+		index[project] = references
+	}
+	return index
+}
+
+// quickUpdateDependencyRequirements detects only known direct-version downgrades.
 // It uses loaded declarations and metadata, not a restore graph or a resolver.
 // Explicit stable/version-picker actions remain available for deliberate edits.
-func (m *App) quickUpdateDependencyConflict(packageID string, candidate *PackageVersion, scope actionScope) string {
+func (m *App) quickUpdateDependencyRequirements(packageID string, candidate *PackageVersion, scope actionScope) []updateDependencyRequirement {
+	if candidate == nil || len(candidate.DependencyGroups) == 0 {
+		return nil
+	}
+	return m.indexedUpdateDependencyRequirements(packageID, candidate, scope, indexUpdateDependencyReferences(m.ctx.ParsedProjects))
+}
+
+func (m *App) indexedUpdateDependencyRequirements(packageID string, candidate *PackageVersion, scope actionScope, index updateDependencyReferences) []updateDependencyRequirement {
+	if candidate == nil || len(candidate.DependencyGroups) == 0 {
+		return nil
+	}
+	var requirements []updateDependencyRequirement
+	dependencyIDs := NewSet[string]()
+	for _, group := range candidate.DependencyGroups {
+		for _, dependency := range group.Dependencies {
+			if !strings.EqualFold(dependency.ID, packageID) {
+				dependencyIDs.Add(strings.ToLower(dependency.ID))
+			}
+		}
+	}
+	ids := dependencyIDs.ToSlice()
+	slices.Sort(ids)
+	groupsByTarget := make(map[TargetFramework][]dependencyGroup)
 	selected := m.ctx.ParsedProjects
 	project := m.selectedProject()
 	if scope == scopeSelected && project != nil {
@@ -19,8 +83,8 @@ func (m *App) quickUpdateDependencyConflict(packageID string, candidate *Package
 	}
 	var changing []*ParsedProject
 	for _, p := range selected {
-		for ref := range p.Packages {
-			if !strings.EqualFold(ref.Name, packageID) || ((scope == scopeAll || project == nil) && ref.Locked) {
+		for _, ref := range index[p][strings.ToLower(packageID)] {
+			if (scope == scopeAll || project == nil) && ref.Locked {
 				continue
 			}
 			requested := ref.Requested
@@ -39,18 +103,14 @@ func (m *App) quickUpdateDependencyConflict(packageID string, candidate *Package
 		if i > 0 && consumer.FilePath == consumers[i-1].FilePath {
 			continue
 		}
-		references := consumer.Packages.ToSlice()
-		slices.SortFunc(references, func(a, b PackageReference) int {
-			return strings.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name))
-		})
-		counts := make(map[string]int, len(references))
-		for _, reference := range references {
-			counts[strings.ToLower(reference.Name)]++
-		}
-		for _, reference := range references {
-			if strings.EqualFold(reference.Name, packageID) || counts[strings.ToLower(reference.Name)] != 1 {
+		frameworks := consumer.TargetFrameworks.ToSlice()
+		slices.SortFunc(frameworks, func(a, b TargetFramework) int { return strings.Compare(a.String(), b.String()) })
+		for _, id := range ids {
+			references := index[consumer][id]
+			if len(references) != 1 {
 				continue
 			}
+			reference := references[0]
 			requested := reference.Requested
 			if requested == "" {
 				requested = reference.Version.String()
@@ -59,10 +119,12 @@ func (m *App) quickUpdateDependencyConflict(packageID string, candidate *Package
 			if !known {
 				continue
 			}
-			frameworks := consumer.TargetFrameworks.ToSlice()
-			slices.SortFunc(frameworks, func(a, b TargetFramework) int { return strings.Compare(a.String(), b.String()) })
 			for _, target := range frameworks {
-				groups := preflightDependencyGroups(candidate.DependencyGroups, target)
+				groups, cached := groupsByTarget[target]
+				if !cached {
+					groups = preflightDependencyGroups(candidate.DependencyGroups, target)
+					groupsByTarget[target] = groups
+				}
 				if len(groups) == 0 {
 					continue
 				}
@@ -82,16 +144,16 @@ func (m *App) quickUpdateDependencyConflict(packageID string, candidate *Package
 					conflict = true
 				}
 				if conflict {
-					operator := ">="
-					if !requiredInclusive {
-						operator = ">"
-					}
-					return fmt.Sprintf("Update %s: %s -> %s%s; v/a override", reference.Name, requested, operator, required.String())
+					requirements = append(requirements, updateDependencyRequirement{
+						project: consumer, packageID: reference.Name, requested: requested,
+						minimum: required, inclusive: requiredInclusive,
+					})
+					break // One requirement per dependency/project; avoid repeated target groups.
 				}
 			}
 		}
 	}
-	return ""
+	return requirements
 }
 
 // Exact framework groups take precedence. Without one, require the conflict in

@@ -15,7 +15,13 @@ func currentVersionText(row packageRow) string {
 		return row.oldest.String() + "–" + row.ref.Version.String()
 	}
 	if row.ref.Requested != "" {
+		if row.ref.Locked {
+			return row.ref.Requested + " pin"
+		}
 		return row.ref.Requested
+	}
+	if row.ref.Locked {
+		return row.ref.Version.String() + " pin"
 	}
 	return row.ref.Version.String()
 }
@@ -27,9 +33,16 @@ func availableVersionText(row packageRow) string {
 	}
 	compat := row.latestCompatible.SemVer.String()
 	if row.latestStable != nil && row.latestStable.SemVer.String() != compat {
-		return compat + " (" + row.latestStable.SemVer.String() + ")"
+		return compat + availableDependencyMarker(row) + " (" + row.latestStable.SemVer.String() + ")"
 	}
-	return compat
+	return compat + availableDependencyMarker(row)
+}
+
+func availableDependencyMarker(row packageRow) string {
+	if len(row.updateRequirements) > 0 {
+		return " [deps]"
+	}
+	return ""
 }
 
 // renderAvailableVersion returns the styled string for the merged available column.
@@ -58,9 +71,9 @@ func renderAvailableVersion(row packageRow) string {
 		default:
 			latestStyle = styleGreen
 		}
-		return compStyle.Render(compat) + " " + styleMuted.Render("(") + latestStyle.Render(latest) + styleMuted.Render(")")
+		return compStyle.Render(compat) + styleYellow.Render(availableDependencyMarker(row)) + " " + styleMuted.Render("(") + latestStyle.Render(latest) + styleMuted.Render(")")
 	}
-	return compStyle.Render(compat)
+	return compStyle.Render(compat) + styleYellow.Render(availableDependencyMarker(row))
 }
 
 func renderCurrentVersion(row packageRow, width int) string {
@@ -394,6 +407,17 @@ func (m *App) rebuildPackageRows() {
 				}
 			}
 			rows = append(rows, row)
+		}
+	}
+
+	var dependencyReferences updateDependencyReferences
+	for i := range rows {
+		row := &rows[i]
+		if !row.loading && row.err == nil && row.latestCompatible != nil && len(row.latestCompatible.DependencyGroups) > 0 {
+			if dependencyReferences == nil {
+				dependencyReferences = indexUpdateDependencyReferences(m.ctx.ParsedProjects)
+			}
+			row.updateRequirements = m.indexedUpdateDependencyRequirements(row.ref.Name, row.latestCompatible, scopeSelected, dependencyReferences)
 		}
 	}
 

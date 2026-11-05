@@ -337,19 +337,20 @@ func (p projectItem) Description() string {
 }
 
 type packageRow struct {
-	installedVersions Set[string]
-	ref               PackageReference
-	project           *ParsedProject
-	info              *PackageInfo
-	source            string
-	err               error
-	loading           bool
-	latestCompatible  *PackageVersion
-	latestStable      *PackageVersion
-	diverged          bool
-	oldest            SemVer
-	vulnerable        bool // installed version has ≥1 known vulnerability
-	deprecated        bool // package is deprecated in the registry
+	installedVersions  Set[string]
+	ref                PackageReference
+	project            *ParsedProject
+	info               *PackageInfo
+	source             string
+	err                error
+	loading            bool
+	latestCompatible   *PackageVersion
+	latestStable       *PackageVersion
+	updateRequirements []updateDependencyRequirement
+	diverged           bool
+	oldest             SemVer
+	vulnerable         bool // installed version has ≥1 known vulnerability
+	deprecated         bool // package is deprecated in the registry
 }
 
 // effectiveVersion returns the version used for status comparisons.
