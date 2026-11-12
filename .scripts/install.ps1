@@ -6,6 +6,30 @@ $ErrorActionPreference = "Stop"
 $Repo       = "nulifyer/guget"
 $InstallDir = if ($env:GUGET_INSTALL) { $env:GUGET_INSTALL } else { "$env:LOCALAPPDATA\Programs\guget" }
 
+# Adds $Dir to the user PATH unless an entry already points there. Works on
+# the raw registry value so entries such as %USERPROFILE%\bin stay unexpanded,
+# and keeps the value's type (REG_EXPAND_SZ). [Environment]::SetEnvironmentVariable
+# would expand every entry and save the result as REG_SZ.
+function Add-GugetUserPath([string]$Dir) {
+    $Key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment', $true)
+    try {
+        $Raw = [string]$Key.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+        $Entries = @($Raw -split ';' | Where-Object { $_ })
+        foreach ($Entry in $Entries) {
+            if ([Environment]::ExpandEnvironmentVariables($Entry).TrimEnd('\') -eq $Dir.TrimEnd('\')) { return $false }
+        }
+        $Kind = if ($Key.GetValueNames() -contains 'Path') { $Key.GetValueKind('Path') } else { [Microsoft.Win32.RegistryValueKind]::ExpandString }
+        $Key.SetValue('Path', (($Entries + $Dir) -join ';'), $Kind)
+    } finally {
+        $Key.Close()
+    }
+    # Setting and clearing a variable through .NET broadcasts WM_SETTINGCHANGE,
+    # so Explorer and programs started from it pick up the new PATH.
+    [Environment]::SetEnvironmentVariable('GUGET_PATH_REFRESH', '1', 'User')
+    [Environment]::SetEnvironmentVariable('GUGET_PATH_REFRESH', $null, 'User')
+    return $true
+}
+
 # --- Arch detection ---
 $Arch = if (
     [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture -eq
@@ -53,15 +77,14 @@ try {
     Copy-Item (Join-Path $Tmp "guget.exe") (Join-Path $InstallDir "guget.exe") -Force
 
     # --- Add to user PATH if needed ---
-    $UserPath = [Environment]::GetEnvironmentVariable("PATH", "User")
-    if ($UserPath -notlike "*$InstallDir*") {
-        [Environment]::SetEnvironmentVariable("PATH", "$UserPath;$InstallDir", "User")
+    if (Add-GugetUserPath $InstallDir) {
         Write-Host "Added $InstallDir to your PATH."
     }
 
-    # Refresh PATH in the current session so guget is usable immediately.
-    $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH", "Machine") + ";" +
-                [System.Environment]::GetEnvironmentVariable("PATH", "User")
+    # Make guget usable in the current session too, keeping its other PATH entries.
+    if (($env:PATH -split ';') -notcontains $InstallDir) {
+        $env:PATH = "$env:PATH;$InstallDir"
+    }
 
     Write-Host "Installed to $InstallDir\guget.exe"
     Write-Host "Done! $(guget --version)"

@@ -72,16 +72,31 @@ try {
         Copy-Item $OutPath (Join-Path $InstallDir $BinaryName) -Force
         Ok "Installed to $InstallDir\$BinaryName"
 
-        # Add to user PATH if needed
-        $UserPath = [Environment]::GetEnvironmentVariable("PATH", "User")
-        if ($UserPath -notlike "*$InstallDir*") {
-            [Environment]::SetEnvironmentVariable("PATH", "$UserPath;$InstallDir", "User")
-            Ok "Added $InstallDir to user PATH"
+        # Add to user PATH if needed. Works on the raw registry value so entries
+        # such as %USERPROFILE%\bin stay unexpanded, and keeps its type
+        # (REG_EXPAND_SZ); [Environment]::SetEnvironmentVariable would expand
+        # every entry and save the result as REG_SZ.
+        $EnvKey = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment', $true)
+        try {
+            $RawPath = [string]$EnvKey.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+            $Entries = @($RawPath -split ';' | Where-Object { $_ })
+            $Present = $Entries | Where-Object { [Environment]::ExpandEnvironmentVariables($_).TrimEnd('\') -eq $InstallDir.TrimEnd('\') }
+            if (-not $Present) {
+                $Kind = if ($EnvKey.GetValueNames() -contains 'Path') { $EnvKey.GetValueKind('Path') } else { [Microsoft.Win32.RegistryValueKind]::ExpandString }
+                $EnvKey.SetValue('Path', (($Entries + $InstallDir) -join ';'), $Kind)
+                # Setting and clearing a variable through .NET broadcasts WM_SETTINGCHANGE.
+                [Environment]::SetEnvironmentVariable('GUGET_PATH_REFRESH', '1', 'User')
+                [Environment]::SetEnvironmentVariable('GUGET_PATH_REFRESH', $null, 'User')
+                Ok "Added $InstallDir to user PATH"
+            }
+        } finally {
+            $EnvKey.Close()
         }
 
-        # Refresh PATH for current session
-        $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH", "Machine") + ";" +
-                    [System.Environment]::GetEnvironmentVariable("PATH", "User")
+        # Make guget usable in the current session too, keeping its other PATH entries
+        if (($env:PATH -split ';') -notcontains $InstallDir) {
+            $env:PATH = "$env:PATH;$InstallDir"
+        }
     } else {
         # Linux/macOS via PowerShell
         if ($env:GUGET_INSTALL) {
