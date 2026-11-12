@@ -1,16 +1,18 @@
-﻿#Requires -Version 5.1
+#Requires -Version 5.1
+# ASCII without a BOM on purpose: `irm ... | iex` reads a BOM as part of the
+# first command ("The term '#Requires' is not recognized").
 $ErrorActionPreference = "Stop"
 
 $Repo       = "nulifyer/guget"
 $InstallDir = if ($env:GUGET_INSTALL) { $env:GUGET_INSTALL } else { "$env:LOCALAPPDATA\Programs\guget" }
 
-# ── Arch detection ────────────────────────────────────────────────────────────
+# --- Arch detection ---
 $Arch = if (
     [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture -eq
     [System.Runtime.InteropServices.Architecture]::Arm64
 ) { "arm64" } else { "amd64" }
 
-# ── Fetch latest release tag ──────────────────────────────────────────────────
+# --- Fetch latest release tag ---
 Write-Host "Fetching latest release..."
 $Release = Invoke-RestMethod "https://api.github.com/repos/$Repo/releases/latest"
 $Tag     = $Release.tag_name                  # e.g. "v0.1.0"  (used in the URL)
@@ -18,7 +20,7 @@ $Version = $Tag -replace '^v', ''             # e.g.  "0.1.0"  (used in the file
 
 Write-Host "Installing guget $Tag (windows/$Arch)..."
 
-# ── Download and extract ──────────────────────────────────────────────────────
+# --- Download and extract ---
 $Filename = "guget_${Version}_windows_${Arch}.zip"
 $Url      = "https://github.com/$Repo/releases/download/$Tag/$Filename"
 
@@ -33,7 +35,7 @@ try {
     Invoke-WebRequest -Uri $Url -OutFile $ZipPath -UseBasicParsing
     Invoke-WebRequest -Uri $ChecksumUrl -OutFile $ChecksumPath -UseBasicParsing
 
-    # ── Verify checksum ──────────────────────────────────────────────────────
+    # --- Verify checksum ---
     $Expected = (Get-Content $ChecksumPath | Where-Object { $_ -match $Filename }) -replace '\s+.*$', ''
     if (-not $Expected) {
         throw "Checksum not found for $Filename"
@@ -46,11 +48,11 @@ try {
 
     Expand-Archive -Path $ZipPath -DestinationPath $Tmp
 
-    # ── Install binary ────────────────────────────────────────────────────────
+    # --- Install binary ---
     New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
     Copy-Item (Join-Path $Tmp "guget.exe") (Join-Path $InstallDir "guget.exe") -Force
 
-    # ── Add to user PATH if needed ────────────────────────────────────────────
+    # --- Add to user PATH if needed ---
     $UserPath = [Environment]::GetEnvironmentVariable("PATH", "User")
     if ($UserPath -notlike "*$InstallDir*") {
         [Environment]::SetEnvironmentVariable("PATH", "$UserPath;$InstallDir", "User")

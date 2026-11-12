@@ -1,7 +1,8 @@
 # Keep source, configuration, documentation, and .NET fixtures consistent.
 * text=auto eol=lf
 
-# Preserve the UTF-8 BOM in these scripts for Windows PowerShell 5.1.
+# Preserve the UTF-8 BOM in these scripts for Windows PowerShell 5.1
+# (except .scripts/install.ps1: it runs through `irm | iex`, so it stays ASCII without a BOM).
 *.ps1 text eol=crlf
 
 # Use language-aware hunk headers when reviewing source and documentation.
