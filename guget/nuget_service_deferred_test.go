@@ -260,7 +260,7 @@ func TestDeferredFeedCachesFailureUntilReloadReplacesHandle(t *testing.T) {
 		t.Fatal("failed discovery was repeated per package")
 	}
 	healthy.Store(true)
-	reused, err := loadWorkspaceReusingServices(context.Background(), root, first)
+	reused, err := loadWorkspaceReusingServices(context.Background(), root, workspaceScanOptions{}, first)
 	if err != nil || reused.NugetServices[0] != first.NugetServices[0] {
 		t.Fatal("package-file reload did not reuse feed handle")
 	}

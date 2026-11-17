@@ -105,7 +105,11 @@ var commonValueFlags = map[string]bool{
 }
 
 var commonBoolFlags = map[string]bool{
-	"no-color": true, "help": true,
+	"no-color": true, "help": true, includeIgnoredFlag: true,
+}
+
+func cliScanOptions(args cliArgs) workspaceScanOptions {
+	return workspaceScanOptions{IncludeIgnored: args.bools[includeIgnoredFlag]}
 }
 
 func cloneFlags(flags map[string]bool, names ...string) map[string]bool {
@@ -227,13 +231,13 @@ func commandUsage(verb string) string {
 	usage := commandSynopsis(verb)
 	switch verb {
 	case "list", "show":
-		usage += "Options: --framework TFM (repeatable), --direct, --include-transitive, --source NAME, --timeout DURATION, --no-color, --help\n"
+		usage += "Options: --framework TFM (repeatable), --direct, --include-transitive, --source NAME, --timeout DURATION, --include-ignored, --no-color, --help\n"
 	case "search":
-		usage += "Options: --source NAME (repeatable), --output FILE, --timeout DURATION, --no-color, --help\n"
+		usage += "Options: --source NAME (repeatable), --output FILE, --timeout DURATION, --include-ignored, --no-color, --help\n"
 	case "sources":
-		usage += "Options: --output FILE, --timeout DURATION, --no-color, --help\n"
+		usage += "Options: --output FILE, --timeout DURATION, --include-ignored, --no-color, --help\n"
 	case "add", "update", "remove":
-		usage += "Options: --project DIR, --format table|tsv|json|jsonl, --output FILE, --timeout DURATION, --no-color, --help\n"
+		usage += "Options: --project DIR, --format table|tsv|json|jsonl, --output FILE, --timeout DURATION, --include-ignored, --no-color, --help\n"
 	}
 	return usage
 }
@@ -465,7 +469,7 @@ func (r cliRuntime) runList(ctx context.Context, verb string, argv []string) Exi
 	if err := ctx.Err(); err != nil {
 		return ExitInterrupted
 	}
-	snapshot, err := scanWorkspace(root)
+	snapshot, err := scanWorkspaceWith(root, cliScanOptions(args))
 	if err != nil {
 		fmt.Fprintf(r.stderr, "guget: %v\n", err)
 		return ExitWorkspace
@@ -632,7 +636,7 @@ func (r cliRuntime) runSources(ctx context.Context, argv []string) ExitCode {
 	if err := ctx.Err(); err != nil {
 		return ExitInterrupted
 	}
-	snapshot, err := scanWorkspace(root)
+	snapshot, err := scanWorkspaceWith(root, cliScanOptions(args))
 	if err != nil {
 		fmt.Fprintf(r.stderr, "guget: %v\n", err)
 		return ExitWorkspace
@@ -725,7 +729,7 @@ func (r cliRuntime) runSearch(ctx context.Context, argv []string) ExitCode {
 		fmt.Fprintln(r.stderr, err)
 		return ExitWorkspace
 	}
-	snapshot, err := scanWorkspace(root)
+	snapshot, err := scanWorkspaceWith(root, cliScanOptions(args))
 	if err != nil {
 		fmt.Fprintf(r.stderr, "guget: %v\n", err)
 		return ExitWorkspace
@@ -979,7 +983,7 @@ func (r cliRuntime) runMutation(ctx context.Context, verb string, argv []string)
 		fmt.Fprintln(r.stderr, err)
 		return ExitWorkspace
 	}
-	snapshot, err := scanWorkspace(root)
+	snapshot, err := scanWorkspaceWith(root, cliScanOptions(args))
 	if err != nil {
 		fmt.Fprintf(r.stderr, "guget: %v\n", err)
 		return ExitWorkspace
@@ -1185,7 +1189,7 @@ func (r cliRuntime) runRestore(ctx context.Context, argv []string) ExitCode {
 		fmt.Fprintln(r.stderr, err)
 		return ExitWorkspace
 	}
-	snapshot, err := scanWorkspace(root)
+	snapshot, err := scanWorkspaceWith(root, cliScanOptions(args))
 	if err != nil {
 		fmt.Fprintf(r.stderr, "guget: %v\n", err)
 		return ExitWorkspace

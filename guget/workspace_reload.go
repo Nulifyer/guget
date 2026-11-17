@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
-	"io/fs"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -37,14 +36,14 @@ func loadWorkspace(projectDir string) (*workspaceSnapshot, error) {
 }
 
 func loadWorkspaceContext(ctx context.Context, projectDir string) (*workspaceSnapshot, error) {
-	return loadWorkspaceReusingServices(ctx, projectDir, nil)
+	return loadWorkspaceReusingServices(ctx, projectDir, workspaceScanOptions{}, nil)
 }
 
 // Saves only change package declarations. Reuse initialized feeds when their
 // complete configuration is unchanged, avoiding network discovery per keypress.
 // Manual and NuGet.Config reloads pass nil so credentials and failed feeds refresh.
-func loadWorkspaceReusingServices(ctx context.Context, projectDir string, previous *workspaceSnapshot) (*workspaceSnapshot, error) {
-	snapshot, err := scanWorkspace(projectDir)
+func loadWorkspaceReusingServices(ctx context.Context, projectDir string, opts workspaceScanOptions, previous *workspaceSnapshot) (*workspaceSnapshot, error) {
+	snapshot, err := scanWorkspaceWith(projectDir, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -80,12 +79,18 @@ func loadWorkspaceReusingServices(ctx context.Context, projectDir string, previo
 // package source. Headless inspection commands use this path so listing local
 // package declarations never depends on network availability.
 func scanWorkspace(projectDir string) (*workspaceSnapshot, error) {
-	return scanWorkspaceWithParser(projectDir, ParseCsproj)
+	return scanWorkspaceWith(projectDir, workspaceScanOptions{})
+}
+
+func scanWorkspaceWith(projectDir string, opts workspaceScanOptions) (*workspaceSnapshot, error) {
+	return scanWorkspaceWithParser(projectDir, opts, ParseCsproj)
 }
 
 // Validate a whole disk view, including external owners discovered during parsing.
 // Generations order requests; these revisions detect changes within one request.
-func scanWorkspaceWithParser(projectDir string, parse func(string) (*ParsedProject, error)) (*workspaceSnapshot, error) {
+// Each attempt lists the workspace once. The before and after revisions re-read
+// the files that walk found, so a slow filesystem pays for one directory walk.
+func scanWorkspaceWithParser(projectDir string, opts workspaceScanOptions, parse func(string) (*ParsedProject, error)) (*workspaceSnapshot, error) {
 	fullProjectPath, err := filepath.Abs(projectDir)
 	if err != nil {
 		return nil, fmt.Errorf("getting absolute project directory: %w", err)
@@ -93,11 +98,15 @@ func scanWorkspaceWithParser(projectDir string, parse func(string) (*ParsedProje
 	inputs := workspaceInputPaths(fullProjectPath, &workspaceSnapshot{})
 	const maxAttempts = 3
 	for attempt := 0; attempt < maxAttempts; attempt++ {
-		before, err := scanWatchedWorkspaceFiles(fullProjectPath, inputs...)
+		tree, err := walkWorkspace(fullProjectPath, opts)
+		if err != nil {
+			return nil, fmt.Errorf("finding projects: %w", err)
+		}
+		before, err := readWatchedFileStates(tree.WatchedFiles, inputs)
 		if err != nil {
 			return nil, fmt.Errorf("reading workspace input revisions: %w", err)
 		}
-		snapshot, err := scanWorkspaceOnce(fullProjectPath, parse, before)
+		snapshot, err := scanWorkspaceOnce(fullProjectPath, tree, parse, before)
 		if errors.Is(err, errWorkspaceInputsChanged) {
 			continue
 		}
@@ -105,7 +114,7 @@ func scanWorkspaceWithParser(projectDir string, parse func(string) (*ParsedProje
 			return nil, err
 		}
 		inputs = mergeWorkspaceInputPaths(inputs, workspaceInputPaths(fullProjectPath, snapshot))
-		after, err := scanWatchedWorkspaceFiles(fullProjectPath, inputs...)
+		after, err := readWatchedFileStates(tree.WatchedFiles, inputs)
 		if err != nil {
 			return nil, fmt.Errorf("validating workspace input revisions: %w", err)
 		}
@@ -121,7 +130,11 @@ func validateWorkspaceSnapshot(snapshot *workspaceSnapshot) error {
 	if snapshot.FileRevisions == nil {
 		return nil
 	}
-	current, err := scanWatchedWorkspaceFiles(snapshot.ProjectDir, workspaceInputPaths(snapshot.ProjectDir, snapshot)...)
+	known := make([]string, 0, len(snapshot.FileRevisions))
+	for path := range snapshot.FileRevisions {
+		known = append(known, path)
+	}
+	current, err := readWatchedFileStates(known, workspaceInputPaths(snapshot.ProjectDir, snapshot))
 	if err != nil {
 		return fmt.Errorf("revalidating workspace before publication: %w", err)
 	}
@@ -152,14 +165,14 @@ func sameWorkspaceInputRevisions(before, after map[string]watchedFileState) bool
 
 var errWorkspaceInputsChanged = errors.New("workspace inputs changed while scanning")
 
-func scanWorkspaceOnce(fullProjectPath string, parse func(string) (*ParsedProject, error), revisions map[string]watchedFileState) (*workspaceSnapshot, error) {
+func scanWorkspaceOnce(fullProjectPath string, tree *workspaceTree, parse func(string) (*ParsedProject, error), revisions map[string]watchedFileState) (*workspaceSnapshot, error) {
 	logInfo("Scanning workspace: %s", fullProjectPath)
 
-	projectFiles, err := FindProjectFiles(fullProjectPath)
-	if err != nil {
-		return nil, fmt.Errorf("finding projects: %w", err)
-	}
+	projectFiles := tree.ProjectFiles
 	logInfo("Found %d project(s)", len(projectFiles))
+	if tree.GitIgnored > 0 {
+		logInfo("Skipped %d path(s) excluded by .gitignore; use --%s to search them", tree.GitIgnored, includeIgnoredFlag)
+	}
 
 	var parsedProjects []*ParsedProject
 	for _, file := range projectFiles {
@@ -174,6 +187,9 @@ func scanWorkspaceOnce(fullProjectPath string, parse func(string) (*ParsedProjec
 	}
 
 	if len(parsedProjects) == 0 {
+		if tree.GitIgnored > 0 {
+			return nil, fmt.Errorf("no parseable .csproj, .fsproj, or .vbproj files found in: %s (%d path(s) excluded by .gitignore were not searched; use --%s to search them)", fullProjectPath, tree.GitIgnored, includeIgnoredFlag)
+		}
 		return nil, fmt.Errorf("no parseable .csproj, .fsproj, or .vbproj files found in: %s", fullProjectPath)
 	}
 
@@ -184,7 +200,7 @@ func scanWorkspaceOnce(fullProjectPath string, parse func(string) (*ParsedProjec
 		}
 	}
 	logInfo("Found %d .props file(s) with packages", len(propsProjects))
-	unsupported := findUnsupportedPackageArtifacts(fullProjectPath)
+	unsupported := tree.Unsupported
 	for _, artifact := range unsupported {
 		logWarn("Read-only package artifact %s: %s", artifact.Path, artifact.Reason)
 	}
@@ -238,30 +254,6 @@ func validateProjectInputRevisions(project *ParsedProject, baseline map[string]w
 		}
 	}
 	return nil
-}
-
-func findUnsupportedPackageArtifacts(root string) []unsupportedPackageArtifact {
-	var artifacts []unsupportedPackageArtifact
-	_ = filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
-		if err != nil {
-			return nil
-		}
-		if entry.IsDir() {
-			if path != root && shouldSkipProjectDir(entry.Name()) {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		switch {
-		case strings.EqualFold(entry.Name(), "packages.config"):
-			artifacts = append(artifacts, unsupportedPackageArtifact{Path: path, Reason: "packages.config mutation is not supported"})
-		case strings.EqualFold(entry.Name(), "dotnet-tools.json") && strings.EqualFold(filepath.Base(filepath.Dir(path)), ".config"):
-			artifacts = append(artifacts, unsupportedPackageArtifact{Path: path, Reason: ".NET tool manifests are outside project package management"})
-		}
-		return nil
-	})
-	sort.Slice(artifacts, func(i, j int) bool { return artifacts[i].Path < artifacts[j].Path })
-	return artifacts
 }
 
 func collectPropsProjects(parsedProjects []*ParsedProject) []*ParsedProject {

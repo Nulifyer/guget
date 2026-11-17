@@ -76,15 +76,16 @@ func (b *logBuffer) Lines() []string {
 }
 
 const (
-	Flag_NoColor       = "no-color"
-	Flag_Verbosity     = "verbosity"
-	Flag_ProjectDir    = "project"
-	Flag_Version       = "version"
-	Flag_LogFile       = "log-file"
-	Flag_Theme         = "theme"
-	Flag_SortBy        = "sort-by"
-	Flag_NoMouse       = "no-mouse"
-	Flag_NoUpdateCheck = "no-update-check"
+	Flag_NoColor        = "no-color"
+	Flag_Verbosity      = "verbosity"
+	Flag_ProjectDir     = "project"
+	Flag_Version        = "version"
+	Flag_LogFile        = "log-file"
+	Flag_Theme          = "theme"
+	Flag_SortBy         = "sort-by"
+	Flag_NoMouse        = "no-mouse"
+	Flag_NoUpdateCheck  = "no-update-check"
+	Flag_IncludeIgnored = includeIgnoredFlag
 )
 
 type BuiltFlags struct {
@@ -97,23 +98,32 @@ type BuiltFlags struct {
 	SortBy        string
 	NoMouse       bool
 	NoUpdateCheck bool
+	// IncludeIgnored searches paths excluded by .gitignore rules.
+	IncludeIgnored bool
 }
 
 func BuildFlags(flags map[string]IParsedFlag) BuiltFlags {
 	return BuiltFlags{
-		NoColor:       GetFlag[bool](flags, Flag_NoColor),
-		Verbosity:     GetFlag[string](flags, Flag_Verbosity),
-		ProjectDir:    GetFlag[string](flags, Flag_ProjectDir),
-		Version:       GetFlag[bool](flags, Flag_Version),
-		LogFile:       GetFlag[string](flags, Flag_LogFile),
-		Theme:         GetFlag[string](flags, Flag_Theme),
-		SortBy:        GetFlag[string](flags, Flag_SortBy),
-		NoMouse:       GetFlag[bool](flags, Flag_NoMouse),
-		NoUpdateCheck: GetFlag[bool](flags, Flag_NoUpdateCheck),
+		NoColor:        GetFlag[bool](flags, Flag_NoColor),
+		Verbosity:      GetFlag[string](flags, Flag_Verbosity),
+		ProjectDir:     GetFlag[string](flags, Flag_ProjectDir),
+		Version:        GetFlag[bool](flags, Flag_Version),
+		LogFile:        GetFlag[string](flags, Flag_LogFile),
+		Theme:          GetFlag[string](flags, Flag_Theme),
+		SortBy:         GetFlag[string](flags, Flag_SortBy),
+		NoMouse:        GetFlag[bool](flags, Flag_NoMouse),
+		NoUpdateCheck:  GetFlag[bool](flags, Flag_NoUpdateCheck),
+		IncludeIgnored: GetFlag[bool](flags, Flag_IncludeIgnored),
 	}
 }
 
 func registerCLIFlags() {
+	RegisterFlag(Flag[bool]{
+		Name:        Flag_IncludeIgnored,
+		Aliases:     []string{"--" + includeIgnoredFlag},
+		Default:     Optional(false),
+		Description: "Also search directories excluded by .gitignore (bin, obj, and other build output stay excluded)",
+	})
 	RegisterFlag(Flag[bool]{
 		Name:        Flag_NoUpdateCheck,
 		Aliases:     []string{"--no-update-check"},
@@ -280,7 +290,7 @@ func main() {
 	m.SetSender(p.Send)
 	m.watchInputs = &workspaceWatchInputs{}
 	m.requestReload(reloadRequestedMsg{reason: "initial load"})
-	stopWatcher := watchWorkspaceFiles(fullProjectPath, p.Send, m.watchInputs)
+	stopWatcher := watchWorkspaceFiles(fullProjectPath, m.scanOptions, p.Send, m.watchInputs)
 	defer stopWatcher()
 
 	if err := p.Run(); err != nil {

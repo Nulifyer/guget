@@ -33,8 +33,10 @@ type App struct {
 	lifecycle context.Context
 
 	projectDir string
-	send       func(ui.Event)
-	mouse      bool
+	// scanOptions decides which directories reloads and the watcher search.
+	scanOptions workspaceScanOptions
+	send        func(ui.Event)
+	mouse       bool
 
 	updateVersion        string
 	updateChecksDisabled bool
@@ -134,6 +136,7 @@ func NewApp(projectDir string, snapshot *workspaceSnapshot, initialLogLines []st
 		ctx:                  ctx,
 		lifecycle:            context.Background(),
 		projectDir:           projectDir,
+		scanOptions:          workspaceScanOptions{IncludeIgnored: flags.IncludeIgnored},
 		mouse:                !flags.NoMouse,
 		updateChecksDisabled: flags.NoUpdateCheck,
 		sourceSignature:      workspaceSourceSignature(snapshot.Sources, snapshot.SourceMapping),

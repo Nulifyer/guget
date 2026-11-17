@@ -2,7 +2,6 @@ package main
 
 import (
 	"crypto/sha256"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -145,37 +144,31 @@ func readWatchedFileState(path string) (watchedFileState, bool, error) {
 	return watchedFileState{Size: int64(len(data)), ModTime: info.ModTime().UnixNano(), Hash: sha256.Sum256(data), Owner: owner}, true, nil
 }
 
-func scanWatchedWorkspaceFiles(rootDir string, extraPaths ...string) (map[string]watchedFileState, error) {
-	files := make(map[string]watchedFileState)
-	add := func(path string) error {
-		state, exists, err := readWatchedFileState(path)
-		if err == nil && exists {
-			files[path] = state
-		}
-		return err
-	}
-	err := filepath.WalkDir(rootDir, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			if shouldSkipProjectDir(d.Name()) {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if !isWatchedWorkspaceFile(path) {
-			return nil
-		}
-		return add(path)
-	})
+// scanWatchedWorkspaceFiles walks rootDir and reads every watched file it
+// finds plus extraPaths, such as imports outside the workspace.
+func scanWatchedWorkspaceFiles(rootDir string, opts workspaceScanOptions, extraPaths ...string) (map[string]watchedFileState, error) {
+	tree, err := walkWorkspace(rootDir, opts)
 	if err != nil {
-		return files, err
+		return make(map[string]watchedFileState), err
 	}
-	for _, path := range extraPaths {
-		if _, exists := files[path]; !exists {
-			if err := add(path); err != nil {
+	return readWatchedFileStates(tree.WatchedFiles, extraPaths)
+}
+
+// readWatchedFileStates reads the given files without listing directories.
+// Missing files are left out of the result.
+func readWatchedFileStates(paths, extraPaths []string) (map[string]watchedFileState, error) {
+	files := make(map[string]watchedFileState, len(paths)+len(extraPaths))
+	for _, group := range [][]string{paths, extraPaths} {
+		for _, path := range group {
+			if _, seen := files[path]; seen {
+				continue
+			}
+			state, exists, err := readWatchedFileState(path)
+			if err != nil {
 				return files, err
+			}
+			if exists {
+				files[path] = state
 			}
 		}
 	}
@@ -231,7 +224,7 @@ func (b *workspaceWatchBatch) update(now time.Time, changed []string) []string {
 
 // watchWorkspaceFiles polls workspace and explicitly loaded external inputs.
 // Acknowledgements identify exact committed bytes, never suppression windows.
-func watchWorkspaceFiles(rootDir string, send func(ui.Event), registries ...*workspaceWatchInputs) func() {
+func watchWorkspaceFiles(rootDir string, opts workspaceScanOptions, send func(ui.Event), registries ...*workspaceWatchInputs) func() {
 	if send == nil {
 		return func() {}
 	}
@@ -242,7 +235,7 @@ func watchWorkspaceFiles(rootDir string, send func(ui.Event), registries ...*wor
 	stop := make(chan struct{})
 	var once sync.Once
 	go func() {
-		prev, err := scanWatchedWorkspaceFiles(rootDir, inputs.inputPaths()...)
+		prev, err := scanWatchedWorkspaceFiles(rootDir, opts, inputs.inputPaths()...)
 		if err != nil {
 			logWarn("workspace watch init failed: %v", err)
 			prev = make(map[string]watchedFileState)
@@ -255,7 +248,7 @@ func watchWorkspaceFiles(rootDir string, send func(ui.Event), registries ...*wor
 			case <-stop:
 				return
 			case now := <-ticker.C:
-				next, err := scanWatchedWorkspaceFiles(rootDir, inputs.inputPaths()...)
+				next, err := scanWatchedWorkspaceFiles(rootDir, opts, inputs.inputPaths()...)
 				if err != nil {
 					if !os.IsNotExist(err) {
 						logWarn("workspace watch scan failed: %v", err)

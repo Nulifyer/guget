@@ -9,7 +9,7 @@ import (
 
 func TestFindProjectFiles_MixedFormats(t *testing.T) {
 	td := testDataDir(t)
-	files, err := FindProjectFiles(td)
+	files, err := findProjectFiles(td)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,7 +42,7 @@ func TestFindProjectFiles_MixedFormats(t *testing.T) {
 
 func TestFindProjectFiles_IncludesCircularRefProjects(t *testing.T) {
 	td := testDataDir(t)
-	files, err := FindProjectFiles(td)
+	files, err := findProjectFiles(td)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +68,7 @@ func TestFindProjectFiles_IncludesCircularRefProjects(t *testing.T) {
 
 func TestFindProjectFiles_SkipsIgnoredDirs(t *testing.T) {
 	td := testDataDir(t)
-	files, err := FindProjectFiles(td)
+	files, err := findProjectFiles(td)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +89,7 @@ func TestFindProjectFiles_SkipsIgnoredDirs(t *testing.T) {
 
 func TestFindProjectFiles_ExpectedCount(t *testing.T) {
 	td := testDataDir(t)
-	files, err := FindProjectFiles(td)
+	files, err := findProjectFiles(td)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +108,7 @@ func TestFindProjectFiles_ExpectedCount(t *testing.T) {
 
 func TestFindProjectFiles_EmptyDir(t *testing.T) {
 	dir := t.TempDir()
-	files, err := FindProjectFiles(dir)
+	files, err := findProjectFiles(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +118,7 @@ func TestFindProjectFiles_EmptyDir(t *testing.T) {
 }
 
 func TestFindProjectFiles_NonexistentDir(t *testing.T) {
-	_, err := FindProjectFiles(filepath.Join(os.TempDir(), "nonexistent_guget_test_dir"))
+	_, err := findProjectFiles(filepath.Join(os.TempDir(), "nonexistent_guget_test_dir"))
 	if err == nil {
 		t.Fatal("expected error for nonexistent directory")
 	}
@@ -126,7 +126,7 @@ func TestFindProjectFiles_NonexistentDir(t *testing.T) {
 
 func TestFindProjectFiles_ExcludesPropsFiles(t *testing.T) {
 	td := testDataDir(t)
-	files, err := FindProjectFiles(td)
+	files, err := findProjectFiles(td)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,4 +137,12 @@ func TestFindProjectFiles_ExcludesPropsFiles(t *testing.T) {
 			t.Fatalf("FindProjectFiles should not return .props files, got: %s", f)
 		}
 	}
+}
+
+func findProjectFiles(root string) ([]string, error) {
+	tree, err := walkWorkspace(root, workspaceScanOptions{})
+	if err != nil {
+		return nil, err
+	}
+	return tree.ProjectFiles, nil
 }

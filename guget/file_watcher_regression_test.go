@@ -16,7 +16,7 @@ func TestWorkspaceWatchDetectsContentWithPreservedMetadata(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "App.csproj")
 	mustWriteFile(t, path, `<Project Version="1.0.0"/>`)
-	before, err := scanWatchedWorkspaceFiles(root)
+	before, err := scanWatchedWorkspaceFiles(root, workspaceScanOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -25,7 +25,7 @@ func TestWorkspaceWatchDetectsContentWithPreservedMetadata(t *testing.T) {
 	if err := os.Chtimes(path, stamp, stamp); err != nil {
 		t.Fatal(err)
 	}
-	after, err := scanWatchedWorkspaceFiles(root)
+	after, err := scanWatchedWorkspaceFiles(root, workspaceScanOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,7 +45,7 @@ func TestWorkspaceWatchLoadedExternalInputsAndTargets(t *testing.T) {
 	mustWriteFile(t, external, `<Project/>`)
 	local := filepath.Join(root, "local.targets")
 	mustWriteFile(t, local, `<Project/>`)
-	states, err := scanWatchedWorkspaceFiles(root, external)
+	states, err := scanWatchedWorkspaceFiles(root, workspaceScanOptions{}, external)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +58,7 @@ func TestWorkspaceWatchLoadedExternalInputsAndTargets(t *testing.T) {
 	if err := os.Remove(external); err != nil {
 		t.Fatal(err)
 	}
-	next, err := scanWatchedWorkspaceFiles(root, external)
+	next, err := scanWatchedWorkspaceFiles(root, workspaceScanOptions{}, external)
 	if err != nil {
 		t.Fatal(err)
 	}

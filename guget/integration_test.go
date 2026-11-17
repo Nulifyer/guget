@@ -96,7 +96,7 @@ func seRedisDir(t *testing.T) string {
 func TestIntegration_SERedis_Discovery(t *testing.T) {
 	dir := seRedisDir(t)
 
-	files, err := FindProjectFiles(dir)
+	files, err := findProjectFiles(dir)
 	if err != nil {
 		t.Fatalf("FindProjectFiles: %v", err)
 	}
@@ -129,7 +129,7 @@ func TestIntegration_SERedis_Discovery(t *testing.T) {
 func TestIntegration_SERedis_CPMVersionResolution(t *testing.T) {
 	dir := seRedisDir(t)
 
-	files, err := FindProjectFiles(dir)
+	files, err := findProjectFiles(dir)
 	if err != nil {
 		t.Fatalf("FindProjectFiles: %v", err)
 	}
@@ -248,7 +248,7 @@ func TestIntegration_OTel_PropertyResolution(t *testing.T) {
 func TestIntegration_OTel_NoEmptyVersionsInProjects(t *testing.T) {
 	dir := otelDir(t)
 
-	files, err := FindProjectFiles(dir)
+	files, err := findProjectFiles(dir)
 	if err != nil {
 		t.Fatalf("FindProjectFiles: %v", err)
 	}
