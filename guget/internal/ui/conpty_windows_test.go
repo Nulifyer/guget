@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -146,21 +147,49 @@ func (p *nativeConsole) expectOutput(t *testing.T, minimum int64) {
 
 func (p *nativeConsole) expectPrivateModesRestored(t *testing.T) {
 	t.Helper()
-	// ConPTY can combine or split DEC mode sequences. Check their final
-	// meaning, rather than relying on byte-for-byte forwarding by the host.
+	// The helper exiting does not mean the host's final output has been read:
+	// the throttled reader can still hold the last frame. Read at full speed
+	// and wait for the final modes instead of checking once.
+	p.drainDelay.Store(0)
+	deadline := time.NewTimer(8 * time.Second)
+	defer deadline.Stop()
+	for {
+		problems := privateModeProblems(p.text())
+		if len(problems) == 0 {
+			return
+		}
+		select {
+		case <-p.changed:
+		case <-deadline.C:
+			for _, problem := range problems {
+				t.Error(problem)
+			}
+			return
+		}
+	}
+}
+
+// privateModeProblems describes each DEC private mode whose final state in the
+// transcript differs from a restored terminal. ConPTY can combine or split DEC
+// mode sequences, so the check uses their final meaning rather than relying on
+// byte-for-byte forwarding by the host.
+func privateModeProblems(transcript string) []string {
 	states := make(map[string]bool)
 	sequence := regexp.MustCompile("\x1b\\[\\?([0-9;]+)([hl])")
-	for _, match := range sequence.FindAllStringSubmatch(p.text(), -1) {
+	for _, match := range sequence.FindAllStringSubmatch(transcript, -1) {
 		for _, mode := range strings.Split(match[1], ";") {
 			states[mode] = match[2] == "h"
 		}
 	}
+	var problems []string
 	for mode, enabled := range map[int]bool{1049: false, 2004: false, 25: true, 1002: false, 1006: false} {
 		actual, seen := states[strconv.Itoa(mode)]
 		if !seen || actual != enabled {
-			t.Errorf("native exit DEC mode %d: seen=%t enabled=%t, want enabled=%t", mode, seen, actual, enabled)
+			problems = append(problems, fmt.Sprintf("native exit DEC mode %d: seen=%t enabled=%t, want enabled=%t", mode, seen, actual, enabled))
 		}
 	}
+	sort.Strings(problems)
+	return problems
 }
 
 func (p *nativeConsole) request(t *testing.T, command string) {
