@@ -79,7 +79,7 @@ func (m *App) requestReload(req reloadRequestedMsg) {
 		} else {
 			logInfo("Reload requested: %s", reloadStatusText(req))
 		}
-		snapshot, err := loadWorkspaceReusingServices(m.lifecycle, m.projectDir, previous)
+		snapshot, err := loadWorkspaceReusingServices(m.lifecycle, m.projectDir, m.scanOptions, previous)
 		if err != nil {
 			logWarn("Reload failed: %v", err)
 		}

@@ -45,7 +45,7 @@ func TestWorkspaceScanRetriesSharedOwnerChangeBetweenProjectParses(t *testing.T)
 	parses := 0
 	go func() {
 		defer close(done)
-		snapshot, scanErr = scanWorkspaceWithParser(root, func(file string) (*ParsedProject, error) {
+		snapshot, scanErr = scanWorkspaceWithParser(root, workspaceScanOptions{}, func(file string) (*ParsedProject, error) {
 			parsed, err := ParseCsproj(file)
 			parses++
 			if parses == 1 {
@@ -73,7 +73,7 @@ func TestWorkspaceScanRetriesSharedOwnerChangeBetweenProjectParses(t *testing.T)
 func TestWorkspaceScanTracksNewExternalInputBeforePublishing(t *testing.T) {
 	root, _ := sharedCoherenceFixture(t)
 	parses := 0
-	snapshot, err := scanWorkspaceWithParser(root, func(file string) (*ParsedProject, error) { parses++; return ParseCsproj(file) })
+	snapshot, err := scanWorkspaceWithParser(root, workspaceScanOptions{}, func(file string) (*ParsedProject, error) { parses++; return ParseCsproj(file) })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +86,7 @@ func TestWorkspaceScanTracksNewExternalInputBeforePublishing(t *testing.T) {
 func TestWorkspaceScanContinuousExternalChangesReturnUnstableError(t *testing.T) {
 	root, owner := sharedCoherenceFixture(t)
 	parses := 0
-	snapshot, err := scanWorkspaceWithParser(root, func(file string) (*ParsedProject, error) {
+	snapshot, err := scanWorkspaceWithParser(root, workspaceScanOptions{}, func(file string) (*ParsedProject, error) {
 		parsed, err := ParseCsproj(file)
 		parses++
 		next := `<Project><ItemGroup><PackageReference Include="A" Version="2.0.0"/></ItemGroup></Project>`
@@ -112,7 +112,7 @@ func TestWorkspaceScanRejectsConsumedOwnerRevisionEvenIfDiskRestored(t *testing.
 		t.Fatal(err)
 	}
 	intermediate := strings.Replace(string(stable), "1.0.0", "2.0.0", 1)
-	snapshot, err := scanWorkspaceWithParser(root, func(file string) (*ParsedProject, error) {
+	snapshot, err := scanWorkspaceWithParser(root, workspaceScanOptions{}, func(file string) (*ParsedProject, error) {
 		if err := os.WriteFile(owner, []byte(intermediate), 0o644); err != nil {
 			return nil, err
 		}

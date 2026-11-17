@@ -73,7 +73,11 @@ func TestFindUnsupportedPackageArtifacts(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	artifacts := findUnsupportedPackageArtifacts(root)
+	tree, err := walkWorkspace(root, workspaceScanOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifacts := tree.Unsupported
 	if len(artifacts) != 2 {
 		t.Fatalf("artifacts = %#v", artifacts)
 	}
@@ -88,7 +92,7 @@ func TestScanWatchedWorkspaceFiles_IgnoresBuildOutput(t *testing.T) {
 	mustWriteFile(t, filepath.Join(root, "obj", "ignored.csproj"), "<Project />")
 	mustWriteFile(t, filepath.Join(root, "bin", "ignored.props"), "<Project />")
 
-	files, err := scanWatchedWorkspaceFiles(root)
+	files, err := scanWatchedWorkspaceFiles(root, workspaceScanOptions{})
 	if err != nil {
 		t.Fatalf("scanWatchedWorkspaceFiles: %v", err)
 	}
