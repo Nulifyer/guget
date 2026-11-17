@@ -30,20 +30,34 @@ import (
 // The duplicate shares the existing console input buffer and its raw mode.
 // Close cancels and joins an active native read without closing os.Stdin or
 // restoring console modes; the runtime restores modes after its decoder exits.
+//
+// An idle reader waits on the input handle and a cancel event rather than
+// inside ReadConsoleW. Cancelling a pending ReadConsoleW goes through the
+// console host, which blocks while the host is busy writing output to a slow
+// terminal; signaling the event does not involve the host.
 func OpenStdinReader() (io.ReadCloser, error) {
 	var handle windows.Handle
 	if err := windows.DuplicateHandle(windows.CurrentProcess(), windows.Handle(os.Stdin.Fd()), windows.CurrentProcess(), &handle, 0, false, windows.DUPLICATE_SAME_ACCESS); err != nil {
 		return nil, fmt.Errorf("duplicate console input: %w", err)
 	}
-	return &conInReader{h: handle}, nil
+	cancel, err := windows.CreateEvent(nil, 1, 0, nil)
+	if err != nil {
+		_ = windows.CloseHandle(handle)
+		return nil, fmt.Errorf("create console input cancel event: %w", err)
+	}
+	return &conInReader{h: handle, cancel: cancel}, nil
 }
 
 type conInReader struct {
-	readMu                 sync.Mutex
-	mu                     sync.Mutex
-	closed                 bool
-	readThread             windows.Handle
-	readDone               chan struct{}
+	readMu     sync.Mutex
+	mu         sync.Mutex
+	closed     bool
+	readThread windows.Handle
+	readDone   chan struct{}
+	cancel     windows.Handle
+	// nativeRead is set while the read thread may be inside ReadConsoleW,
+	// the only state in which Close must cancel synchronous I/O.
+	nativeRead             bool
 	closeOnce              sync.Once
 	closeErr               error
 	h                      windows.Handle
@@ -106,33 +120,100 @@ func (c *conInReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// Close repeats cancellation until the registered read completes. A single
-// cancellation can report ERROR_NOT_FOUND in the interval just before the
-// registered thread enters ReadConsoleW. Retrying closes that interval.
+// Close signals the cancel event, which ends an idle wait at once. If the read
+// thread is inside ReadConsoleW, Close also repeats cancellation until the read
+// completes: a single cancellation can report ERROR_NOT_FOUND in the interval
+// just before the thread enters ReadConsoleW, and retrying closes that interval.
 func (c *conInReader) Close() error {
 	c.closeOnce.Do(func() {
 		c.mu.Lock()
 		c.closed = true
 		done := c.readDone
 		c.mu.Unlock()
+		_ = windows.SetEvent(c.cancel)
 		if done != nil {
+		wait:
 			for {
 				c.mu.Lock()
-				if c.readThread != 0 {
+				if c.readThread != 0 && c.nativeRead {
 					procCancelSynchronousIo.Call(uintptr(c.readThread))
 				}
 				c.mu.Unlock()
 				select {
 				case <-done:
-					c.closeErr = windows.CloseHandle(c.h)
-					return
+					break wait
 				case <-time.After(time.Millisecond):
 				}
 			}
 		}
 		c.closeErr = windows.CloseHandle(c.h)
+		_ = windows.CloseHandle(c.cancel)
 	})
 	return c.closeErr
+}
+
+// waitForText returns once ReadConsoleW would return text without blocking,
+// or io.EOF when Close signals the cancel event. Records that yield no text
+// (key releases, modifier presses, focus and buffer events) are discarded,
+// as ReadConsoleW itself would discard them.
+func (c *conInReader) waitForText() error {
+	for {
+		ready, err := c.discardUntilText()
+		if err != nil || ready {
+			return err
+		}
+		event, err := windows.WaitForMultipleObjects([]windows.Handle{c.h, c.cancel}, false, windows.INFINITE)
+		if err != nil {
+			return err
+		}
+		if event == windows.WAIT_OBJECT_0+1 {
+			return io.EOF
+		}
+	}
+}
+
+func (c *conInReader) discardUntilText() (bool, error) {
+	records := make([]inputRecord, 64)
+	for {
+		var total uint32
+		if err := windows.GetNumberOfConsoleInputEvents(c.h, &total); err != nil {
+			return false, err
+		}
+		if total == 0 {
+			return false, nil
+		}
+		var peeked uint32
+		r1, _, err := procPeekConsoleInputW.Call(uintptr(c.h), uintptr(unsafe.Pointer(&records[0])), uintptr(min(int(total), len(records))), uintptr(unsafe.Pointer(&peeked)))
+		if r1 == 0 {
+			return false, err
+		}
+		for i := uint32(0); i < peeked; i++ {
+			if recordYieldsText(&records[i]) {
+				return true, nil
+			}
+		}
+		// Every peeked record is skipped by ReadConsoleW; remove exactly those.
+		// Records that arrive meanwhile queue behind them and stay.
+		var removed uint32
+		r1, _, err = procReadConsoleInputW.Call(uintptr(c.h), uintptr(unsafe.Pointer(&records[0])), uintptr(peeked), uintptr(unsafe.Pointer(&removed)))
+		if r1 == 0 {
+			return false, err
+		}
+	}
+}
+
+// recordYieldsText reports whether ReadConsoleW returns text for the record:
+// a key press with a character, or the character Windows attaches to the Alt
+// release that completes an Alt+numpad sequence.
+func recordYieldsText(record *inputRecord) bool {
+	if record.EventType != keyEvent {
+		return false
+	}
+	key := (*keyEventRecord)(unsafe.Pointer(&record.Event[0]))
+	if key.UnicodeChar == 0 {
+		return false
+	}
+	return key.KeyDown != 0 || key.VirtualKeyCode == windows.VK_MENU
 }
 
 func (c *conInReader) read(p []byte) (int, error) {
@@ -151,8 +232,19 @@ func (c *conInReader) read(p []byte) (int, error) {
 		}
 	}
 	for len(c.buf) == 0 {
+		if err := c.waitForText(); err != nil {
+			c.readErr = err
+			return 0, err
+		}
 		var read uint32
-		if err := windows.ReadConsole(c.h, &c.wbuf[0], uint32(len(c.wbuf)), &read, nil); err != nil {
+		c.mu.Lock()
+		c.nativeRead = true
+		c.mu.Unlock()
+		err := windows.ReadConsole(c.h, &c.wbuf[0], uint32(len(c.wbuf)), &read, nil)
+		c.mu.Lock()
+		c.nativeRead = false
+		c.mu.Unlock()
+		if err != nil {
 			c.readErr = err
 		}
 		if read == 0 && c.readErr == nil {

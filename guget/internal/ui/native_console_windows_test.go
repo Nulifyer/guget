@@ -155,8 +155,10 @@ func expectNativeModes(t *testing.T, want nativeModes) {
 	}
 }
 
-// Establish that ReadConsoleW is actually pending, rather than letting Close
-// race before a reader goroutine has ever entered the native console API.
+// Establish that the reader is actually blocked in a native wait for console
+// input, rather than letting Close race before a reader goroutine has ever
+// entered the native console API. An idle reader waits on the input handle and
+// its cancel event; ReadConsoleW runs only once text is queued.
 func waitForNativeRead() error {
 	deadline := time.NewTimer(5 * time.Second)
 	defer deadline.Stop()
@@ -165,13 +167,14 @@ func waitForNativeRead() error {
 	buffer := make([]byte, 128*1024)
 	for {
 		n := runtime.Stack(buffer, true)
-		if strings.Contains(string(buffer[:n]), "windows.ReadConsole(") {
+		stacks := string(buffer[:n])
+		if strings.Contains(stacks, "windows.WaitForMultipleObjects(") && strings.Contains(stacks, "(*conInReader).waitForText(") {
 			return nil
 		}
 		select {
 		case <-tick.C:
 		case <-deadline.C:
-			return fmt.Errorf("native ReadConsole did not become pending:\n%s", buffer[:n])
+			return fmt.Errorf("native console input wait did not become pending:\n%s", buffer[:n])
 		}
 	}
 }
