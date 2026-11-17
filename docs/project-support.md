@@ -4,6 +4,16 @@ Guget discovers `.csproj`, `.fsproj`, and `.vbproj` files beneath the selected
 workspace. Common build-output directories such as `bin` and `obj` are excluded.
 Choose a workspace that contains every project you intend to manage.
 
+Inside a Git repository, Guget also skips paths that Git ignores: rules from
+`.gitignore` files, `.git/info/exclude`, and your global excludes file. Files
+Git tracks are still found, even under an ignored directory. To search ignored
+directories too, pass `--include-ignored` to the TUI or to any command. The
+built-in exclusions such as `bin` and `obj` still apply.
+
+```bash
+guget --project ./src --include-ignored
+```
+
 ```bash
 guget list --project ./src --format json
 ```
