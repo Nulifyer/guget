@@ -226,9 +226,11 @@ func TestWalkWorkspaceKeepsTrackedFilesCaseInsensitively(t *testing.T) {
 
 func TestParseGitRepoConfig(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "repo")
-	out := []byte("core.excludesfile\n/abs/ignore\x00core.ignorecase\nfalse\x00core.ignorecase\x00")
+	// git prints paths with forward slashes on every platform.
+	absolute := filepath.Join(t.TempDir(), "global", "ignore")
+	out := []byte("core.excludesfile\n" + filepath.ToSlash(absolute) + "\x00core.ignorecase\nfalse\x00core.ignorecase\x00")
 	config := parseGitRepoConfig(root, out)
-	if config.ExcludesFile != filepath.Clean("/abs/ignore") {
+	if config.ExcludesFile != absolute {
 		t.Fatalf("ExcludesFile = %q", config.ExcludesFile)
 	}
 	if !config.IgnoreCase {
