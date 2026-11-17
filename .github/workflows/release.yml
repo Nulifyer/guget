@@ -52,7 +52,7 @@ jobs:
         working-directory: vscode-guget
         run: |
           npm ci
-          npx @vscode/vsce verify-pat nulifyer -p "$VSCE_PAT"
+          npm run --silent vsce -- verify-pat nulifyer -p "$VSCE_PAT"
         env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
 
@@ -123,7 +123,7 @@ jobs:
         if: needs.marketplace-preflight.outputs.changed == 'true'
         run: |
           cd vscode-guget
-          npx @vscode/vsce verify-pat nulifyer -p "$VSCE_PAT"
+          npm run --silent vsce -- verify-pat nulifyer -p "$VSCE_PAT"
         env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
 
@@ -140,6 +140,6 @@ jobs:
         if: needs.marketplace-preflight.outputs.changed == 'true'
         run: |
           cd vscode-guget
-          npx @vscode/vsce publish --packagePath "$RUNNER_TEMP/guget-release.vsix" -p "$VSCE_PAT"
+          npm run --silent vsce -- publish --packagePath "$RUNNER_TEMP/guget-release.vsix" -p "$VSCE_PAT"
         env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}

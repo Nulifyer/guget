@@ -184,18 +184,13 @@
     "test": "npm run build && node --test test/*.test.cjs",
     "test:host": "npm run build && node test/run-host.cjs",
     "watch": "node esbuild.js --watch",
-    "package": "npx @vscode/vsce package"
+    "package": "npm run --silent vsce -- package",
+    "vsce": "npx --yes @vscode/vsce@4.1.1"
   },
   "devDependencies": {
     "@types/node": "^26.6.6",
     "@types/vscode": "~1.85.0",
-    "@vscode/vsce": "^4.1.0",
     "esbuild": "^0.28.2",
     "typescript": "^7.0.2"
-  },
-  "overrides": {
-    "@vscode/vsce": {
-      "minimatch": "^11.0.4"
-    }
   }
 }
