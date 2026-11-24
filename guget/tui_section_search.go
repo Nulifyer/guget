@@ -156,6 +156,7 @@ func (s *packageSearch) doSearchCmd(query string) ui.Effect {
 			results []SearchResult
 			err     error
 			source  string
+			url     string
 			index   int
 		}
 
@@ -163,7 +164,7 @@ func (s *packageSearch) doSearchCmd(query string) ui.Effect {
 		for index, svc := range services {
 			go func(index int, svc *NugetService) {
 				results, err := svc.SearchContext(ctx, query, 50)
-				ch <- sourceResult{results: results, err: err, source: svc.SourceName(), index: index}
+				ch <- sourceResult{results: results, err: err, source: svc.SourceName(), url: svc.SourceURL(), index: index}
 			}(index, svc)
 		}
 		ordered := make([]sourceResult, len(services))
@@ -186,20 +187,9 @@ func (s *packageSearch) doSearchCmd(query string) ui.Effect {
 				if seen.Contains(key) {
 					continue
 				}
-				// If source mapping is configured, only include results
-				// whose package ID is allowed on the source that found it.
-				if sourceMapping.IsConfigured() {
-					allowed := sourceMapping.SourcesForPackage(r.ID)
-					if len(allowed) == 0 {
-						continue
-					}
-					allowedSet := NewSet[string]()
-					for _, k := range allowed {
-						allowedSet.Add(strings.ToLower(k))
-					}
-					if !allowedSet.Contains(strings.ToLower(sr.source)) {
-						continue
-					}
+				// Only include results the mapping allows from the source that found them.
+				if !sourceMapping.Allows(sr.source, sr.url, r.ID) {
+					continue
 				}
 				seen.Add(key)
 				r.Source = sr.source

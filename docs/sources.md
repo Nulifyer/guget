@@ -23,9 +23,11 @@ Put a `NuGet.Config` in the workspace directory:
 </configuration>
 ```
 
-`<clear />` excludes inherited package-source entries. Without it, sources from
-parent directories and user or machine configuration may also appear.
-Use `sources` to check the effective Guget view after changes.
+`<clear />` excludes package sources inherited from parent directories and from
+user or machine configuration. It only affects `<packageSources>`. Credentials,
+disabled sources, and Package Source Mapping from those files still apply, as
+they do for `dotnet restore`. Use `sources` to check the effective Guget view
+after changes.
 
 Search that feed by its configured name:
 
@@ -51,10 +53,32 @@ Add the feed's NuGet V3 service-index URL using the name you want to select:
 </configuration>
 ```
 
-Replace the example URL with your feed's URL. Configure its credentials using
-your organization's NuGet setup. Guget supports credentials stored with sources
-in NuGet configuration and discovered credential providers. Keep passwords and
-tokens out of committed configuration and command output you share.
+Replace the example URL with your feed's URL. Guget reads the same credentials
+as `dotnet restore`, in this order:
+
+1. An environment variable named `NuGetPackageSourceCredentials_<source name>`
+   with the value `Username=<user>;Password=<token>`. The name must match the
+   source key exactly, including case on Linux.
+2. A `<packageSourceCredentials>` entry for the source in any NuGet
+   configuration file, including your user configuration.
+3. Credential providers, after the feed answers 401 or 403.
+
+Keep tokens out of committed files by referencing environment variables from
+the configuration. NuGet expands `%NAME%` in every value on all platforms.
+`$NAME` is not expanded, and an undefined `%NAME%` stays as written:
+
+```xml
+<packageSourceCredentials>
+  <company>
+    <add key="Username" value="%FEED_USER%" />
+    <add key="ClearTextPassword" value="%FEED_TOKEN%" />
+  </company>
+</packageSourceCredentials>
+```
+
+An entry needs both a username and a password, or restore rejects the whole
+file. Guget does the same and reports the file. Encrypted `Password` values
+work only on Windows. Keep passwords and tokens out of command output you share.
 
 Check metadata access separately from restore:
 
@@ -92,7 +116,9 @@ nuget.org:
 ```
 
 An exact ID wins over a prefix, and a longer prefix wins over a shorter pattern
-or `*`. If mapping is configured and nothing matches a package, Guget has no
+or `*`. A `*` ends a prefix wherever it appears, so `Contoso*` and `Contoso.*`
+are both prefixes. A mapping entry for a source in a closer configuration file
+replaces the entry for that source in files further away. If mapping is configured and nothing matches a package, Guget has no
 eligible metadata source for it. Correct the mapping or feed availability rather
 than expecting fallback to an unrelated source.
 
@@ -119,6 +145,31 @@ Relative directory paths resolve from the configuration file. Local directories
 and UNC shares appear as `restore-only`. They can supply restore packages but
 cannot supply Guget's search or version metadata. This is expected for a local
 feed, even when restore succeeds.
+
+## How Guget finds configuration
+
+Guget resolves sources for each project the way `dotnet restore` does, so the
+sources list can differ from `dotnet nuget list source` run elsewhere:
+
+- It searches from the project's directory up to the filesystem root and reads
+  one file per directory: the first of `nuget.config`, `NuGet.config`, and
+  `NuGet.Config`. A `.nuget/NuGet.Config` folder file is not read.
+- It then reads the user configuration (`~/.nuget/NuGet/NuGet.Config`, or
+  `%APPDATA%\NuGet\NuGet.Config` on Windows, with `DOTNET_CLI_HOME` replacing
+  the home directory), additional `*.config` files in the `config` folder next
+  to it, and machine-wide files in `NuGet/Config`.
+- If the user configuration does not exist, nuget.org is included, because
+  `dotnet` creates that file with nuget.org on first use.
+- For a source name defined in several files, the file closest to the project
+  wins.
+- `RestoreSources` in the project or `Directory.Build.props` replaces the
+  configured sources, and `RestoreAdditionalProjectSources` adds to them. Guget
+  reads these properties without running MSBuild, so it skips conditional
+  property groups and entries that use other MSBuild properties.
+
+When projects in the workspace resolve different sources, the sources list
+shows all of them. A package can use a source when any project that uses the
+source allows the package under its mapping.
 
 ## Refresh source information
 

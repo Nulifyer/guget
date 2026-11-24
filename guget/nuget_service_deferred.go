@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"strings"
 	"sync"
 )
 
@@ -27,7 +26,7 @@ type nugetServiceAttempt struct {
 }
 
 func newDeferredNugetService(source NugetSource, configured []NugetSource) (*NugetService, error) {
-	if !strings.HasPrefix(strings.ToLower(source.URL), "http://") && !strings.HasPrefix(strings.ToLower(source.URL), "https://") {
+	if !source.IsHTTP() {
 		return nil, fmt.Errorf("source is restore-only; metadata browsing requires an HTTP(S) NuGet V3 service index")
 	}
 	return &NugetService{

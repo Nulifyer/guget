@@ -176,6 +176,13 @@ type ParsedProject struct {
 	InputRevisions         map[string][sha256.Size]byte // exact bytes consumed by project/import parsing
 	PackageOwnerIdentities map[string]string            // recorded owner path → canonical file identity, resolved during discovery
 	AddTargets             []AddTarget                  // possible locations for adding new packages
+
+	// MSBuild source overrides, statically evaluated from Directory.Build.props,
+	// imports, and the project file. RestoreSources is nil when unset.
+	RestoreSources                  *string
+	RestoreAdditionalProjectSources string
+
+	importedPropertyGroups []PropertyGroup // evaluation order, consumed during parsing
 }
 
 // SourceFileForPackage returns the file path where pkgName is defined.
@@ -297,6 +304,9 @@ func ParseCsproj(filePath string) (*ParsedProject, error) {
 		collectPropsPackages(result, resolved, projectDir, visited)
 		resolvedImports = append(resolvedImports, resolved)
 	}
+
+	result.RestoreSources, result.RestoreAdditionalProjectSources = restoreSourceProperties(filePath, append(result.importedPropertyGroups, project.PropertyGroups...))
+	result.importedPropertyGroups = nil
 
 	// Post-process: imported props files (e.g. Directory.Build.props) may also
 	// reference packages without versions in CPM repos. Fill in any that are
@@ -433,6 +443,51 @@ func markProjectEvaluation(result *ParsedProject, path string) {
 		return
 	}
 	result.RequiresEvaluation = result.RequiresEvaluation || projectNeedsEvaluation(project)
+}
+
+// restoreSourceProperties evaluates RestoreSources and
+// RestoreAdditionalProjectSources across groups in MSBuild evaluation order.
+// Later definitions replace earlier ones and may reference them. Conditional
+// groups cannot be evaluated statically and are skipped; entries that still
+// reference unknown properties are dropped with a warning.
+func restoreSourceProperties(projectPath string, groups []PropertyGroup) (*string, string) {
+	values := map[string]*string{}
+	known := map[string]string{}
+	for _, group := range groups {
+		if group.Condition != "" {
+			continue
+		}
+		for name, value := range group.Properties {
+			known[name] = value
+		}
+		for name, value := range group.Properties {
+			for _, property := range []string{"RestoreSources", "RestoreAdditionalProjectSources"} {
+				if !strings.EqualFold(name, property) {
+					continue
+				}
+				previous := ""
+				if values[property] != nil {
+					previous = *values[property]
+				}
+				resolved := resolveProps(strings.ReplaceAll(value, "$("+property+")", previous), known)
+				var kept []string
+				for _, entry := range strings.Split(resolved, ";") {
+					if strings.Contains(entry, "$(") {
+						logWarn("%s: ignoring %s entry %q that needs MSBuild evaluation", projectPath, property, strings.TrimSpace(entry))
+						continue
+					}
+					kept = append(kept, entry)
+				}
+				joined := strings.Join(kept, ";")
+				values[property] = &joined
+			}
+		}
+	}
+	additional := ""
+	if values["RestoreAdditionalProjectSources"] != nil {
+		additional = *values["RestoreAdditionalProjectSources"]
+	}
+	return values["RestoreSources"], additional
 }
 
 // mergePropertyGroups extracts target frameworks from PropertyGroup elements.
@@ -748,6 +803,7 @@ func collectPropsPackages(result *ParsedProject, propsPath, projectDir string, v
 	}
 
 	mergePropertyGroups(result, propertyGroups)
+	result.importedPropertyGroups = append(result.importedPropertyGroups, propertyGroups...)
 
 	// Recurse into nested imports
 	propsDir := filepath.Dir(absPath)

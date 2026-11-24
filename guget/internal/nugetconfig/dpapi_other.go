@@ -1,11 +1,11 @@
 //go:build !windows
 
-package main
+package nugetconfig
 
 import "fmt"
 
-// decryptNuGetPassword is not supported on non-Windows platforms.
+// decryptPassword reports that DPAPI-encrypted passwords are Windows-only.
 // Use <ClearTextPassword> in NuGet.Config <packageSourceCredentials> instead.
-func decryptNuGetPassword(_ string) (string, error) {
+func decryptPassword(_ string) (string, error) {
 	return "", fmt.Errorf("DPAPI password decryption is only supported on Windows; use ClearTextPassword instead")
 }

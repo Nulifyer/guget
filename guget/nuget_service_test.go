@@ -5,13 +5,15 @@ package main
 import (
 	"strings"
 	"testing"
+
+	"github.com/nulifyer/guget/internal/nugetconfig"
 )
 
 func nugetOrgService(t *testing.T) *NugetService {
 	t.Helper()
 	svc, err := NewNugetService(NugetSource{
 		Name: "nuget.org",
-		URL:  defaultNugetSource,
+		URL:  nugetconfig.DefaultSourceURL,
 	})
 	if err != nil {
 		t.Fatalf("NewNugetService(nuget.org): %v", err)

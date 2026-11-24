@@ -3,6 +3,8 @@ package main
 import (
 	"path/filepath"
 	"slices"
+
+	"github.com/nulifyer/guget/internal/nugetconfig"
 )
 
 // Include every loaded package/import owner, plus ancestor configuration paths
@@ -18,18 +20,17 @@ func workspaceInputPaths(root string, snapshot *workspaceSnapshot) []string {
 		}
 	}
 	for dir := root; ; dir = filepath.Dir(dir) {
-		paths[filepath.Join(dir, ".nuget", "NuGet.Config")] = struct{}{}
-		for _, name := range []string{"Directory.Packages.props", "Directory.Build.props", "Directory.Build.targets", "NuGet.Config", "nuget.config", "NuGet.config"} {
+		for _, name := range []string{"Directory.Packages.props", "Directory.Build.props", "Directory.Build.targets"} {
 			paths[filepath.Join(dir, name)] = struct{}{}
 		}
 		if filepath.Dir(dir) == dir {
 			break
 		}
 	}
-	for _, path := range []string{userNugetConfigPath(), machineNugetConfigPath()} {
-		if path != "" {
-			paths[path] = struct{}{}
-		}
+	// Configuration files that would change the NuGet view if created. Those
+	// below root are found by the workspace walk.
+	for _, path := range nugetconfig.CandidatePaths(root, nugetconfig.Environment{}) {
+		paths[path] = struct{}{}
 	}
 	result := make([]string, 0, len(paths))
 	for path := range paths {

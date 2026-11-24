@@ -187,7 +187,8 @@ type deprecationRaw struct {
 	} `json:"alternatePackage"`
 }
 
-// authTransport injects Basic Auth and retries on 401 via credential providers.
+// authTransport injects Basic Auth and, like NuGet restore, asks credential
+// providers when a feed answers 401 or 403.
 type authTransport struct {
 	base       http.RoundTripper
 	sourceURL  string
@@ -200,12 +201,32 @@ type authTransport struct {
 }
 
 func newAuthTransport(source NugetSource) *authTransport {
+	username := source.Username
+	// GitHub Packages serves public packages to Basic Auth user "nobody"
+	// with an empty password, but rejects anonymous requests.
+	if username == "" && source.Password == "" && strings.Contains(strings.ToLower(source.URL), "nuget.pkg.github.com") {
+		username = "nobody"
+	}
 	return &authTransport{
 		base:       http.DefaultTransport,
 		sourceURL:  source.URL,
 		sourceName: source.Name,
-		username:   source.Username,
+		username:   username,
 		password:   source.Password,
+	}
+}
+
+func isAuthChallenge(status int) bool {
+	return status == http.StatusUnauthorized || status == http.StatusForbidden
+}
+
+// authFailure stands in for a challenge response whose body was consumed.
+func authFailure(status int) *http.Response {
+	return &http.Response{
+		StatusCode: status,
+		Status:     fmt.Sprintf("%d %s", status, http.StatusText(status)),
+		Body:       http.NoBody,
+		Header:     make(http.Header),
 	}
 }
 
@@ -224,12 +245,13 @@ func (t *authTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 
 	resp, err := t.base.RoundTrip(req)
-	if err != nil || resp.StatusCode != http.StatusUnauthorized {
+	if err != nil || !isAuthChallenge(resp.StatusCode) {
 		return resp, err
 	}
 
-	// 401 — ask a credential provider (once per transport lifetime).
-	logTrace("[%s] got 401, invoking credential provider", t.sourceName)
+	// Ask a credential provider (once per transport lifetime).
+	status := resp.StatusCode
+	logTrace("[%s] got %d, invoking credential provider", t.sourceName, status)
 	resp.Body.Close()
 
 	var providerCred *sourceCredential
@@ -247,22 +269,17 @@ func (t *authTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	})
 
 	if providerCred == nil {
-		// Provider not available or already tried and failed — surface the 401.
-		return &http.Response{
-			StatusCode: http.StatusUnauthorized,
-			Status:     "401 Unauthorized",
-			Body:       http.NoBody,
-			Header:     make(http.Header),
-		}, nil
+		// Provider not available or already tried and failed — surface the challenge.
+		return authFailure(status), nil
 	}
 
 	// Retry with the provider-supplied credentials.
 	resp2, err2 := t.doAuthenticatedRequest(req, providerCred)
-	if err2 != nil || resp2.StatusCode != http.StatusUnauthorized {
+	if err2 != nil || !isAuthChallenge(resp2.StatusCode) {
 		return resp2, err2
 	}
 
-	// Still 401 — the cached token may be stale. Clear the credential provider
+	// Still rejected — the cached token may be stale. Clear the credential provider
 	// cache, re-invoke with IsRetry=true to force a fresh token, and try once more.
 	t.mu.Lock()
 	alreadyRetried := t.retried
@@ -273,19 +290,15 @@ func (t *authTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		return resp2, nil
 	}
 
-	logDebug("[%s] provider credentials returned 401, clearing cache and retrying", t.sourceName)
+	status = resp2.StatusCode
+	logDebug("[%s] provider credentials returned %d, clearing cache and retrying", t.sourceName, status)
 	resp2.Body.Close()
 	clearCredentialProviderCache()
 
 	cred, provErr := fetchFromCredentialProvider(t.sourceURL, t.sourceName, true)
 	if provErr != nil {
 		logDebug("[%s] credential provider retry: %v", t.sourceName, provErr)
-		return &http.Response{
-			StatusCode: http.StatusUnauthorized,
-			Status:     "401 Unauthorized",
-			Body:       http.NoBody,
-			Header:     make(http.Header),
-		}, nil
+		return authFailure(status), nil
 	}
 
 	t.mu.Lock()

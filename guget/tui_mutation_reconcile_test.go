@@ -286,9 +286,19 @@ func TestConsecutiveSharedBuildPropsUpdatesKeepSourceRevisionsCurrent(t *testing
 		if m.ctx.Saving || m.ctx.Reloading {
 			t.Fatalf("%s left update blocked", name)
 		}
+		// Directory.Build.props is a project input that may carry RestoreSources;
+		// every consumer must hold the revision just written.
 		state, exists, err := readWatchedFileState(owner)
-		if err != nil || !exists || m.sourceInputRevisions[owner] != state.Hash {
-			t.Fatalf("%s source input revision was not advanced", name)
+		if err != nil || !exists {
+			t.Fatal(err)
+		}
+		for _, project := range m.ctx.ParsedProjects {
+			if project.InputRevisions[owner] != state.Hash {
+				t.Fatalf("%s consumed revision was not advanced for %s", name, project.FilePath)
+			}
+		}
+		if _, tracked := m.sourceInputRevisions[owner]; tracked {
+			t.Fatal("Directory.Build.props must not be tracked as NuGet configuration")
 		}
 	}
 	final, err := ParseCsproj(path)

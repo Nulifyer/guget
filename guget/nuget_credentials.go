@@ -6,14 +6,12 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
-	"encoding/xml"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -50,111 +48,6 @@ type v2CredentialPayload struct {
 	Password            string   `json:"Password"`
 	Message             string   `json:"Message"`
 	AuthenticationTypes []string `json:"AuthenticationTypes"`
-}
-
-// normalizeCredentialKey decodes NuGet XML name encoding (e.g. _x0020_ → space).
-func normalizeCredentialKey(name string) string {
-	var result strings.Builder
-	i := 0
-	for i < len(name) {
-		// NuGet uses XmlConvert.EncodeName: spaces → _x0020_, etc.
-		if name[i] == '_' && i+2 < len(name) && name[i+1] == 'x' {
-			j := strings.IndexByte(name[i+2:], '_')
-			if j >= 0 {
-				hex := name[i+2 : i+2+j]
-				if r, err := strconv.ParseInt(hex, 16, 32); err == nil {
-					result.WriteRune(rune(r))
-					i = i + 2 + j + 1
-					continue
-				}
-			}
-		}
-		result.WriteByte(name[i])
-		i++
-	}
-	return strings.ToLower(result.String())
-}
-
-// parseCredentials extracts <packageSourceCredentials> from a NuGet.Config XML blob.
-// Element names under packageSourceCredentials are dynamic source names, so we walk tokens manually.
-func parseCredentials(data []byte) map[string]sourceCredential {
-	creds := make(map[string]sourceCredential)
-	dec := xml.NewDecoder(bytes.NewReader(data))
-	logTrace("parseCredentials: parsing %d bytes", len(data))
-
-	inSection := false
-	var currentSource string
-	var username, clearPass, encPass string
-
-	for {
-		tok, err := dec.Token()
-		if err != nil {
-			break
-		}
-		switch t := tok.(type) {
-		case xml.StartElement:
-			switch {
-			case t.Name.Local == "packageSourceCredentials":
-				inSection = true
-			case inSection && currentSource == "":
-				// Element name is the source name.
-				currentSource = t.Name.Local
-				logTrace("parseCredentials: found credential block for source %q", currentSource)
-			case inSection && currentSource != "" && t.Name.Local == "add":
-				var key, value string
-				for _, attr := range t.Attr {
-					switch attr.Name.Local {
-					case "key":
-						key = attr.Value
-					case "value":
-						value = attr.Value
-					}
-				}
-				switch strings.ToLower(key) {
-				case "username":
-					username = value
-					logTrace("parseCredentials: [%s] username = %q", currentSource, username)
-				case "cleartextpassword":
-					clearPass = value
-					logTrace("parseCredentials: [%s] ClearTextPassword present (%d chars)", currentSource, len(clearPass))
-				case "password":
-					encPass = value
-					logTrace("parseCredentials: [%s] encrypted Password present (%d chars)", currentSource, len(encPass))
-				}
-			}
-
-		case xml.EndElement:
-			switch {
-			case t.Name.Local == "packageSourceCredentials":
-				inSection = false
-			case inSection && t.Name.Local == currentSource && currentSource != "":
-				password := clearPass
-				if password == "" && encPass != "" {
-					if p, err := decryptNuGetPassword(encPass); err == nil {
-						password = p
-					} else {
-						logDebug("DPAPI decryption failed for source %q: %v", currentSource, err)
-					}
-				}
-				if username != "" || password != "" {
-					if username == "" && password != "" {
-						username = "PAT"
-						logTrace("parseCredentials: [%s] no username set, defaulting to %q", currentSource, username)
-					}
-					key := normalizeCredentialKey(currentSource)
-					logTrace("parseCredentials: [%s] stored credential under key %q (username=%q, password=%d chars)", currentSource, key, username, len(password))
-					creds[key] = sourceCredential{Username: username, Password: password}
-				} else {
-					logTrace("parseCredentials: [%s] no credentials found in block", currentSource)
-				}
-				currentSource = ""
-				username = ""
-				clearPass = ""
-				encPass = ""
-			}
-		}
-	}
-	return creds
 }
 
 // fetchFromCredentialProvider tries all discovered credential providers in parallel for the given source URL.

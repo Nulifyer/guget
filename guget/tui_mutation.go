@@ -226,6 +226,9 @@ func reconcileMutationSnapshot(previous *workspaceSnapshot, changed []string, pa
 		if len(updated.DiscoveryErrors) > 0 {
 			return nil, nil, fmt.Errorf("incomplete project discovery in %s: %v", updated.FilePath, updated.DiscoveryErrors[0])
 		}
+		if !sameRestoreProperties(project, updated) {
+			return nil, nil, fmt.Errorf("source configuration changed during local reconciliation: %s", updated.FilePath)
+		}
 		next.ParsedProjects[i] = updated
 		for _, path := range projectInputPaths(updated) {
 			if _, known := inputs[path]; !known {
@@ -269,12 +272,12 @@ func reconcileMutationSnapshot(previous *workspaceSnapshot, changed []string, pa
 		}
 	}
 	if refreshSources {
-		// Directory.Build.props can define both package versions and sources.
-		// Advance its consumed revision only after proving the source view is
-		// unchanged, rather than treating our own package edit as external later.
-		detected := DetectSources(previous.ProjectDir)
-		if len(detected.Errors) > 0 {
-			return nil, nil, fmt.Errorf("source configuration changed during local reconciliation: %v", detected.Errors[0])
+		// A package edit touched a NuGet configuration owner. Advance its
+		// consumed revision only after proving the source view is unchanged,
+		// rather than treating our own edit as external later.
+		detected, err := resolveWorkspaceSources(next.ParsedProjects)
+		if err != nil {
+			return nil, nil, fmt.Errorf("source configuration changed during local reconciliation: %v", err)
 		}
 		if !slices.Equal(previous.Sources, detected.Sources) || workspaceSourceSignature(previous.Sources, previous.SourceMapping) != workspaceSourceSignature(detected.Sources, detected.Mapping) {
 			return nil, nil, fmt.Errorf("source configuration changed during local reconciliation")

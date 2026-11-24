@@ -205,20 +205,20 @@ func scanWorkspaceOnce(fullProjectPath string, tree *workspaceTree, parse func(s
 		logWarn("Read-only package artifact %s: %s", artifact.Path, artifact.Reason)
 	}
 
-	detected := DetectSources(fullProjectPath)
-	if len(detected.Errors) > 0 {
-		return nil, fmt.Errorf("incomplete source configuration: %w", errors.Join(detected.Errors...))
-	}
+	detected, err := resolveWorkspaceSources(parsedProjects)
 	for path, actual := range detected.InputRevisions {
 		if expected, known := revisions[path]; known && expected.Hash != actual {
 			return nil, fmt.Errorf("%w: source configuration %s consumed a different revision", errWorkspaceInputsChanged, path)
 		}
 	}
+	if err != nil {
+		return nil, fmt.Errorf("incomplete source configuration: %w", err)
+	}
 	sources := detected.Sources
 	sourceMapping := detected.Mapping
 	logInfo("Detected %d NuGet source(s)", len(sources))
 	if sourceMapping.IsConfigured() {
-		logInfo("Package source mapping configured with %d source(s)", len(sourceMapping.Entries))
+		logInfo("Package source mapping is configured")
 	}
 
 	return &workspaceSnapshot{
@@ -313,30 +313,7 @@ func workspaceSourceSignature(sources []NugetSource, mapping *PackageSourceMappi
 		parts = append(parts, strings.ToLower(source.Name)+"="+strings.TrimRight(strings.ToLower(source.URL), "/"))
 	}
 	sort.Strings(parts)
-
-	var b strings.Builder
-	for _, part := range parts {
-		b.WriteString(part)
-		b.WriteByte('\n')
-	}
-
-	if mapping != nil {
-		keys := make([]string, 0, len(mapping.Entries))
-		for key := range mapping.Entries {
-			keys = append(keys, key)
-		}
-		sort.Strings(keys)
-		for _, key := range keys {
-			patterns := append([]string(nil), mapping.Entries[key]...)
-			sort.Strings(patterns)
-			b.WriteString(strings.ToLower(key))
-			b.WriteByte('=')
-			b.WriteString(strings.Join(patterns, ","))
-			b.WriteByte('\n')
-		}
-	}
-
-	return b.String()
+	return strings.Join(parts, "\n") + "\n" + mapping.signature()
 }
 
 func planPackageReload(snapshot *workspaceSnapshot, current map[string]nugetResult, invalidateAll bool) (map[string]nugetResult, []string) {

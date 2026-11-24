@@ -641,18 +641,15 @@ func (r cliRuntime) runSources(ctx context.Context, argv []string) ExitCode {
 		fmt.Fprintf(r.stderr, "guget: %v\n", err)
 		return ExitWorkspace
 	}
-	doc := sourcesDocument{SchemaVersion: 1, Command: "sources", Workspace: snapshot.ProjectDir, Warnings: []string{}}
+	doc := sourcesDocument{SchemaVersion: 1, Command: "sources", Workspace: snapshot.ProjectDir, Sources: []sourceRow{}, Warnings: []string{}}
 	for _, source := range snapshot.Sources {
 		capability := "metadata"
-		if !strings.HasPrefix(strings.ToLower(source.URL), "http://") && !strings.HasPrefix(strings.ToLower(source.URL), "https://") {
+		if !source.IsHTTP() {
 			capability = "restore-only"
 		}
 		row := sourceRow{Name: source.Name, URL: source.URL, Capability: capability}
-		if snapshot.SourceMapping != nil {
-			row.Patterns = append([]string(nil), snapshot.SourceMapping.Entries[source.Name]...)
-			row.Mapped = len(row.Patterns) > 0
-			sort.Strings(row.Patterns)
-		}
+		row.Patterns = snapshot.SourceMapping.Patterns(source)
+		row.Mapped = len(row.Patterns) > 0
 		doc.Sources = append(doc.Sources, row)
 	}
 	sort.Slice(doc.Sources, func(i, j int) bool {
@@ -760,7 +757,7 @@ func (r cliRuntime) runSearch(ctx context.Context, argv []string) ExitCode {
 		if len(wantedSources) > 0 && !wantedSources[strings.ToLower(source.Name)] {
 			continue
 		}
-		if !strings.HasPrefix(strings.ToLower(source.URL), "http://") && !strings.HasPrefix(strings.ToLower(source.URL), "https://") {
+		if !source.IsHTTP() {
 			document.Warnings = append(document.Warnings, fmt.Sprintf("source %s is restore-only and cannot be searched", source.Name))
 			continue
 		}
@@ -778,11 +775,8 @@ func (r cliRuntime) runSearch(ctx context.Context, argv []string) ExitCode {
 			continue
 		}
 		for _, result := range results {
-			if snapshot.SourceMapping.IsConfigured() {
-				allowed := snapshot.SourceMapping.SourcesForPackage(result.ID)
-				if !containsFold(allowed, source.Name) {
-					continue
-				}
+			if !snapshot.SourceMapping.Allows(source.Name, source.URL, result.ID) {
+				continue
 			}
 			key := strings.ToLower(result.ID)
 			if seen[key] {

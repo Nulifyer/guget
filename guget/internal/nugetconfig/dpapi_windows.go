@@ -1,6 +1,6 @@
 //go:build windows
 
-package main
+package nugetconfig
 
 import (
 	"encoding/base64"
@@ -20,9 +20,9 @@ type cryptAPIBlob struct {
 	pbData *byte
 }
 
-// decryptNuGetPassword decodes a Base64-encoded DPAPI-encrypted password from NuGet.Config
-// and returns the plaintext string. Only available on Windows.
-func decryptNuGetPassword(b64 string) (string, error) {
+// decryptPassword decodes a Base64-encoded DPAPI-encrypted NuGet.Config password
+// with the current user's key.
+func decryptPassword(b64 string) (string, error) {
 	encrypted, err := base64.StdEncoding.DecodeString(b64)
 	if err != nil {
 		return "", fmt.Errorf("base64 decode: %w", err)
