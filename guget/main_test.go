@@ -13,6 +13,7 @@ import (
 // configuration. User-level credentials, disabled sources, and mappings apply
 // even beneath a repository <clear/>, so host settings would leak into tests.
 // The isolated user config matches the one dotnet creates on first use.
+// Guget's own settings file and variables are isolated the same way.
 // Integration builds keep the real environment because they restore packages.
 func TestMain(m *testing.M) {
 	os.Exit(runIsolated(m))
@@ -41,10 +42,17 @@ func runIsolated(m *testing.M) int {
 		"APPDATA":                       filepath.Join(home, ".nuget"),
 		"NUGET_COMMON_APPLICATION_DATA": filepath.Join(dir, "machine"),
 		"ProgramFiles(x86)":             filepath.Join(dir, "machine"),
+		"GUGET_CONFIG":                  filepath.Join(dir, "guget", "config.toml"),
 	} {
 		if err := os.Setenv(name, value); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
+		}
+	}
+	for _, key := range settingKeys() {
+		_ = os.Unsetenv(key.EnvName())
+		for _, alias := range key.Aliases {
+			_ = os.Unsetenv(alias.Name)
 		}
 	}
 	return m.Run()

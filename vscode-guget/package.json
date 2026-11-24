@@ -124,7 +124,7 @@
             "debug",
             "trace"
           ],
-          "description": "Log verbosity level passed to guget via -v flag."
+          "description": "Log verbosity passed to guget with -v. When unset, guget uses its own verbosity setting."
         },
         "guget.theme": {
           "type": "string",
@@ -143,7 +143,7 @@
             "everforest",
             "gruvbox"
           ],
-          "description": "Color theme passed to guget via --theme flag."
+          "description": "Color theme passed to guget with --theme. When unset, guget uses its own theme setting."
         },
         "guget.sortField": {
           "type": "string",
@@ -155,7 +155,7 @@
             "current",
             "available"
           ],
-          "description": "Initial sort field."
+          "description": "Initial sort field. When neither sort setting is set, guget uses its own sort setting."
         },
         "guget.sortDirection": {
           "type": "string",
@@ -164,7 +164,7 @@
             "asc",
             "desc"
           ],
-          "description": "Initial sort direction."
+          "description": "Initial sort direction. When neither sort setting is set, guget uses its own sort setting."
         },
         "guget.additionalArgs": {
           "type": "array",

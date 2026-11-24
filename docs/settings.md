@@ -1,0 +1,150 @@
+# Settings
+
+Save your TUI preferences in a settings file so you don't have to pass the same
+flags every time. You can also set them with environment variables, and a
+command-line flag still overrides both for one run.
+
+## Where the file lives
+
+Guget reads the first location that applies:
+
+1. The path in `GUGET_CONFIG`.
+2. On Windows, `%APPDATA%\guget\config.toml`.
+3. On Linux, macOS, and other Unix systems, `$XDG_CONFIG_HOME/guget/config.toml`
+   when `XDG_CONFIG_HOME` is an absolute path, otherwise
+   `~/.config/guget/config.toml`.
+
+Print the location Guget uses:
+
+```bash
+guget config path
+```
+
+The file is optional. `guget config set` creates it with owner-only
+permissions, along with its directory.
+
+## File format
+
+Each line sets one key. Quote text values and write `true` or `false` without
+quotes. Lines starting with `#` and text after a value's `#` are comments.
+
+```toml
+# ~/.config/guget/config.toml
+theme = "catppuccin-mocha"
+sort = "available:desc"   # newest updates first
+mouse = false
+update-check = false
+```
+
+The file is valid TOML. Text values use TOML string syntax, so write `\"` for a
+quote and `\\` for a backslash inside double quotes. Single-quoted strings take
+their text literally. Tables such as `[tui]` aren't supported: Guget ignores a
+table and every key after it.
+
+A mistake in the file never stops Guget from starting. An unknown key, a value
+that isn't allowed, a repeated key, or a file that can't be read produces a
+warning in the TUI log panel and in `guget config show`, and Guget uses the
+next source instead. When a key appears twice, the later line wins.
+
+## Keys
+
+| Key | Default | Values | Flag |
+| --- | --- | --- | --- |
+| `theme` | `"auto"` | `auto`, `auto-light`, `auto-dark`, `dracula`, `catppuccin-mocha`, `catppuccin-macchiato`, `catppuccin-frappe`, `catppuccin-latte`, `nord`, `tokyo-night`, `everforest`, `gruvbox` | `--theme` |
+| `sort` | `"status:asc"` | `status`, `name`, `source`, `current`, or `available`, optionally followed by `:asc` or `:desc` | `--sort-by` |
+| `mouse` | `true` | `true` or `false` | `--no-mouse` sets `false` |
+| `update-check` | `true` | `true` or `false` | `--no-update-check` sets `false` |
+| `verbosity` | `"warn"` | `none`, `error`, `warn`, `info`, `debug`, `trace` | `--verbose` |
+| `color` | `true` | `true` or `false` | `--no-color` sets `false` |
+| `update-target` | `"compatible-stable"` | `compatible-stable`, `compatible`, `stable` | none |
+
+`theme`, `sort`, `mouse`, `update-check`, `verbosity`, and `color` apply to the
+TUI. The CLI commands such as `list` and `update` ignore them. `update-target`
+records which versions package updates should aim for. Guget stores and reports
+it, but no command acts on it yet.
+
+## Environment variables
+
+Every key has a variable named `GUGET_` followed by the key in upper case, with
+`-` replaced by `_`:
+
+```bash
+GUGET_THEME=nord GUGET_MOUSE=false guget --project ./src
+```
+
+| Key | Variable | Older variable that still works |
+| --- | --- | --- |
+| `theme` | `GUGET_THEME` | |
+| `sort` | `GUGET_SORT` | |
+| `mouse` | `GUGET_MOUSE` | |
+| `update-check` | `GUGET_UPDATE_CHECK` | `GUGET_NO_UPDATE_CHECK=1` sets `false` |
+| `verbosity` | `GUGET_VERBOSITY` | `LOG_LEVEL` |
+| `color` | `GUGET_COLOR` | `NO_COLOR` set to any non-empty value sets `false` |
+| `update-target` | `GUGET_UPDATE_TARGET` | |
+
+True or false variables also accept `1`, `0`, `yes`, `no`, `on`, and `off`. An
+empty variable counts as unset. When both a `GUGET_` variable and its older
+variable are set, the `GUGET_` variable wins.
+
+## Precedence
+
+From highest to lowest:
+
+1. A command-line flag.
+2. An environment variable.
+3. The settings file.
+4. The default.
+
+For example, with `theme = "nord"` in the file and `GUGET_THEME=dracula` in the
+environment, `guget` uses `dracula` and `guget --theme gruvbox` uses `gruvbox`.
+
+The `--no-mouse`, `--no-update-check`, and `--no-color` flags can only turn a
+feature off. To turn one back on for a single run, set its variable, such as
+`GUGET_MOUSE=true`.
+
+## Manage settings from the command line
+
+```bash
+guget config show                 # every key with its value and source
+guget config get theme            # the effective value
+guget config set theme nord       # validate and save
+guget config unset theme          # remove the key from the file
+```
+
+`guget config show` reports the source of each value as `env`, `file`, or
+`default`. It accepts `--format table|tsv|json|jsonl` and `--output FILE`. In
+JSON, problems with the file appear in a `warnings` array. The other formats
+print them to standard error.
+
+```json
+{
+  "schemaVersion": 1,
+  "command": "config",
+  "path": "/home/me/.config/guget/config.toml",
+  "settings": [
+    {
+      "key": "theme",
+      "value": "nord",
+      "source": "file",
+      "default": "auto",
+      "description": "TUI color theme (--theme)"
+    }
+  ],
+  "warnings": []
+}
+```
+
+The real output lists every key; this example shows one.
+
+`guget config set` checks the value before it writes and exits with status 1
+for an unknown key or a value that isn't allowed. It changes only the line for
+that key, so your comments and the rest of the file stay as they are. If an
+environment variable overrides the key you just set, the command prints a
+warning. `guget config unset` removes the key's lines and leaves the rest of
+the file alone.
+
+## VS Code extension
+
+The extension passes `--verbose`, `--theme`, and `--sort-by` only for the
+`guget.verbosity`, `guget.theme`, `guget.sortField`, and `guget.sortDirection`
+settings you set in VS Code. Leave them unset to use your Guget settings file.

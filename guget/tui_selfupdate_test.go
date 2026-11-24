@@ -101,14 +101,17 @@ func TestTUIUpdateChecksCanBeDisabled(t *testing.T) {
 	if m.checkForUpdate() != nil {
 		t.Fatal("flag did not disable checks")
 	}
-	m.updateChecksDisabled = false
-	t.Setenv("GUGET_NO_UPDATE_CHECK", "1")
-	if m.checkForUpdate() != nil {
-		t.Fatal("environment did not disable checks")
-	}
 	flags, _ := parseRegisteredCLIForTest(t, "--no-update-check")
 	if !flags.NoUpdateCheck {
 		t.Fatal("flag was not parsed")
+	}
+	t.Setenv("GUGET_NO_UPDATE_CHECK", "1")
+	flags, _ = parseRegisteredCLIForTest(t)
+	if !flags.NoUpdateCheck {
+		t.Fatal("environment did not disable checks")
+	}
+	if NewApp(".", &workspaceSnapshot{}, nil, flags).checkForUpdate() != nil {
+		t.Fatal("environment did not disable the TUI check")
 	}
 }
 

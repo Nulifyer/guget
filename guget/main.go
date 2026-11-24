@@ -117,7 +117,9 @@ func BuildFlags(flags map[string]IParsedFlag) BuiltFlags {
 	}
 }
 
-func registerCLIFlags() {
+// registerCLIFlags registers the TUI flags. Settings supply the defaults, so
+// an explicit flag overrides the environment and the settings file.
+func registerCLIFlags(settings Settings) {
 	RegisterFlag(Flag[bool]{
 		Name:        Flag_IncludeIgnored,
 		Aliases:     []string{"--" + includeIgnoredFlag},
@@ -127,7 +129,7 @@ func registerCLIFlags() {
 	RegisterFlag(Flag[bool]{
 		Name:        Flag_NoUpdateCheck,
 		Aliases:     []string{"--no-update-check"},
-		Default:     Optional(false),
+		Default:     Optional(!settings.UpdateCheck),
 		Description: "Disable TUI checks for new Guget releases",
 	})
 	RegisterFlag(Flag[bool]{
@@ -139,19 +141,19 @@ func registerCLIFlags() {
 	RegisterFlag(Flag[bool]{
 		Name:        Flag_NoColor,
 		Aliases:     []string{"-nc", "--no-color"},
-		Default:     Optional(false),
+		Default:     Optional(!settings.Color),
 		Description: "Disable colored output in the terminal",
 	})
 	RegisterFlag(Flag[bool]{
 		Name:        Flag_NoMouse,
 		Aliases:     []string{"-nm", "--no-mouse"},
-		Default:     Optional(false),
+		Default:     Optional(!settings.Mouse),
 		Description: "Disable mouse navigation in the TUI",
 	})
 	RegisterFlag(Flag[string]{
 		Name:           Flag_Verbosity,
 		Aliases:        []string{"-v", "--verbose"},
-		Default:        Optional("warn"),
+		Default:        Optional(settings.Verbosity),
 		Description:    "Set the logging verbosity level",
 		ExpectedValues: []string{"", "none", "error", "err", "warn", "warning", "info", "debug", "dbg", "trace", "trc"},
 	})
@@ -176,44 +178,43 @@ func registerCLIFlags() {
 	RegisterFlag(Flag[string]{
 		Name:           Flag_Theme,
 		Aliases:        []string{"-t", "--theme"},
-		Default:        Optional("auto"),
+		Default:        Optional(settings.Theme),
 		Description:    "Color theme",
 		ExpectedValues: validThemeNames,
 	})
 	RegisterFlag(Flag[string]{
 		Name:        Flag_SortBy,
 		Aliases:     []string{"-o", "--sort-by"},
-		Default:     Optional("status:asc"),
+		Default:     Optional(settings.Sort),
 		Description: "Initial sort order (status, name, source, current, available) with optional :asc or :desc",
-		Parser: func(s string) (string, error) {
-			name, dir, _ := strings.Cut(s, ":")
-			switch strings.ToLower(name) {
-			case "", "status", "name", "source", "current", "available":
-				switch dir {
-				case "", "asc", "desc":
-					return s, nil
-				default:
-					return "", fmt.Errorf("invalid sort dir: %s", dir)
-				}
-			default:
-				return "", fmt.Errorf("invalid sort mode: %s", name)
-			}
-		},
+		Parser:      parseSortBy,
 	})
+}
+
+// parseSortBy validates a --sort-by value or sort setting.
+func parseSortBy(s string) (string, error) {
+	name, dir, _ := strings.Cut(s, ":")
+	switch strings.ToLower(name) {
+	case "", "status", "name", "source", "current", "available":
+		switch dir {
+		case "", "asc", "desc":
+			return s, nil
+		default:
+			return "", fmt.Errorf("invalid sort dir: %s", dir)
+		}
+	default:
+		return "", fmt.Errorf("invalid sort mode: %s", name)
+	}
 }
 
 // initCLI registers CLI flags, parses os.Args, and returns the resolved flag values.
 // Named initCLI (not Init) to avoid confusion with App.Init() in the same package.
-func initCLI() BuiltFlags {
+func initCLI(settings Settings) BuiltFlags {
 	rebuildStyles()
-	logSetLevel(LogLevelWarn)
-	// Allow LOG_LEVEL env var to override the pre-parse default; --verbose will
-	// override it again after flags are parsed below.
-	if envLogLevel := os.Getenv("LOG_LEVEL"); envLogLevel != "" {
-		logSetLevel(logParseLevel(envLogLevel))
-	}
+	// The configured verbosity applies while flags parse; --verbose replaces it.
+	logSetLevel(logParseLevel(settings.Verbosity))
 
-	registerCLIFlags()
+	registerCLIFlags(settings)
 	parsedFlags, _ := ParseFlags()
 	builtFlags := BuildFlags(parsedFlags)
 
@@ -251,7 +252,8 @@ func main() {
 	tuiCtx, stopTUI := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stopTUI()
 
-	builtFlags := initCLI()
+	settings := effectiveSettings()
+	builtFlags := initCLI(settings)
 	initTheme(builtFlags.Theme, builtFlags.NoColor)
 
 	if builtFlags.Version {
@@ -271,6 +273,9 @@ func main() {
 		logSetOutput(io.MultiWriter(buf, f))
 	} else {
 		logSetOutput(buf)
+	}
+	for _, warning := range settings.Values.Warnings {
+		logWarn("settings: %s", warning)
 	}
 
 	fullProjectPath, err := filepath.Abs(builtFlags.ProjectDir)

@@ -139,23 +139,23 @@ async function launchGuget(context: vscode.ExtensionContext, targetFolder: strin
   }
 
   const config = vscode.workspace.getConfiguration("guget");
-  const verbosity = config.get<string>("verbosity", "warn");
-  const theme = config.get<string>("theme", "auto");
-  const sortField = config.get<string>("sortField", "status");
-  const sortDirection = config.get<string>("sortDirection", "asc");
   const additionalArgs = config.get<string[]>("additionalArgs", []);
 
-  const args: string[] = [
-    "-p",
-    targetFolder,
-    "-v",
-    verbosity,
-    "-t",
-    theme,
-    "-o",
-    `${sortField}:${sortDirection}`,
-    ...additionalArgs,
-  ];
+  // Pass a flag only for settings the user set in VS Code, so guget's own
+  // settings file and environment apply otherwise.
+  const args: string[] = ["-p", targetFolder];
+  if (isExplicitlySet(config, "verbosity")) {
+    args.push("-v", config.get<string>("verbosity", "warn"));
+  }
+  if (isExplicitlySet(config, "theme")) {
+    args.push("-t", config.get<string>("theme", "auto"));
+  }
+  if (isExplicitlySet(config, "sortField") || isExplicitlySet(config, "sortDirection")) {
+    const sortField = config.get<string>("sortField", "status");
+    const sortDirection = config.get<string>("sortDirection", "asc");
+    args.push("-o", `${sortField}:${sortDirection}`);
+  }
+  args.push(...additionalArgs);
 
   const terminalName = "guget";
 
@@ -204,4 +204,15 @@ async function pickFolder(): Promise<string | undefined> {
     placeHolder: "Select workspace folder to scan for NuGet packages",
   });
   return chosen?.uri.fsPath;
+}
+
+// Reports whether the user set key in user, workspace, or folder settings,
+// as opposed to inheriting the extension's default.
+function isExplicitlySet(config: vscode.WorkspaceConfiguration, key: string): boolean {
+  const inspected = config.inspect(key);
+  return (
+    inspected?.globalValue !== undefined ||
+    inspected?.workspaceValue !== undefined ||
+    inspected?.workspaceFolderValue !== undefined
+  );
 }

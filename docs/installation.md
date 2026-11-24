@@ -119,6 +119,7 @@ To turn off automatic TUI update checks:
 guget --project ./src --no-update-check
 ```
 
-You can also set `GUGET_NO_UPDATE_CHECK=1` in the environment.
+To turn them off for every run, use `guget config set update-check false` or
+set `GUGET_NO_UPDATE_CHECK=1` in the environment. See [settings](settings.md).
 
 For PATH problems or interrupted updates, see [troubleshooting](troubleshooting.md).

@@ -18,7 +18,7 @@ function deferred() {
 
 // Mock public VS Code and filesystem APIs around the real built extension.
 // This checks command/lifecycle logic, not native terminal or editor rendering.
-function session({ configured = binary, folders = [{ uri: { fsPath: path.dirname(project.fsPath) } }] } = {}) {
+function session({ configured = binary, folders = [{ uri: { fsPath: path.dirname(project.fsPath) } }], settings = {} } = {}) {
   const commands = new Map();
   const terminals = [];
   const closedTabs = [];
@@ -59,7 +59,10 @@ function session({ configured = binary, folders = [{ uri: { fsPath: path.dirname
     workspace: {
       workspaceFolders: folders,
       findFiles: (...args) => { scanCalls++; return scan(...args); },
-      getConfiguration: () => ({ get: (key, fallback) => key === "binaryPath" ? configuration : fallback }),
+      getConfiguration: () => ({
+        get: (key, fallback) => key === "binaryPath" ? configuration : key in settings ? settings[key].value : fallback,
+        inspect: key => key in settings ? { key, [settings[key].scope]: settings[key].value } : { key },
+      }),
       createFileSystemWatcher: () => ({ onDidCreate: on("create"), onDidDelete: on("delete"), dispose() {} }),
       onDidChangeWorkspaceFolders: on("folders"),
     },
@@ -270,5 +273,19 @@ test("spaced shell-special project paths remain one process argument", async () 
   await s.activate();
   const directory = path.join(path.sep, "work", "Project one;$HOME`whoami`");
   await s.commands.get("guget.manageProject")({ fsPath: path.join(directory, "App.csproj") });
-  assert.deepEqual(s.terminals[0].options.shellArgs, ["-p", directory, "-v", "warn", "-t", "auto", "-o", "status:asc"]);
+  assert.deepEqual(s.terminals[0].options.shellArgs, ["-p", directory]);
+});
+
+test("only explicitly set VS Code settings become guget flags", async () => {
+  const s = session({ settings: {
+    verbosity: { scope: "workspaceFolderValue", value: "debug" },
+    theme: { scope: "globalValue", value: "nord" },
+    sortDirection: { scope: "workspaceValue", value: "desc" },
+    additionalArgs: { scope: "globalValue", value: ["--no-mouse"] },
+  } });
+  await s.activate();
+  await s.commands.get("guget.manage")();
+  assert.deepEqual(s.terminals[0].options.shellArgs, [
+    "-p", path.dirname(project.fsPath), "-v", "debug", "-t", "nord", "-o", "status:desc", "--no-mouse",
+  ]);
 });

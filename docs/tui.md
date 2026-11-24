@@ -170,6 +170,10 @@ The `auto` theme uses the terminal's `COLORFGBG` setting when available and
 defaults to dark otherwise. Select `--theme auto-light` for a light terminal
 that does not provide that setting.
 
+To keep a theme, sort order, or other preference without passing flags, save
+it in your [settings file](settings.md), for example with
+`guget config set theme dracula`.
+
 ## Read package status
 
 | Marker | Meaning |

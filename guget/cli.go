@@ -39,6 +39,7 @@ var cliVerbs = map[string]struct{}{
 	"list": {}, "show": {}, "search": {}, "sources": {},
 	"add": {}, "update": {}, "remove": {}, "restore": {},
 	"completion": {}, "version": {}, "help": {}, "self-update": {},
+	"config": {},
 }
 
 func isCLIVerb(arg string) bool {
@@ -178,6 +179,8 @@ func dispatchCLI(ctx context.Context, argv []string, stdin io.Reader, stdout, st
 		code = runtime.runMutation(ctx, verb, argv[1:])
 	case "restore":
 		code = runtime.runRestore(ctx, argv[1:])
+	case "config":
+		code = runtime.runConfig(argv[1:])
 	}
 	if errors.Is(ctx.Err(), context.Canceled) {
 		return ExitInterrupted
@@ -197,6 +200,7 @@ Commands:
   update PACKAGE       update explicit --file targets or --all
   remove PACKAGE       remove from explicit --file targets or --all
   restore              run dotnet restore for explicit targets or --all
+  config               show or change user settings (path, show, get, set, unset)
   completion SHELL     emit completion for bash, zsh, or fish
   self-update          update the Guget executable (--check to inspect only)
   version              print the Guget version
@@ -260,6 +264,8 @@ func commandSynopsis(verb string) string {
 		return "Usage: guget remove PACKAGE (--file PROJECT... | --all) [--dry-run] [--restore] [--interactive]\n"
 	case "restore":
 		return "Usage: guget restore (--file PROJECT... | --all) [--project DIR] [--interactive]\n"
+	case "config":
+		return configUsage()
 	case "completion":
 		return "Usage: guget completion bash|zsh|fish\n"
 	case "self-update":
@@ -284,16 +290,17 @@ func (r cliRuntime) runCompletion(args []string) ExitCode {
 		fmt.Fprint(r.stderr, commandUsage("completion"))
 		return ExitUsage
 	}
-	commands := "list show sources search add update remove restore completion self-update version help"
+	commands := "list show sources search add update remove restore config completion self-update version help"
 	switch args[0] {
 	case "bash":
-		fmt.Fprintf(r.stdout, "complete -W %q guget\n", commands)
+		fmt.Fprint(r.stdout, bashCompletion(commands))
 	case "zsh":
-		fmt.Fprintf(r.stdout, "compdef '_arguments \"1:command:(%s)\"' guget\n", commands)
+		fmt.Fprint(r.stdout, zshCompletion(commands))
 	case "fish":
 		for _, command := range strings.Fields(commands) {
 			fmt.Fprintf(r.stdout, "complete -c guget -f -n '__fish_use_subcommand' -a %s\n", command)
 		}
+		fmt.Fprint(r.stdout, fishConfigCompletion())
 	default:
 		fmt.Fprint(r.stderr, commandUsage("completion"))
 		return ExitUsage

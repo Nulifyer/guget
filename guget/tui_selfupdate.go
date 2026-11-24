@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"os"
 
 	"github.com/nulifyer/guget/internal/selfupdate"
 	ui "github.com/nulifyer/guget/internal/ui"
@@ -11,7 +10,9 @@ import (
 type selfUpdateNoticeMsg struct{ version string }
 
 func (m *App) checkForUpdate() ui.Effect {
-	if m.updateChecksDisabled || os.Getenv("GUGET_NO_UPDATE_CHECK") == "1" {
+	// The update-check setting (including GUGET_NO_UPDATE_CHECK=1) arrives
+	// through the --no-update-check default; see registerCLIFlags.
+	if m.updateChecksDisabled {
 		return nil
 	}
 	ctx := m.lifecycle

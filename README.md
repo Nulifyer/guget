@@ -88,6 +88,7 @@ and paths with your own.
 - [Use the TUI](docs/tui.md): navigate, add, update, remove, restore, and browse package details.
 - [Use the CLI](docs/cli.md): explicit project scope, JSON output, and scripting examples.
 - [Configure package sources](docs/sources.md): public and private feeds, source mapping, and local feeds.
+- [Save your settings](docs/settings.md): theme, sort, mouse, and other defaults in a settings file or environment variables.
 - [Work with supported projects](docs/project-support.md): CPM, shared props, version expressions, and editing limits.
 - [Troubleshoot problems](docs/troubleshooting.md): PATH, authentication, restore, and incomplete results.
 

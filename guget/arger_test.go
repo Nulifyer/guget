@@ -13,7 +13,7 @@ func parseRegisteredCLIForTest(t *testing.T, args ...string) (BuiltFlags, []stri
 	t.Helper()
 	resetCLIParserForTest(t)
 	os.Args = append([]string{"guget"}, args...)
-	registerCLIFlags()
+	registerCLIFlags(effectiveSettings())
 	parsed, extra := ParseFlags()
 	return BuildFlags(parsed), extra
 }
@@ -327,7 +327,7 @@ func TestCLIParseRejectsInvalidArgumentsHelper(t *testing.T) {
 	logOutWriter = nil
 	logErrWriter = nil
 
-	registerCLIFlags()
+	registerCLIFlags(effectiveSettings())
 	ParseFlags()
 	os.Exit(0)
 }

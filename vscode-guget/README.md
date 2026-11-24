@@ -78,6 +78,10 @@ binary path explicitly. Restart VS Code after changing its inherited PATH.
 | `guget.sortDirection` | `"asc"` | Initial direction: `asc` or `desc`. |
 | `guget.additionalArgs` | `[]` | Extra TUI arguments, such as `["--no-mouse"]`. |
 
+The extension passes verbosity, theme, and sort to Guget only when you set them
+in VS Code. Leave them unset to use the
+[Guget settings file](https://github.com/nulifyer/guget/blob/main/docs/settings.md).
+
 ## Common actions
 
 | Key | Action |
