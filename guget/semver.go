@@ -2,143 +2,305 @@ package main
 
 import (
 	"encoding/xml"
+	"fmt"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
+// SemVer is a NuGet package version with NuGet.Versioning.NuGetVersion
+// parsing and ordering: one to four numeric parts (missing parts are zero),
+// dot-separated release labels compared case-insensitively, and build
+// metadata that never affects precedence.
+//
+// A string NuGet rejects ("abc", "1.2.3.4.5", "1.*") produces a SemVer whose
+// IsValid reports false. Its Raw keeps the input so it can still be shown,
+// and it never compares newer than, older than, or equal to anything.
 type SemVer struct {
 	Major      int
 	Minor      int
 	Patch      int
 	Revision   int    // 4th segment for NuGet-style versions (e.g. 1.2.3.4)
-	PreRelease string // e.g. "beta.1", "rc.2"
+	PreRelease string // release labels joined by '.', e.g. "beta.1"
 	Build      string // build metadata after '+', ignored for precedence
-	Raw        string
+	Raw        string // original text, without spaces
+	invalid    bool
 }
 
+// ParseSemVer parses a single NuGet version (NuGetVersion.TryParse). Version
+// ranges and floating versions are not versions; use ParseVersionRange or
+// requestedVersion for project version expressions.
 func ParseSemVer(s string) SemVer {
-	raw := s
+	if v, ok := parseNuGetVersion(s); ok {
+		return v
+	}
+	return SemVer{Raw: s, invalid: true}
+}
 
-	// Handle NuGet version range notation: [min,max), (min,max], [min,), etc.
-	// Extract the lower bound as the effective version for display and comparison.
-	// e.g. "[10.0.0,)" → "10.0.0",  "[1.15.0,2.0)" → "1.15.0"
-	if len(s) > 0 && (s[0] == '[' || s[0] == '(') {
-		inner := s[1:]
-		if comma := strings.IndexByte(inner, ','); comma >= 0 {
-			s = strings.TrimSpace(inner[:comma])
-		} else if close := strings.IndexAny(inner, "])"); close >= 0 {
-			s = strings.TrimSpace(inner[:close])
+// IsValid reports whether the version parsed under NuGet's rules.
+func (v SemVer) IsValid() bool { return !v.invalid }
+
+// parseNuGetVersion ports NuGetVersion.TryParse
+// (NuGet.Versioning/NuGetVersionFactory.cs).
+func parseNuGetVersion(value string) (SemVer, bool) {
+	versionString, labels, hasLabels, metadata, hasMetadata := parseVersionSections(strings.TrimSpace(value))
+	if versionString == "" {
+		return SemVer{}, false
+	}
+	parts, ok := parseNormalizedVersion(versionString)
+	if !ok {
+		return SemVer{}, false
+	}
+	if hasLabels {
+		for _, label := range labels {
+			if !isValidVersionPart(label, false) {
+				return SemVer{}, false
+			}
 		}
-		// Update Raw to the clean lower-bound string for TUI display.
-		raw = s
 	}
-
-	build := ""
-	pre := ""
-
-	// Extract build metadata (after '+') first
-	if idx := strings.IndexByte(s, '+'); idx != -1 {
-		build = s[idx+1:]
-		s = s[:idx]
-	}
-	// Extract pre-release (after '-')
-	if idx := strings.IndexByte(s, '-'); idx != -1 {
-		pre = s[idx+1:]
-		s = s[:idx]
-	}
-
-	parts := strings.Split(s, ".")
-	intAt := func(i int) int {
-		if i >= len(parts) {
-			return 0
+	if hasMetadata {
+		for _, part := range strings.Split(metadata, ".") {
+			if !isValidVersionPart(part, true) {
+				return SemVer{}, false
+			}
 		}
-		n, _ := strconv.Atoi(parts[i])
-		return n
 	}
 	return SemVer{
-		Major:      intAt(0),
-		Minor:      intAt(1),
-		Patch:      intAt(2),
-		Revision:   intAt(3),
-		PreRelease: pre,
-		Build:      build,
-		Raw:        raw,
-	}
+		Major:      parts[0],
+		Minor:      parts[1],
+		Patch:      parts[2],
+		Revision:   parts[3],
+		PreRelease: strings.Join(labels, "."),
+		Build:      metadata,
+		Raw:        strings.ReplaceAll(value, " ", ""),
+	}, true
 }
 
-// IsNewerThan returns true if v is strictly newer than other.
-// Follows SemVer 2.0.0 precedence rules. Build metadata is ignored.
-func (v SemVer) IsNewerThan(other SemVer) bool {
-	if v.Major != other.Major {
-		return v.Major > other.Major
-	}
-	if v.Minor != other.Minor {
-		return v.Minor > other.Minor
-	}
-	if v.Patch != other.Patch {
-		return v.Patch > other.Patch
-	}
-	if v.Revision != other.Revision {
-		return v.Revision > other.Revision
-	}
-	// Stable > pre-release
-	if v.PreRelease == "" && other.PreRelease != "" {
-		return true
-	}
-	if v.PreRelease != "" && other.PreRelease == "" {
-		return false
-	}
-	return comparePreRelease(v.PreRelease, other.PreRelease) > 0
-}
-
-// comparePreRelease compares two pre-release strings per SemVer 2.0.0 §11:
-// identifiers are compared left-to-right; numeric ids as integers,
-// alphanumeric ids lexically; numeric < alphanumeric; fewer fields < more.
-func comparePreRelease(a, b string) int {
-	if a == b {
-		return 0
-	}
-	ap := strings.Split(a, ".")
-	bp := strings.Split(b, ".")
-	n := len(ap)
-	if len(bp) < n {
-		n = len(bp)
-	}
-	for i := 0; i < n; i++ {
-		ai, aErr := strconv.Atoi(ap[i])
-		bi, bErr := strconv.Atoi(bp[i])
+// parseVersionSections ports SemanticVersion.ParseSections: it splits on the
+// first '-' (release labels) and the first '+' after it (metadata).
+func parseVersionSections(value string) (version string, labels []string, hasLabels bool, metadata string, hasMetadata bool) {
+	versionEnd, plus := -1, -1
+	for i := 0; i < len(value); i++ {
+		end := i == len(value)-1
 		switch {
-		case aErr == nil && bErr == nil: // both numeric
-			if ai != bi {
-				if ai > bi {
-					return 1
+		case versionEnd < 0:
+			if end || value[i] == '-' || value[i] == '+' {
+				endPos := i
+				if end {
+					endPos++
 				}
-				return -1
+				version = value[:endPos]
+				versionEnd = i
+				if value[i] == '+' {
+					plus = i
+				}
 			}
-		case aErr == nil: // a numeric, b alpha → numeric < alpha
-			return -1
-		case bErr == nil: // a alpha, b numeric → alpha > numeric
-			return 1
-		default: // both alphanumeric
-			if ap[i] != bp[i] {
-				if ap[i] > bp[i] {
-					return 1
+		case plus < 0:
+			if end || value[i] == '+' {
+				endPos := i
+				if end {
+					endPos++
 				}
-				return -1
+				labels = strings.Split(value[versionEnd+1:endPos], ".")
+				hasLabels = true
+				plus = i
+			}
+		case end:
+			metadata = value[plus+1:]
+			hasMetadata = true
+		}
+	}
+	return version, labels, hasLabels, metadata, hasMetadata
+}
+
+// parseNormalizedVersion ports NuGetVersion.TryGetNormalizedVersion: up to
+// four dot-separated non-negative int32 sections, whitespace around each
+// number allowed, and nothing left over.
+func parseNormalizedVersion(s string) ([4]int, bool) {
+	var parts [4]int
+	if strings.TrimSpace(s) == "" {
+		return parts, false
+	}
+	str := []rune(s)
+	pos := 0
+	for i := range parts {
+		next, n, ok := parseVersionSection(str, pos)
+		if !ok {
+			return parts, false
+		}
+		parts[i], pos = n, next
+	}
+	return parts, pos == len(str)
+}
+
+func parseVersionSection(str []rune, start int) (int, int, bool) {
+	if start == len(str) {
+		return start, 0, true
+	}
+	end := start
+	for ; end < len(str); end++ {
+		if !unicode.IsSpace(str[end]) {
+			if str[end] >= '0' && str[end] <= '9' {
+				break
+			}
+			return end, 0, false
+		}
+	}
+	done, digitFound := false, false
+	var number int64
+	for ; end < len(str); end++ {
+		c := str[end]
+		if c >= '0' && c <= '9' {
+			digitFound = true
+			number = number*10 + int64(c-'0')
+			if number > 2147483647 {
+				return end, 0, false
+			}
+		} else if c == '.' {
+			end++
+			if end == len(str) {
+				return end, 0, false
+			}
+			done = true
+			break
+		} else if unicode.IsSpace(c) {
+			break
+		} else {
+			return end, 0, false
+		}
+	}
+	if !digitFound {
+		return end, 0, false
+	}
+	if end == len(str) {
+		done = true
+	}
+	if !done {
+		for ; end < len(str); end++ {
+			if c := str[end]; !unicode.IsSpace(c) {
+				if c != '.' {
+					return end, 0, false
+				}
+				end++
+				if end == len(str) {
+					return end, 0, false
+				}
+				break
 			}
 		}
 	}
-	// All compared identifiers equal — more fields = higher precedence
-	if len(ap) > len(bp) {
-		return 1
+	return end, int(number), true
+}
+
+// isValidVersionPart ports SemanticVersion.IsValidPart: non-empty,
+// [0-9A-Za-z-] only, and no leading zero on an all-digit part unless allowed.
+func isValidVersionPart(s string, allowLeadingZeros bool) bool {
+	if s == "" {
+		return false
 	}
-	if len(ap) < len(bp) {
+	if !allowLeadingZeros && len(s) > 1 && s[0] == '0' && strings.Trim(s[1:], "0123456789") == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if !(c >= '0' && c <= '9' || c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c == '-') {
+			return false
+		}
+	}
+	return true
+}
+
+// Compare orders versions as NuGet's VersionComparer.VersionRelease does:
+// numeric parts, then stable after prerelease, then release labels; build
+// metadata is ignored. Invalid versions sort below valid ones (by Raw) so a
+// sort stays total; use IsNewerThan and Equal for decisions.
+func (v SemVer) Compare(other SemVer) int {
+	if v.invalid || other.invalid {
+		switch {
+		case v.invalid && other.invalid:
+			return strings.Compare(v.Raw, other.Raw)
+		case v.invalid:
+			return -1
+		default:
+			return 1
+		}
+	}
+	for _, pair := range [][2]int{{v.Major, other.Major}, {v.Minor, other.Minor}, {v.Patch, other.Patch}, {v.Revision, other.Revision}} {
+		if pair[0] != pair[1] {
+			if pair[0] < pair[1] {
+				return -1
+			}
+			return 1
+		}
+	}
+	switch {
+	case v.PreRelease == "" && other.PreRelease == "":
+		return 0
+	case v.PreRelease == "":
+		return 1
+	case other.PreRelease == "":
 		return -1
+	}
+	return comparePreRelease(v.PreRelease, other.PreRelease)
+}
+
+// IsNewerThan returns true if v is strictly newer than other under NuGet
+// ordering. It is false when either version is invalid.
+func (v SemVer) IsNewerThan(other SemVer) bool {
+	return v.IsValid() && other.IsValid() && v.Compare(other) > 0
+}
+
+// Equal reports NuGet version equality: 1.0 == 1.0.0 == 1.0.0.0, labels
+// compare case-insensitively, metadata is ignored. Invalid versions are never
+// equal to anything.
+func (v SemVer) Equal(other SemVer) bool {
+	return v.IsValid() && other.IsValid() && v.Compare(other) == 0
+}
+
+// comparePreRelease ports VersionComparer.CompareReleaseLabels: labels left to
+// right, int32 labels numerically and before alphanumeric ones, alphanumeric
+// labels ordinal ignoring case, and more labels sort higher.
+func comparePreRelease(a, b string) int {
+	ap := strings.Split(a, ".")
+	bp := strings.Split(b, ".")
+	for i := 0; i < max(len(ap), len(bp)); i++ {
+		if i >= len(ap) {
+			return -1
+		}
+		if i >= len(bp) {
+			return 1
+		}
+		if result := compareReleaseLabel(ap[i], bp[i]); result != 0 {
+			return result
+		}
 	}
 	return 0
 }
 
-func (v SemVer) IsPreRelease() bool { return v.PreRelease != "" }
+func compareReleaseLabel(a, b string) int {
+	an, aErr := strconv.ParseInt(a, 10, 32)
+	bn, bErr := strconv.ParseInt(b, 10, 32)
+	switch {
+	case aErr == nil && bErr == nil:
+		switch {
+		case an < bn:
+			return -1
+		case an > bn:
+			return 1
+		}
+		return 0
+	case aErr == nil:
+		return -1
+	case bErr == nil:
+		return 1
+	}
+	return strings.Compare(strings.ToUpper(a), strings.ToUpper(b))
+}
+
+func (v SemVer) IsPreRelease() bool { return v.IsValid() && v.PreRelease != "" }
+
+// String returns the version as written, without build metadata. An invalid
+// version returns its input unchanged.
 func (v SemVer) String() string {
 	if v.Build != "" {
 		if cut := len(v.Raw) - len(v.Build) - 1; cut > 0 && cut < len(v.Raw) {
@@ -146,6 +308,32 @@ func (v SemVer) String() string {
 		}
 	}
 	return v.Raw
+}
+
+// Normalized returns NuGet's normalized form (ToNormalizedString):
+// Major.Minor.Patch, the revision only when non-zero, then release labels.
+// An invalid version returns its input unchanged.
+func (v SemVer) Normalized() string {
+	if v.invalid {
+		return v.Raw
+	}
+	s := fmt.Sprintf("%d.%d.%d", v.Major, v.Minor, v.Patch)
+	if v.Revision > 0 {
+		s += "." + strconv.Itoa(v.Revision)
+	}
+	if v.PreRelease != "" {
+		s += "-" + v.PreRelease
+	}
+	return s
+}
+
+// versionKey identifies a version for maps and sets: versions NuGet treats as
+// equal share a key, and invalid versions never share one with a valid version.
+func (v SemVer) versionKey() string {
+	if v.invalid {
+		return "\x00" + v.Raw
+	}
+	return strings.ToLower(v.Normalized())
 }
 
 func (s *SemVer) UnmarshalXMLAttr(attr xml.Attr) error {

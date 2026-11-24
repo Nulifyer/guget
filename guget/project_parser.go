@@ -145,6 +145,17 @@ type PackageReference struct {
 	Locked    bool   // true when the version was specified as [x.y.z] exact pin in the project file
 }
 
+// RequestedRange parses the reference's version expression with NuGet's
+// VersionRange rules, so callers can ask for its lower bound, whether that
+// bound is a prerelease, or whether it floats.
+func (r PackageReference) RequestedRange() (VersionRange, bool) {
+	expression := r.Requested
+	if expression == "" {
+		expression = r.Version.Raw
+	}
+	return ParseVersionRange(expression)
+}
+
 // isExactLock reports whether a raw version string is a NuGet exact-version pin ([x.y.z]).
 func isExactLock(s string) bool {
 	return len(s) > 2 && s[0] == '[' && s[len(s)-1] == ']' && !strings.ContainsRune(s, ',')
@@ -277,7 +288,7 @@ func ParseCsproj(filePath string) (*ParsedProject, error) {
 			}
 			result.Packages.Add(PackageReference{
 				Name:      name,
-				Version:   ParseSemVer(version),
+				Version:   requestedVersion(version),
 				Requested: version,
 				Locked:    isExactLock(version),
 			})
@@ -323,7 +334,7 @@ func ParseCsproj(filePath string) (*ParsedProject, error) {
 			name := strings.ToLower(ref.Name)
 			if cpmVer, ok := cpmVersions[name]; ok {
 				result.Packages.Remove(ref)
-				result.Packages.Add(PackageReference{Name: ref.Name, Version: ParseSemVer(cpmVer), Requested: cpmVer})
+				result.Packages.Add(PackageReference{Name: ref.Name, Version: requestedVersion(cpmVer), Requested: cpmVer})
 				result.PackageSources[name] = cpmFilePath
 			}
 		}
@@ -787,7 +798,7 @@ func collectPropsPackages(result *ParsedProject, propsPath, projectDir string, v
 	for _, raw := range refs {
 		ref := PackageReference{
 			Name:      raw.effectiveName(),
-			Version:   ParseSemVer(raw.Version),
+			Version:   requestedVersion(raw.Version),
 			Requested: raw.Version,
 			Locked:    isExactLock(raw.Version),
 		}
@@ -845,7 +856,7 @@ func ParsePropsAsProject(filePath string) (*ParsedProject, error) {
 	for _, raw := range refs {
 		result.Packages.Add(PackageReference{
 			Name:      raw.effectiveName(),
-			Version:   ParseSemVer(raw.Version),
+			Version:   requestedVersion(raw.Version),
 			Requested: raw.Version,
 			Locked:    isExactLock(raw.Version),
 		})

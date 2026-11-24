@@ -226,7 +226,7 @@ func evaluatedMutationProject(ctx context.Context, project *ParsedProject, packa
 		if declaredErr != nil || evaluatedErr != nil || declaredOwner != evaluatedOwner {
 			return nil, fmt.Errorf("evaluated ownership of %q in %s differs from declared discovery; this scope is read-only", packageID, project.FileName)
 		}
-		copy.Packages.Add(PackageReference{Name: first.PackageID, Version: ParseSemVer(first.EvaluatedExpression), Requested: first.EvaluatedExpression, Locked: isExactLock(first.EvaluatedExpression)})
+		copy.Packages.Add(PackageReference{Name: first.PackageID, Version: requestedVersion(first.EvaluatedExpression), Requested: first.EvaluatedExpression, Locked: isExactLock(first.EvaluatedExpression)})
 		copy.PackageSources[strings.ToLower(packageID)] = first.VersionOwner
 	}
 	return &copy, nil

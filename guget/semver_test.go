@@ -285,9 +285,6 @@ func TestParseSemVer_NuGetRealWorld(t *testing.T) {
 
 		// PolySharp-style SemVer 2.0.0 with build metadata (not pre-release)
 		{"1.15.0+02753db24d9685e54db06739eb63183d86eb5b62", 1, 15, 0, ""},
-
-		// NuGet service API type string — not a bare version, but parser doesn't crash
-		{"SearchQueryService/3.0.0-beta", 0, 0, 0, "beta"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
