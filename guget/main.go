@@ -215,6 +215,7 @@ func initCLI(settings Settings) BuiltFlags {
 	logSetLevel(logParseLevel(settings.Verbosity))
 
 	registerCLIFlags(settings)
+	usageEpilogue = tuiUsageEpilogue()
 	parsedFlags, _ := ParseFlags()
 	builtFlags := BuildFlags(parsedFlags)
 
@@ -236,17 +237,19 @@ func main() {
 		if first == "--version" || first == "-V" {
 			os.Exit(int(dispatchCLI(context.Background(), []string{"version"}, os.Stdin, os.Stdout, os.Stderr)))
 		}
-		if !strings.HasPrefix(first, "-") && !isCLIVerb(first) {
+		// A verb, possibly after global flags such as --project, runs the CLI.
+		if routed, ok := routeCLIArgs(os.Args[1:]); ok {
+			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+			code := dispatchCLI(ctx, routed, os.Stdin, os.Stdout, os.Stderr)
+			cancel()
+			os.Exit(int(code))
+		}
+		if !strings.HasPrefix(first, "-") {
 			if info, err := os.Stat(first); err == nil && info.IsDir() {
 				os.Args = append([]string{os.Args[0], "--project", first}, os.Args[2:]...)
 			} else {
 				os.Exit(int(dispatchCLI(context.Background(), os.Args[1:], os.Stdin, os.Stdout, os.Stderr)))
 			}
-		}
-		if isCLIVerb(first) {
-			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
-			defer cancel()
-			os.Exit(int(dispatchCLI(ctx, os.Args[1:], os.Stdin, os.Stdout, os.Stderr)))
 		}
 	}
 	tuiCtx, stopTUI := signal.NotifyContext(context.Background(), os.Interrupt)

@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -314,8 +315,15 @@ func ParseFlags() (map[string]IParsedFlag, []string) {
 	return parsedFlags, extraArgs
 }
 
+// usageEpilogue is printed after the flag list, for example to name the CLI
+// commands that share the executable.
+var usageEpilogue string
+
+// PrintUsage lists registered flags sorted by name, so the output is stable.
 func PrintUsage() {
-	fmt.Println("Usage:")
+	fmt.Println("Usage: guget [options] [DIRECTORY]")
+	fmt.Println()
+	fmt.Println("Options:")
 
 	termWidth, _, err := xterm.GetSize(int(os.Stdout.Fd()))
 	if err != nil {
@@ -339,7 +347,13 @@ func PrintUsage() {
 		descWidth = 20
 	}
 
-	for _, f := range registeredFlags {
+	names := make([]string, 0, len(registeredFlags))
+	for name := range registeredFlags {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		f := registeredFlags[name]
 		aliases := strings.Join(f.GetAliases(), ", ")
 		fmt.Printf("%s%-*s %s\n", strings.Repeat(" ", indent), leftColWidth, f.GetName(), aliases)
 		if f.GetDescription() != "" {
@@ -358,6 +372,9 @@ func PrintUsage() {
 			fmt.Printf("%s[%s]\n", strings.Repeat(" ", indent+leftColWidth), strings.Join(values, ", "))
 		}
 		fmt.Println()
+	}
+	if usageEpilogue != "" {
+		fmt.Print(usageEpilogue)
 	}
 }
 
