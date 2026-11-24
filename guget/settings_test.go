@@ -182,9 +182,13 @@ func TestConfigCommandRejectsInvalidInput(t *testing.T) {
 func TestConfigCommandShowJSON(t *testing.T) {
 	path := useSettingsFile(t, "theme = \"nord\"\nbogus = 1\n")
 	t.Setenv("NO_COLOR", "1")
+	// Warnings go to stderr in every format; JSON also includes them.
 	code, out, errOut := runConfigCLI(t, "show", "--format", "json")
-	if code != ExitSuccess || errOut != "" {
+	if code != ExitSuccess || !strings.Contains(errOut, `guget: warning: `) || !strings.Contains(errOut, `unknown setting "bogus"`) {
 		t.Fatalf("show = %d stderr=%q", code, errOut)
+	}
+	if !strings.HasPrefix(out, "{\n  \"schemaVersion\": 1,\n  \"command\": \"config\",\n  \"status\": \"ok\",\n  \"error\": null,\n  \"path\": ") {
+		t.Fatalf("document header = %s", out)
 	}
 	var doc struct {
 		SchemaVersion int    `json:"schemaVersion"`

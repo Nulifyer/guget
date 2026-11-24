@@ -1,9 +1,7 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -12,13 +10,11 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"text/tabwriter"
-	"time"
 
 	"github.com/nulifyer/guget/internal/atomicfile"
 	"github.com/nulifyer/guget/internal/packageops"
+	"github.com/nulifyer/guget/internal/projectedit"
 	"github.com/nulifyer/guget/internal/selfupdate"
-	"golang.org/x/term"
 )
 
 type ExitCode int
@@ -32,96 +28,185 @@ const (
 	ExitWrite       ExitCode = 5
 	ExitRestore     ExitCode = 6
 	ExitPartial     ExitCode = 7
+	ExitTimeout     ExitCode = 124
 	ExitInterrupted ExitCode = 130
 )
 
-var cliVerbs = map[string]struct{}{
-	"list": {}, "show": {}, "search": {}, "sources": {},
-	"add": {}, "update": {}, "remove": {}, "restore": {},
-	"completion": {}, "version": {}, "help": {}, "self-update": {},
-	"config": {},
-}
-
-func isCLIVerb(arg string) bool {
-	_, ok := cliVerbs[strings.ToLower(arg)]
-	return ok
-}
-
-type cliArgs struct {
-	positionals []string
-	values      map[string][]string
-	bools       map[string]bool
-}
-
-func (a cliArgs) value(name, fallback string) string {
-	values := a.values[name]
-	if len(values) == 0 {
-		return fallback
-	}
-	return values[len(values)-1]
-}
-
-func parseCLIArgs(args []string, valueFlags, boolFlags map[string]bool) (cliArgs, error) {
-	parsed := cliArgs{values: make(map[string][]string), bools: make(map[string]bool)}
-	for i := 0; i < len(args); i++ {
-		arg := args[i]
-		if arg == "--" {
-			parsed.positionals = append(parsed.positionals, args[i+1:]...)
-			break
-		}
-		if !strings.HasPrefix(arg, "-") || arg == "-" {
-			parsed.positionals = append(parsed.positionals, arg)
-			continue
-		}
-		name, inline, hasInline := strings.Cut(strings.TrimPrefix(arg, "--"), "=")
-		if strings.HasPrefix(arg, "-") && !strings.HasPrefix(arg, "--") {
-			return cliArgs{}, fmt.Errorf("unknown flag %q; use long flags such as --project", arg)
-		}
-		if boolFlags[name] {
-			if hasInline {
-				return cliArgs{}, fmt.Errorf("flag --%s does not take a value", name)
+// Built-in verbs. Each spec is the single owner of its command's contract.
+func init() {
+	registerCLIVerb(cliVerbSpec{
+		Name: "list", Order: 10, Summary: "list package references in the workspace",
+		Description: "List package references in every discovered project, one row per project, package, and target framework.",
+		Flags: joinFlags(workspaceFlags(), []cliFlagSpec{
+			{Name: "framework", Value: "TFM", Repeatable: true, Description: "only rows for this target framework"},
+			{Name: "direct", Description: "only direct references"},
+			{Name: "include-transitive", Description: "add restored transitive packages"},
+			{Name: "outdated", Description: "only packages with newer versions (not available yet; exits 7)"},
+			{Name: "vulnerable", Description: "only packages with known vulnerabilities (not available yet; exits 7)"},
+			{Name: "deprecated", Description: "only deprecated packages (not available yet; exits 7)"},
+		}, outputFlags(), []cliFlagSpec{timeoutFlag("")}, tailFlags()),
+		Notes: []string{"Exit status 7 means some data could not be produced, for example when MSBuild evaluation or restore metadata is missing; warnings say what."},
+		Row:   func(*cliInvocation) any { return cliPackageRow{} },
+		Run:   (*cliRuntime).runList,
+	})
+	registerCLIVerb(cliVerbSpec{
+		Name: "show", Order: 20, Summary: "show one package across projects",
+		Description: "Show every reference to PACKAGE in the workspace. An unreferenced package is not an error: the result is empty and a warning says so.",
+		Positionals: []cliPositionalSpec{{Name: "PACKAGE"}},
+		Flags: joinFlags(workspaceFlags(), []cliFlagSpec{
+			{Name: "framework", Value: "TFM", Repeatable: true, Description: "only rows for this target framework"},
+			{Name: "direct", Description: "only direct references"},
+			{Name: "include-transitive", Description: "add restored transitive packages"},
+		}, outputFlags(), []cliFlagSpec{timeoutFlag("")}, tailFlags()),
+		Row: func(*cliInvocation) any { return cliPackageRow{} },
+		Run: (*cliRuntime).runList,
+	})
+	registerCLIVerb(cliVerbSpec{
+		Name: "sources", Order: 30, Summary: "show configured NuGet sources and mappings",
+		Description: "Show the NuGet sources and package source mapping patterns that apply to the workspace. Credentials in source URLs are redacted.",
+		Flags:       joinFlags(workspaceFlags(), outputFlags(), []cliFlagSpec{timeoutFlag("")}, tailFlags()),
+		Row:         func(*cliInvocation) any { return sourceRow{} },
+		Run:         (*cliRuntime).runSources,
+	})
+	registerCLIVerb(cliVerbSpec{
+		Name: "search", Order: 40, Summary: "search configured NuGet sources",
+		Description: "Search the workspace's HTTP sources for QUERY. Local and UNC sources support restore only and are skipped with a warning.",
+		Positionals: []cliPositionalSpec{{Name: "QUERY"}},
+		Flags: joinFlags(workspaceFlags(), []cliFlagSpec{
+			{Name: "source", Value: "NAME", Repeatable: true, Description: "search only this configured source; see guget sources"},
+		}, outputFlags(), []cliFlagSpec{timeoutFlag("30s")}, tailFlags()),
+		Notes: []string{"Exit status 7 means some sources failed and the results come from the rest; 3 means every searched source failed."},
+		Row:   func(*cliInvocation) any { return searchRow{} },
+		Run:   (*cliRuntime).runSearch,
+	})
+	registerCLIVerb(mutationVerbSpec("add", 50))
+	registerCLIVerb(mutationVerbSpec("update", 60))
+	registerCLIVerb(mutationVerbSpec("remove", 70))
+	registerCLIVerb(cliVerbSpec{
+		Name: "restore", Order: 80, Summary: "run dotnet restore for explicit targets or --all",
+		Description: "Run dotnet restore for each target project. A failed project does not stop the others; the command exits 6 if any failed.",
+		Flags: joinFlags(workspaceFlags(), []cliFlagSpec{
+			{Name: "file", Value: "PROJECT", Kind: valueFile, Repeatable: true, Description: "restore this discovered project, relative to --project"},
+			{Name: "all", Description: "restore every discovered project"},
+			{Name: "interactive", Description: "let dotnet prompt for feed authentication"},
+		}, outputFlags(), []cliFlagSpec{timeoutFlag("")}, tailFlags()),
+		Validate: func(inv *cliInvocation) error {
+			if inv.args.bools["all"] == (len(inv.args.values["file"]) > 0) {
+				return errors.New("choose exactly one restore scope: repeatable --file or --all")
 			}
-			parsed.bools[name] = true
-			continue
-		}
-		if !valueFlags[name] {
-			return cliArgs{}, fmt.Errorf("unknown flag --%s", name)
-		}
-		value := inline
-		if !hasInline {
-			i++
-			if i >= len(args) {
-				return cliArgs{}, fmt.Errorf("flag --%s requires a value", name)
-			}
-			value = args[i]
-		}
-		parsed.values[name] = append(parsed.values[name], value)
+			return nil
+		},
+		Row: func(*cliInvocation) any { return restoreRow{} },
+		Run: (*cliRuntime).runRestore,
+	})
+	registerCLIVerb(cliVerbSpec{
+		Name: "completion", Order: 90, Summary: "emit completion for bash, zsh, or fish",
+		Description: "Print a shell completion script. Completion covers commands, each command's flags, and flag values with fixed choices.\n\n  bash: source <(guget completion bash)\n  zsh:  source <(guget completion zsh)\n  fish: guget completion fish | source",
+		Positionals: []cliPositionalSpec{{Name: "SHELL", Kind: valueChoice, Choices: completionShells}},
+		Flags:       tailFlags(),
+		Run:         (*cliRuntime).runCompletion,
+	})
+	registerCLIVerb(cliVerbSpec{
+		Name: "self-update", Order: 100, Summary: "update the Guget executable (--check to inspect only)",
+		Description: "Replace this Guget executable with the latest stable release.",
+		Flags:       joinFlags([]cliFlagSpec{{Name: "check", Description: "report whether a newer release exists without installing it"}}, tailFlags()),
+		Run: func(r *cliRuntime, ctx context.Context, inv *cliInvocation) ExitCode {
+			return r.runSelfUpdateWith(ctx, inv, selfupdate.New(version, nil), os.Executable)
+		},
+	})
+	registerCLIVerb(cliVerbSpec{
+		Name: "version", Order: 110, Summary: "print the Guget version",
+		Flags: tailFlags(),
+		Run: func(r *cliRuntime, _ context.Context, _ *cliInvocation) ExitCode {
+			fmt.Fprintln(r.stdout, versionString())
+			return ExitSuccess
+		},
+	})
+	registerCLIVerb(cliVerbSpec{
+		Name: "help", Order: 120, Summary: "show help for Guget or one command",
+		Positionals: []cliPositionalSpec{{Name: "COMMAND", Optional: true, Kind: valueChoice, ChoicesFunc: cliVerbNames}},
+		Flags:       tailFlags(),
+		Run:         (*cliRuntime).runHelp,
+	})
+}
+
+func mutationVerbSpec(verb string, order int) cliVerbSpec {
+	spec := cliVerbSpec{Name: verb, Order: order, Positionals: []cliPositionalSpec{{Name: "PACKAGE"}}}
+	scope := []cliFlagSpec{{Name: "file", Value: "PROJECT", Kind: valueFile, Repeatable: true, Description: "edit this discovered project, relative to --project"}}
+	selectors := []cliFlagSpec{
+		{Name: "version", Value: "VERSION", Description: "the version or NuGet version range to write"},
+		{Name: "latest-compatible", Description: "select the newest compatible version (not available yet; exits 4)"},
+		{Name: "latest-stable", Description: "select the newest stable version (not available yet; exits 4)"},
 	}
-	return parsed, nil
+	var extra []cliFlagSpec
+	switch verb {
+	case "add":
+		spec.Summary = "add a package to explicit --file targets"
+		spec.Description = "Add PACKAGE to each --file project. In a central package management workspace the version goes to Directory.Packages.props."
+	case "update":
+		spec.Summary = "update explicit --file targets or --all"
+		spec.Description = "Update the version of PACKAGE where it is owned. --all covers only projects that reference PACKAGE. Exact pins such as [1.2.3] are skipped by --all and refused for --file unless --include-pinned is given."
+		scope = append(scope, cliFlagSpec{Name: "all", Description: "every discovered project that references PACKAGE"})
+		extra = append(extra, cliFlagSpec{Name: "include-pinned", Description: "also update exact [x.y.z] pins"})
+	case "remove":
+		spec.Summary = "remove from explicit --file targets or --all"
+		spec.Description = "Remove the PACKAGE reference from each target project. A shared central version stays in place."
+		scope = append(scope, cliFlagSpec{Name: "all", Description: "every discovered project that references PACKAGE"})
+		selectors = nil
+	}
+	spec.Flags = joinFlags(workspaceFlags(), scope, selectors, extra, []cliFlagSpec{
+		{Name: "dry-run", Description: "print the planned changes without writing files"},
+		{Name: "restore", Description: "run dotnet restore for the targets after a successful edit"},
+		{Name: "interactive", Description: "let dotnet restore prompt for feed authentication; requires --restore"},
+	}, outputFlags(), []cliFlagSpec{timeoutFlag("")}, tailFlags())
+	spec.Notes = []string{"A dry run prints one row per planned file change. Applying prints the same rows as a table or TSV, and one result document for json, jsonl, and templates."}
+	spec.Validate = func(inv *cliInvocation) error { return validateMutation(verb, inv) }
+	spec.Row = func(inv *cliInvocation) any {
+		if inv.args.bools["dry-run"] {
+			return planRow{}
+		}
+		return planDocument{}
+	}
+	spec.Run = func(r *cliRuntime, ctx context.Context, inv *cliInvocation) ExitCode {
+		return r.runMutation(ctx, verb, inv)
+	}
+	return spec
 }
 
-var commonValueFlags = map[string]bool{
-	"project": true, "framework": true, "source": true, "format": true,
-	"output": true, "timeout": true,
-}
-
-var commonBoolFlags = map[string]bool{
-	"no-color": true, "help": true, includeIgnoredFlag: true,
+func validateMutation(verb string, inv *cliInvocation) error {
+	args := inv.args
+	files := args.values["file"]
+	if verb == "add" && len(files) == 0 {
+		return errors.New("guget add requires one or more explicit --file targets")
+	}
+	if args.bools["all"] == (len(files) > 0) {
+		return errors.New("choose exactly one mutation scope: repeatable --file or --all")
+	}
+	if args.bools["interactive"] && !args.bools["restore"] {
+		return errors.New("--interactive requires --restore for mutation commands")
+	}
+	if verb == "remove" {
+		return nil
+	}
+	selectors := 0
+	for _, set := range []bool{args.value("version", "") != "", args.bools["latest-compatible"], args.bools["latest-stable"]} {
+		if set {
+			selectors++
+		}
+	}
+	if selectors != 1 {
+		return errors.New("choose exactly one version selector: --version, --latest-compatible, or --latest-stable")
+	}
+	if version := args.value("version", ""); version != "" {
+		if err := projectedit.ValidateVersion(version); err != nil {
+			return fmt.Errorf("invalid --version: %v", err)
+		}
+	}
+	return nil
 }
 
 func cliScanOptions(args cliArgs) workspaceScanOptions {
 	return workspaceScanOptions{IncludeIgnored: args.bools[includeIgnoredFlag]}
-}
-
-func cloneFlags(flags map[string]bool, names ...string) map[string]bool {
-	result := make(map[string]bool, len(flags)+len(names))
-	for name, value := range flags {
-		result[name] = value
-	}
-	for _, name := range names {
-		result[name] = true
-	}
-	return result
 }
 
 type cliRuntime struct {
@@ -130,6 +215,9 @@ type cliRuntime struct {
 	stderr     io.Writer
 	newService func(context.Context, NugetSource) (*NugetService, error)
 	runCommand func(context.Context, string, []string, io.Reader, io.Writer, io.Writer) error
+	// runner runs dotnet for MSBuild evaluation and package graphs; nil runs
+	// the real SDK. Tests inject a fake.
+	runner packageops.ProcessRunner
 }
 
 func runCLICommand(ctx context.Context, name string, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
@@ -141,183 +229,229 @@ func runCLICommand(ctx context.Context, name string, args []string, stdin io.Rea
 }
 
 func dispatchCLI(ctx context.Context, argv []string, stdin io.Reader, stdout, stderr io.Writer) ExitCode {
-	runtime := cliRuntime{
-		stdin: stdin, stdout: stdout, stderr: stderr,
-		newService: NewNugetServiceContext, runCommand: runCLICommand,
+	runtime := &cliRuntime{stdin: stdin, stdout: stdout, stderr: stderr}
+	return runtime.dispatch(ctx, argv)
+}
+
+// dispatch runs one verb: help, argument validation, the verb itself, then the
+// shared exit mapping for timeouts and interrupts and the JSON error document.
+func (r *cliRuntime) dispatch(ctx context.Context, argv []string) ExitCode {
+	if r.newService == nil {
+		r.newService = NewNugetServiceContext
 	}
-	logSetOutput(stderr)
+	if r.runCommand == nil {
+		r.runCommand = runCLICommand
+	}
+	if r.stdin == nil {
+		r.stdin = strings.NewReader("")
+	}
+	logSetOutput(r.stderr)
 	logSetLevel(LogLevelNone)
 	logSetColor(false)
 
 	if len(argv) == 0 {
-		fmt.Fprint(stderr, cliUsage())
+		fmt.Fprint(r.stderr, cliUsage())
 		return ExitUsage
 	}
-	verb := strings.ToLower(argv[0])
-	if !isCLIVerb(verb) {
-		fmt.Fprintf(stderr, "guget: unknown command %q\n\n%s", argv[0], cliUsage())
+	spec := lookupCLIVerb(argv[0])
+	if spec == nil {
+		fmt.Fprintf(r.stderr, "guget: unknown command %q\n\n%s", argv[0], cliUsage())
 		return ExitUsage
 	}
+	if wantsHelp(argv[1:]) {
+		fmt.Fprint(r.stdout, verbHelp(spec))
+		return ExitSuccess
+	}
+	inv, err := r.prepareInvocation(spec, argv[1:])
+	if err != nil {
+		return r.usageError(spec, err)
+	}
+	runCtx, cancel := ctx, context.CancelFunc(func() {})
+	if inv.timeout > 0 {
+		runCtx, cancel = context.WithTimeout(ctx, inv.timeout)
+	}
+	defer cancel()
+	code := ExitInterrupted
+	if ctx.Err() == nil {
+		code = spec.Run(r, runCtx, inv)
+	}
+	return r.finish(ctx, runCtx, inv, code)
+}
 
-	var code ExitCode
-	switch verb {
-	case "help":
-		code = runtime.runHelp(argv[1:])
-	case "self-update":
-		code = runtime.runSelfUpdate(ctx, argv[1:], selfupdate.New(version, nil), os.Executable)
-	case "version":
-		code = runtime.runVersion(argv[1:])
-	case "completion":
-		code = runtime.runCompletion(argv[1:])
-	case "list", "show":
-		code = runtime.runList(ctx, verb, argv[1:])
-	case "sources":
-		code = runtime.runSources(ctx, argv[1:])
-	case "search":
-		code = runtime.runSearch(ctx, argv[1:])
-	case "add", "update", "remove":
-		code = runtime.runMutation(ctx, verb, argv[1:])
-	case "restore":
-		code = runtime.runRestore(ctx, argv[1:])
-	case "config":
-		code = runtime.runConfig(argv[1:])
+func (r *cliRuntime) usageError(spec *cliVerbSpec, err error) ExitCode {
+	fmt.Fprintf(r.stderr, "guget %s: %v\nRun \"guget %s --help\" for usage.\n", spec.Name, err, spec.Name)
+	return ExitUsage
+}
+
+// finish maps an aborted run to 130 (interrupt) or 124 (--timeout), then makes
+// sure a JSON caller receives a document for every failure.
+func (r *cliRuntime) finish(parent, runCtx context.Context, inv *cliInvocation, code ExitCode) ExitCode {
+	if code != ExitSuccess && code != ExitUsage {
+		switch {
+		case parent.Err() != nil:
+			code = ExitInterrupted
+			inv.failure = "interrupted"
+			fmt.Fprintln(r.stderr, "guget: interrupted")
+		case errors.Is(runCtx.Err(), context.DeadlineExceeded):
+			code = ExitTimeout
+			inv.failure = "timed out after " + inv.timeout.String()
+			fmt.Fprintf(r.stderr, "guget: %s\n", inv.failure)
+		}
 	}
-	if errors.Is(ctx.Err(), context.Canceled) {
-		return ExitInterrupted
+	if code != ExitSuccess && inv.format.kind == formatJSON && inv.spec.hasFlag("format") && !inv.written {
+		inv.writeErrorDocument(code)
 	}
 	return code
 }
 
-func cliUsage() string {
-	return `Usage: guget <command> [options]
-
-Commands:
-  list                 list package references in the workspace
-  show PACKAGE         show one package across projects
-  sources              show configured NuGet sources and mappings
-  search QUERY         search configured NuGet sources
-  add PACKAGE          add a package to explicit --file targets
-  update PACKAGE       update explicit --file targets or --all
-  remove PACKAGE       remove from explicit --file targets or --all
-  restore              run dotnet restore for explicit targets or --all
-  config               show or change user settings (path, show, get, set, unset)
-  completion SHELL     emit completion for bash, zsh, or fish
-  self-update          update the Guget executable (--check to inspect only)
-  version              print the Guget version
-  help [COMMAND]       show help
-
-Run guget without a command to start the TUI.
-`
+// cliDocHeader starts every JSON document, so schemaVersion is always first.
+type cliDocHeader struct {
+	SchemaVersion int     `json:"schemaVersion"`
+	Command       string  `json:"command"`
+	Status        string  `json:"status"`
+	Error         *string `json:"error"`
 }
 
-func (r cliRuntime) runHelp(args []string) ExitCode {
-	if len(args) > 1 {
-		fmt.Fprintln(r.stderr, "guget help accepts at most one command")
-		return ExitUsage
+func newDocHeader(command, status string) cliDocHeader {
+	return cliDocHeader{SchemaVersion: 1, Command: command, Status: status}
+}
+
+func (h *cliDocHeader) header() *cliDocHeader { return h }
+
+type cliDocument interface{ header() *cliDocHeader }
+
+// cliErrorDocument is the result when a command fails before it has a result
+// document of its own.
+type cliErrorDocument struct {
+	cliDocHeader
+	Warnings []string `json:"warnings"`
+}
+
+func failureStatus(code ExitCode) string {
+	switch code {
+	case ExitUsage:
+		return "invalid"
+	case ExitRefused:
+		return "refused"
+	case ExitPartial:
+		return "partial"
+	case ExitTimeout:
+		return "timed-out"
+	case ExitInterrupted:
+		return "interrupted"
+	default:
+		return "failed"
 	}
-	if len(args) == 0 {
+}
+
+func stringPtr(value string) *string {
+	if value == "" {
+		return nil
+	}
+	return &value
+}
+
+// fail records a failure for the JSON error document and reports it on stderr.
+func (inv *cliInvocation) fail(code ExitCode, format string, args ...any) ExitCode {
+	inv.failure = fmt.Sprintf(format, args...)
+	fmt.Fprintf(inv.runtime.stderr, "guget: %s\n", redactCredentials(inv.failure))
+	return code
+}
+
+func (inv *cliInvocation) writeErrorDocument(code ExitCode) {
+	document := inv.document
+	if document == nil {
+		document = &cliErrorDocument{cliDocHeader: newDocHeader(inv.spec.Name, ""), Warnings: []string{}}
+	}
+	header := document.header()
+	header.Status = failureStatus(code)
+	message := inv.failure
+	if message == "" {
+		message = fmt.Sprintf("guget %s failed with exit code %d", inv.spec.Name, code)
+	}
+	message = redactCredentials(message)
+	header.Error = &message
+	data, err := renderCLIResult(cliFormat{kind: formatJSON}, false, cliResult{Document: document})
+	if err != nil {
+		return
+	}
+	if inv.blocked {
+		// The requested output was refused; report the failure on stdout.
+		inv.outputPath = ""
+	}
+	inv.write(data)
+}
+
+// emit renders a result in the selected format and writes it.
+func (inv *cliInvocation) emit(result cliResult) ExitCode {
+	data, err := renderCLIResult(inv.format, inv.noHeaders, result)
+	if err != nil {
+		return inv.fail(ExitUsage, "%v", err)
+	}
+	return inv.write(data)
+}
+
+func (inv *cliInvocation) write(data []byte) ExitCode {
+	inv.written = true
+	path := inv.outputPath
+	if path == "" || path == "-" {
+		if _, err := inv.runtime.stdout.Write(data); err != nil {
+			return inv.fail(ExitWrite, "write output: %v", err)
+		}
+		return ExitSuccess
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return inv.fail(ExitWrite, "output path: %v", err)
+	}
+	if err := atomicfile.WriteFile(abs, data, 0o644); err != nil {
+		return inv.fail(ExitWrite, "write %s: %v", abs, err)
+	}
+	return ExitSuccess
+}
+
+// guardOutput refuses an --output file that would overwrite a workspace input
+// or cannot be created. It runs before evaluation, network access, or edits.
+func (inv *cliInvocation) guardOutput(snapshot *workspaceSnapshot) ExitCode {
+	return inv.guardOutputAgainst(workspaceOutputInputs(snapshot))
+}
+
+// guardOutputAgainst refuses an --output file that is one of inputs.
+func (inv *cliInvocation) guardOutputAgainst(inputs []string) ExitCode {
+	if err := preflightOutputPath(inv.outputPath, inputs); err != nil {
+		inv.blocked = true
+		return inv.fail(ExitWrite, "output unavailable: %v", err)
+	}
+	return ExitSuccess
+}
+
+func (r *cliRuntime) emitWarnings(warnings []string) {
+	for _, warning := range warnings {
+		fmt.Fprintf(r.stderr, "guget: warning: %s\n", redactCredentials(warning))
+	}
+}
+
+func (r *cliRuntime) runHelp(_ context.Context, inv *cliInvocation) ExitCode {
+	if len(inv.args.positionals) == 0 {
 		fmt.Fprint(r.stdout, cliUsage())
 		return ExitSuccess
 	}
-	if !isCLIVerb(args[0]) {
-		fmt.Fprintf(r.stderr, "guget: unknown command %q\n", args[0])
+	spec := lookupCLIVerb(inv.args.positionals[0])
+	if spec == nil {
+		fmt.Fprintf(r.stderr, "guget: unknown command %q\n", inv.args.positionals[0])
 		return ExitUsage
 	}
-	if usage := commandUsage(strings.ToLower(args[0])); usage != "" {
-		fmt.Fprint(r.stdout, usage)
-	} else {
-		fmt.Fprint(r.stdout, cliUsage())
-	}
+	fmt.Fprint(r.stdout, verbHelp(spec))
 	return ExitSuccess
 }
 
-func commandUsage(verb string) string {
-	usage := commandSynopsis(verb)
-	switch verb {
-	case "list", "show":
-		usage += "Options: --framework TFM (repeatable), --direct, --include-transitive, --source NAME, --timeout DURATION, --include-ignored, --no-color, --help\n"
-	case "search":
-		usage += "Options: --source NAME (repeatable), --output FILE, --timeout DURATION, --include-ignored, --no-color, --help\n"
-	case "sources":
-		usage += "Options: --output FILE, --timeout DURATION, --include-ignored, --no-color, --help\n"
-	case "add", "update", "remove":
-		usage += "Options: --project DIR, --format table|tsv|json|jsonl, --output FILE, --timeout DURATION, --include-ignored, --no-color, --help\n"
+func (r *cliRuntime) runCompletion(_ context.Context, inv *cliInvocation) ExitCode {
+	script, ok := completionScript(inv.args.positionals[0])
+	if !ok {
+		return r.usageError(inv.spec, fmt.Errorf("unsupported shell %q", inv.args.positionals[0]))
 	}
-	return usage
-}
-
-func commandSynopsis(verb string) string {
-	switch verb {
-	case "list":
-		return "Usage: guget list [--project DIR] [--format table|tsv|json|jsonl] [--output FILE]\n"
-	case "show":
-		return "Usage: guget show PACKAGE [--project DIR] [--format table|tsv|json|jsonl]\n"
-	case "sources":
-		return "Usage: guget sources [--project DIR] [--format table|tsv|json|jsonl]\n"
-	case "search":
-		return "Usage: guget search QUERY [--project DIR] [--source NAME] [--format table|tsv|json|jsonl]\n"
-	case "add":
-		return "Usage: guget add PACKAGE --version VERSION --file PROJECT [--file PROJECT...] [--dry-run] [--restore] [--interactive]\n"
-	case "update":
-		return "Usage: guget update PACKAGE --version VERSION (--file PROJECT... | --all) [--dry-run] [--restore] [--interactive]\n"
-	case "remove":
-		return "Usage: guget remove PACKAGE (--file PROJECT... | --all) [--dry-run] [--restore] [--interactive]\n"
-	case "restore":
-		return "Usage: guget restore (--file PROJECT... | --all) [--project DIR] [--interactive]\n"
-	case "config":
-		return configUsage()
-	case "completion":
-		return "Usage: guget completion bash|zsh|fish\n"
-	case "self-update":
-		return "Usage: guget self-update [--check]\n"
-	case "version":
-		return "Usage: guget version\n"
-	}
-	return ""
-}
-
-func (r cliRuntime) runVersion(args []string) ExitCode {
-	if len(args) != 0 {
-		fmt.Fprintln(r.stderr, "guget version does not accept arguments")
-		return ExitUsage
-	}
-	fmt.Fprintln(r.stdout, versionString())
+	fmt.Fprint(r.stdout, script)
 	return ExitSuccess
-}
-
-func (r cliRuntime) runCompletion(args []string) ExitCode {
-	if len(args) != 1 {
-		fmt.Fprint(r.stderr, commandUsage("completion"))
-		return ExitUsage
-	}
-	commands := "list show sources search add update remove restore config completion self-update version help"
-	switch args[0] {
-	case "bash":
-		fmt.Fprint(r.stdout, bashCompletion(commands))
-	case "zsh":
-		fmt.Fprint(r.stdout, zshCompletion(commands))
-	case "fish":
-		for _, command := range strings.Fields(commands) {
-			fmt.Fprintf(r.stdout, "complete -c guget -f -n '__fish_use_subcommand' -a %s\n", command)
-		}
-		fmt.Fprint(r.stdout, fishConfigCompletion())
-	default:
-		fmt.Fprint(r.stderr, commandUsage("completion"))
-		return ExitUsage
-	}
-	return ExitSuccess
-}
-
-func withTimeout(ctx context.Context, raw string) (context.Context, context.CancelFunc, error) {
-	if raw == "" {
-		return ctx, func() {}, nil
-	}
-	duration, err := time.ParseDuration(raw)
-	if err != nil || duration <= 0 {
-		return nil, nil, fmt.Errorf("invalid --timeout %q", raw)
-	}
-	timed, cancel := context.WithTimeout(ctx, duration)
-	return timed, cancel, nil
 }
 
 func workspaceRoot(args cliArgs) (string, error) {
@@ -332,160 +466,285 @@ func workspaceRoot(args cliArgs) (string, error) {
 	return filepath.Abs(root)
 }
 
+// loadCLIWorkspace resolves --project, scans it, and guards --output. A failed
+// step has already been reported when the returned code is not success.
+func (r *cliRuntime) loadCLIWorkspace(ctx context.Context, inv *cliInvocation, setWorkspace func(string)) (*workspaceSnapshot, ExitCode) {
+	root, err := workspaceRoot(inv.args)
+	if err != nil {
+		return nil, inv.fail(ExitWorkspace, "%v", err)
+	}
+	setWorkspace(root)
+	snapshot, err := scanWorkspaceWith(root, cliScanOptions(inv.args))
+	if ctx.Err() != nil {
+		return nil, ExitInterrupted
+	}
+	if err != nil {
+		return nil, inv.fail(ExitWorkspace, "%v", err)
+	}
+	setWorkspace(snapshot.ProjectDir)
+	if code := inv.guardOutput(snapshot); code != ExitSuccess {
+		return nil, code
+	}
+	return snapshot, ExitSuccess
+}
+
+// pathDisplay maps canonical file identities to the absolute path form the
+// workspace scan used, so one file is reported the same way by every command.
+// Symlinks stay unresolved in output; canonical identities stay internal.
+type pathDisplay map[string]string
+
+func newPathDisplay(snapshot *workspaceSnapshot) pathDisplay {
+	display := make(pathDisplay)
+	add := func(path string) {
+		if path == "" {
+			return
+		}
+		abs, err := filepath.Abs(path)
+		if err != nil {
+			return
+		}
+		abs = filepath.Clean(abs)
+		identity := outputPathIdentity(abs)
+		if _, ok := display[identity]; !ok {
+			display[identity] = abs
+		}
+	}
+	for _, project := range snapshot.ParsedProjects {
+		add(project.FilePath)
+	}
+	for _, project := range append(append([]*ParsedProject(nil), snapshot.ParsedProjects...), snapshot.PropsProjects...) {
+		for _, path := range projectInputPaths(project) {
+			add(path)
+		}
+	}
+	for path := range snapshot.InputRevisions {
+		add(path)
+	}
+	return display
+}
+
+func (d pathDisplay) show(path string) string {
+	if path == "" {
+		return ""
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return path
+	}
+	abs = filepath.Clean(abs)
+	if display, ok := d[outputPathIdentity(abs)]; ok {
+		return display
+	}
+	return abs
+}
+
+func (d pathDisplay) showAll(paths []string) []string {
+	result := make([]string, 0, len(paths))
+	for _, path := range paths {
+		result = append(result, d.show(path))
+	}
+	return result
+}
+
+// cliPackageRow is one (project, package, target framework) reference. Every
+// key is always present; unknown values are null.
 type cliPackageRow struct {
-	Project             string   `json:"project"`
-	ProjectPath         string   `json:"projectPath"`
-	Package             string   `json:"package"`
-	RequestedExpression string   `json:"requestedExpression"`
-	ResolvedVersion     string   `json:"resolvedVersion,omitempty"`
-	OwnerPath           string   `json:"ownerPath"`
-	ReferenceOwner      string   `json:"referenceOwner"`
-	VersionOwner        string   `json:"versionOwner,omitempty"`
-	TargetFrameworks    []string `json:"targetFrameworks"`
-	Direct              bool     `json:"direct"`
-	Implicit            bool     `json:"implicit"`
-	EditSupported       bool     `json:"editSupported"`
-	EditReason          string   `json:"editReason,omitempty"`
-	Locked              bool     `json:"locked"`
+	Project             string  `json:"project"`
+	ProjectPath         string  `json:"projectPath"`
+	Package             string  `json:"package"`
+	RequestedExpression *string `json:"requestedExpression"`
+	ResolvedVersion     *string `json:"resolvedVersion"`
+	// OwnerPath is a documented alias of VersionOwner kept for schema 1.
+	OwnerPath        *string  `json:"ownerPath"`
+	ReferenceOwner   *string  `json:"referenceOwner"`
+	VersionOwner     *string  `json:"versionOwner"`
+	TargetFramework  *string  `json:"targetFramework"`
+	TargetFrameworks []string `json:"targetFrameworks"`
+	Direct           bool     `json:"direct"`
+	Implicit         bool     `json:"implicit"`
+	EditSupported    bool     `json:"editSupported"`
+	EditReason       *string  `json:"editReason"`
+	Locked           bool     `json:"locked"`
 }
 
 type listDocument struct {
-	SchemaVersion int             `json:"schemaVersion"`
-	Command       string          `json:"command"`
-	Workspace     string          `json:"workspace"`
-	Packages      []cliPackageRow `json:"packages"`
-	Warnings      []string        `json:"warnings"`
+	cliDocHeader
+	Workspace string          `json:"workspace"`
+	Packages  []cliPackageRow `json:"packages"`
+	Warnings  []string        `json:"warnings"`
 }
 
-func rowsFromSnapshot(ctx context.Context, snapshot *workspaceSnapshot, onlyPackage string, includeTransitive bool) ([]cliPackageRow, []string) {
-	rows := make([]cliPackageRow, 0)
-	warnings := make([]string, 0)
-	msbuild := packageops.MSBuildInspector{}
-	graph := packageops.NuGetGraphInspector{}
+var packageColumns = []cliColumn{
+	{"PROJECT", "project"}, {"PACKAGE", "package"}, {"REQUESTED", "requestedExpression"},
+	{"RESOLVED", "resolvedVersion"}, {"VERSION OWNER", "versionOwner"}, {"FRAMEWORKS", "targetFrameworks"},
+}
+
+func newPackageRow(project *ParsedProject, packageID, framework string) cliPackageRow {
+	frameworks := []string{}
+	if framework != "" {
+		frameworks = []string{framework}
+	}
+	return cliPackageRow{
+		Project: project.FileName, ProjectPath: project.FilePath, Package: packageID,
+		TargetFramework: stringPtr(framework), TargetFrameworks: frameworks,
+	}
+}
+
+func (row *cliPackageRow) setOwners(reference, version string) {
+	row.ReferenceOwner = stringPtr(reference)
+	row.VersionOwner = stringPtr(version)
+	row.OwnerPath = row.VersionOwner
+}
+
+// packageRows inspects each project with MSBuild and the restored package
+// graph, falling back to declared references when evaluation is unavailable.
+// partial reports that some requested data could not be produced.
+func (r *cliRuntime) packageRows(ctx context.Context, snapshot *workspaceSnapshot, onlyPackage string, includeTransitive bool) (rows []cliPackageRow, warnings []string, partial bool) {
+	rows = make([]cliPackageRow, 0)
+	warnings = make([]string, 0)
+	paths := newPathDisplay(snapshot)
+	msbuild := packageops.MSBuildInspector{Runner: r.runner}
+	graph := packageops.NuGetGraphInspector{Runner: r.runner}
+	matches := func(id string) bool { return onlyPackage == "" || strings.EqualFold(id, onlyPackage) }
 	for _, project := range snapshot.ParsedProjects {
+		if ctx.Err() != nil {
+			return rows, warnings, true
+		}
+		before := len(rows)
 		evaluated, evalErr := msbuild.InspectProject(ctx, project.FilePath)
 		resolved, graphErr := graph.ResolveProject(ctx, project.FilePath, includeTransitive)
 		resolvedByKey := make(map[string]packageops.PackageUse)
 		for _, use := range resolved {
 			resolvedByKey[packageUseKey(use.PackageID, use.TargetFramework, use.Direct)] = use
 		}
-		if graphErr != nil {
-			warnings = append(warnings, fmt.Sprintf("%s: resolved graph unavailable or stale: %v", project.FileName, graphErr))
-		}
 		if evalErr == nil {
 			for _, use := range evaluated.PackageUses {
-				if onlyPackage != "" && !strings.EqualFold(use.PackageID, onlyPackage) {
+				if !matches(use.PackageID) {
 					continue
 				}
-				requested := use.EvaluatedExpression
 				resolvedVersion := ""
 				if graphUse, ok := resolvedByKey[packageUseKey(use.PackageID, use.TargetFramework, true)]; ok {
 					resolvedVersion = graphUse.ResolvedVersion
 				}
 				if graphErr == nil && resolvedVersion == "" && !use.Implicit {
+					partial = true
 					warnings = append(warnings, fmt.Sprintf("%s: resolved version for %s (%s) is missing; restore metadata is incomplete", project.FileName, use.PackageID, use.TargetFramework))
 				}
-				rows = append(rows, cliPackageRow{
-					Project: project.FileName, ProjectPath: project.FilePath,
-					Package: use.PackageID, RequestedExpression: requested, ResolvedVersion: resolvedVersion,
-					OwnerPath: use.VersionOwner, ReferenceOwner: use.ReferenceOwner, VersionOwner: use.VersionOwner,
-					TargetFrameworks: []string{use.TargetFramework}, Direct: true, Implicit: use.Implicit,
-					EditSupported: use.Edit.Supported, EditReason: use.Edit.Reason, Locked: isExactLock(requested),
-				})
+				row := newPackageRow(project, use.PackageID, use.TargetFramework)
+				row.RequestedExpression = stringPtr(use.EvaluatedExpression)
+				row.ResolvedVersion = stringPtr(resolvedVersion)
+				row.setOwners(paths.show(use.ReferenceOwner), paths.show(use.VersionOwner))
+				row.Direct, row.Implicit = true, use.Implicit
+				row.EditSupported, row.EditReason = use.Edit.Supported, stringPtr(use.Edit.Reason)
+				row.Locked = isExactLock(use.EvaluatedExpression)
+				rows = append(rows, row)
 			}
 		} else {
-			warnings = append(warnings, fmt.Sprintf("%s: MSBuild evaluation unavailable; showing declared fallback: %v", project.FileName, evalErr))
 			frameworks := make([]string, 0, project.TargetFrameworks.Len())
 			for framework := range project.TargetFrameworks {
 				frameworks = append(frameworks, framework.String())
 			}
 			sort.Strings(frameworks)
+			if len(frameworks) == 0 {
+				frameworks = []string{""}
+			}
+			declared := 0
 			for ref := range project.Packages {
-				if onlyPackage != "" && !strings.EqualFold(ref.Name, onlyPackage) {
+				if !matches(ref.Name) {
 					continue
 				}
+				declared++
 				requested := ref.Requested
 				if requested == "" {
 					requested = ref.Version.String()
 				}
-				owner := project.SourceFileForPackage(ref.Name)
-				rows = append(rows, cliPackageRow{
-					Project: project.FileName, ProjectPath: project.FilePath, Package: ref.Name,
-					RequestedExpression: requested, OwnerPath: owner, ReferenceOwner: owner, VersionOwner: owner,
-					TargetFrameworks: frameworks, Direct: true, EditReason: "MSBuild evaluation unavailable", Locked: ref.Locked,
-				})
+				owner := paths.show(project.SourceFileForPackage(ref.Name))
+				for _, framework := range frameworks {
+					row := newPackageRow(project, ref.Name, framework)
+					row.RequestedExpression = stringPtr(requested)
+					if graphUse, ok := resolvedByKey[packageUseKey(ref.Name, framework, true)]; ok {
+						row.ResolvedVersion = stringPtr(graphUse.ResolvedVersion)
+					}
+					row.setOwners(owner, owner)
+					row.Direct = true
+					row.EditReason = stringPtr("MSBuild evaluation unavailable")
+					row.Locked = ref.Locked
+					rows = append(rows, row)
+				}
 			}
+			if onlyPackage == "" || declared > 0 {
+				partial = true
+				warnings = append(warnings, fmt.Sprintf("%s: MSBuild evaluation unavailable; showing declared fallback: %v", project.FileName, evalErr))
+			}
+		}
+		if graphErr != nil && (len(rows) > before || includeTransitive && onlyPackage == "") {
+			partial = true
+			warnings = append(warnings, fmt.Sprintf("%s: resolved graph unavailable or stale: %v", project.FileName, graphErr))
 		}
 		if includeTransitive && graphErr == nil {
 			for _, use := range resolved {
-				if use.Direct || onlyPackage != "" && !strings.EqualFold(use.PackageID, onlyPackage) {
+				if use.Direct || !matches(use.PackageID) {
 					continue
 				}
-				rows = append(rows, cliPackageRow{
-					Project: project.FileName, ProjectPath: project.FilePath, Package: use.PackageID,
-					ResolvedVersion: use.ResolvedVersion, TargetFrameworks: []string{use.TargetFramework},
-					EditReason: "transitive packages are resolved, not directly editable",
-				})
+				row := newPackageRow(project, use.PackageID, use.TargetFramework)
+				row.ResolvedVersion = stringPtr(use.ResolvedVersion)
+				row.EditReason = stringPtr("transitive packages are resolved, not directly editable")
+				rows = append(rows, row)
 			}
 		}
 	}
-	sort.Slice(rows, func(i, j int) bool {
-		if !strings.EqualFold(rows[i].Package, rows[j].Package) {
-			return strings.ToLower(rows[i].Package) < strings.ToLower(rows[j].Package)
+	sortPackageRows(rows)
+	return rows, warnings, partial
+}
+
+// sortPackageRows orders rows by package ID (case-folded), project path, and
+// target framework, with direct references before transitive ones.
+func sortPackageRows(rows []cliPackageRow) {
+	text := func(value *string) string {
+		if value == nil {
+			return ""
 		}
-		return rows[i].ProjectPath < rows[j].ProjectPath
+		return *value
+	}
+	sort.SliceStable(rows, func(i, j int) bool {
+		a, b := rows[i], rows[j]
+		if !strings.EqualFold(a.Package, b.Package) {
+			return strings.ToLower(a.Package) < strings.ToLower(b.Package)
+		}
+		if a.ProjectPath != b.ProjectPath {
+			return a.ProjectPath < b.ProjectPath
+		}
+		if fa, fb := strings.ToLower(text(a.TargetFramework)), strings.ToLower(text(b.TargetFramework)); fa != fb {
+			return fa < fb
+		}
+		if a.Direct != b.Direct {
+			return a.Direct
+		}
+		return a.Package < b.Package
 	})
-	return rows, warnings
 }
 
 func packageUseKey(packageID, framework string, direct bool) string {
 	return strings.ToLower(packageID) + "\x00" + strings.ToLower(framework) + fmt.Sprintf("\x00%t", direct)
 }
 
-func (r cliRuntime) runList(ctx context.Context, verb string, argv []string) ExitCode {
-	values := cloneFlags(commonValueFlags)
-	bools := cloneFlags(commonBoolFlags, "outdated", "vulnerable", "deprecated", "direct", "include-transitive")
-	args, err := parseCLIArgs(argv, values, bools)
-	if err != nil {
-		fmt.Fprintln(r.stderr, err)
-		return ExitUsage
-	}
-	if args.bools["help"] {
-		fmt.Fprint(r.stdout, commandUsage(verb))
-		return ExitSuccess
-	}
-	if verb == "show" && len(args.positionals) != 1 || verb == "list" && len(args.positionals) != 0 {
-		fmt.Fprint(r.stderr, commandUsage(verb))
-		return ExitUsage
-	}
+func (r *cliRuntime) runList(ctx context.Context, inv *cliInvocation) ExitCode {
+	verb := inv.spec.Name
+	args := inv.args
+	doc := &listDocument{cliDocHeader: newDocHeader(verb, "ok"), Packages: []cliPackageRow{}, Warnings: []string{}}
+	inv.document = doc
 	if args.bools["outdated"] || args.bools["vulnerable"] || args.bools["deprecated"] {
-		fmt.Fprintln(r.stderr, "the requested filter requires evaluated restore metadata, which is not available yet")
-		return ExitPartial
+		return inv.fail(ExitPartial, "the requested filter requires evaluated restore metadata, which is not available yet")
 	}
-	ctx, cancel, err := withTimeout(ctx, args.value("timeout", ""))
-	if err != nil {
-		fmt.Fprintln(r.stderr, err)
-		return ExitUsage
-	}
-	defer cancel()
-	root, err := workspaceRoot(args)
-	if err != nil {
-		fmt.Fprintln(r.stderr, err)
-		return ExitWorkspace
-	}
-	if err := ctx.Err(); err != nil {
-		return ExitInterrupted
-	}
-	snapshot, err := scanWorkspaceWith(root, cliScanOptions(args))
-	if err != nil {
-		fmt.Fprintf(r.stderr, "guget: %v\n", err)
-		return ExitWorkspace
+	snapshot, code := r.loadCLIWorkspace(ctx, inv, func(root string) { doc.Workspace = root })
+	if code != ExitSuccess {
+		return code
 	}
 	only := ""
 	if verb == "show" {
 		only = args.positionals[0]
 	}
-	rows, warnings := rowsFromSnapshot(ctx, snapshot, only, args.bools["include-transitive"])
+	rows, warnings, partial := r.packageRows(ctx, snapshot, only, args.bools["include-transitive"])
 	if frameworks := args.values["framework"]; len(frameworks) > 0 {
 		filtered := rows[:0]
 		for _, row := range rows {
@@ -507,93 +766,33 @@ func (r cliRuntime) runList(ctx context.Context, verb string, argv []string) Exi
 		}
 		rows = filtered
 	}
-	if len(args.values["source"]) > 0 {
-		warnings = append(warnings, "--source filtering is unavailable because dotnet package-list JSON does not report restore-source provenance")
+	if verb == "show" && len(rows) == 0 {
+		warnings = append(warnings, fmt.Sprintf("package %s is not referenced in this workspace", only))
 	}
 	for _, artifact := range snapshot.Unsupported {
 		warnings = append(warnings, fmt.Sprintf("%s: %s", artifact.Path, artifact.Reason))
 	}
+	doc.Packages, doc.Warnings = rows, redactAll(warnings)
+	if partial {
+		doc.Status = "partial"
+	}
 	if ctx.Err() != nil {
 		return ExitInterrupted
 	}
-	doc := listDocument{SchemaVersion: 1, Command: verb, Workspace: snapshot.ProjectDir, Packages: rows, Warnings: warnings}
-	data, err := renderPackageRows(doc, outputFormat(args, r.stdout))
-	if err != nil {
-		fmt.Fprintln(r.stderr, err)
-		return ExitUsage
-	}
 	r.emitWarnings(warnings)
-	code := r.writeOutput(args.value("output", ""), data)
-	if code == ExitSuccess && len(warnings) > 0 {
+	code = inv.emit(cliResult{Document: doc, Items: doc.Packages, Columns: packageColumns})
+	if code == ExitSuccess && partial {
 		return ExitPartial
 	}
 	return code
 }
 
-func outputFormat(args cliArgs, output io.Writer) string {
-	if explicit := strings.ToLower(args.value("format", "")); explicit != "" {
-		return explicit
+func redactAll(values []string) []string {
+	result := make([]string, len(values))
+	for i, value := range values {
+		result[i] = redactCredentials(value)
 	}
-	if file, ok := output.(*os.File); ok && term.IsTerminal(int(file.Fd())) {
-		return "table"
-	}
-	return "tsv"
-}
-
-func renderPackageRows(doc listDocument, format string) ([]byte, error) {
-	var buffer bytes.Buffer
-	switch format {
-	case "json":
-		encoder := json.NewEncoder(&buffer)
-		encoder.SetIndent("", "  ")
-		if err := encoder.Encode(doc); err != nil {
-			return nil, err
-		}
-	case "jsonl":
-		encoder := json.NewEncoder(&buffer)
-		for _, row := range doc.Packages {
-			if err := encoder.Encode(row); err != nil {
-				return nil, err
-			}
-		}
-	case "table":
-		writer := tabwriter.NewWriter(&buffer, 0, 4, 2, ' ', 0)
-		fmt.Fprintln(writer, "PROJECT\tPACKAGE\tREQUESTED\tRESOLVED\tVERSION OWNER\tFRAMEWORKS")
-		for _, row := range doc.Packages {
-			fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\t%s\n", row.Project, row.Package, row.RequestedExpression, row.ResolvedVersion, row.VersionOwner, strings.Join(row.TargetFrameworks, ","))
-		}
-		if err := writer.Flush(); err != nil {
-			return nil, err
-		}
-	case "tsv":
-		fmt.Fprintln(&buffer, "PROJECT\tPACKAGE\tREQUESTED\tRESOLVED\tVERSION_OWNER\tFRAMEWORKS")
-		for _, row := range doc.Packages {
-			fmt.Fprintf(&buffer, "%s\t%s\t%s\t%s\t%s\t%s\n", row.Project, row.Package, row.RequestedExpression, row.ResolvedVersion, row.VersionOwner, strings.Join(row.TargetFrameworks, ","))
-		}
-	default:
-		return nil, fmt.Errorf("invalid --format %q (expected table, tsv, json, or jsonl)", format)
-	}
-	return buffer.Bytes(), nil
-}
-
-func (r cliRuntime) writeOutput(path string, data []byte) ExitCode {
-	if path == "" || path == "-" {
-		if _, err := r.stdout.Write(data); err != nil {
-			fmt.Fprintf(r.stderr, "guget: write output: %v\n", err)
-			return ExitWrite
-		}
-		return ExitSuccess
-	}
-	abs, err := filepath.Abs(path)
-	if err != nil {
-		fmt.Fprintf(r.stderr, "guget: output path: %v\n", err)
-		return ExitWrite
-	}
-	if err := atomicfile.WriteFile(abs, data, 0o644); err != nil {
-		fmt.Fprintf(r.stderr, "guget: write %s: %v\n", abs, err)
-		return ExitWrite
-	}
-	return ExitSuccess
+	return result
 }
 
 type sourceRow struct {
@@ -605,144 +804,70 @@ type sourceRow struct {
 }
 
 type sourcesDocument struct {
-	SchemaVersion int         `json:"schemaVersion"`
-	Command       string      `json:"command"`
-	Workspace     string      `json:"workspace"`
-	Sources       []sourceRow `json:"sources"`
-	Warnings      []string    `json:"warnings"`
+	cliDocHeader
+	Workspace string      `json:"workspace"`
+	Sources   []sourceRow `json:"sources"`
+	Warnings  []string    `json:"warnings"`
 }
 
-func (r cliRuntime) runSources(ctx context.Context, argv []string) ExitCode {
-	values := cloneFlags(commonValueFlags)
-	delete(values, "framework")
-	delete(values, "source")
-	args, err := parseCLIArgs(argv, values, commonBoolFlags)
-	if err != nil || len(args.positionals) != 0 {
-		if err != nil {
-			fmt.Fprintln(r.stderr, err)
-		} else {
-			fmt.Fprint(r.stderr, commandUsage("sources"))
-		}
-		return ExitUsage
+var sourceColumns = []cliColumn{{"NAME", "name"}, {"URL", "url"}, {"CAPABILITY", "capability"}, {"MAPPED PATTERNS", "patterns"}}
+
+func (r *cliRuntime) runSources(ctx context.Context, inv *cliInvocation) ExitCode {
+	doc := &sourcesDocument{cliDocHeader: newDocHeader("sources", "ok"), Sources: []sourceRow{}, Warnings: []string{}}
+	inv.document = doc
+	snapshot, code := r.loadCLIWorkspace(ctx, inv, func(root string) { doc.Workspace = root })
+	if code != ExitSuccess {
+		return code
 	}
-	if args.bools["help"] {
-		fmt.Fprint(r.stdout, commandUsage("sources"))
-		return ExitSuccess
-	}
-	ctx, cancel, err := withTimeout(ctx, args.value("timeout", ""))
-	if err != nil {
-		fmt.Fprintln(r.stderr, err)
-		return ExitUsage
-	}
-	defer cancel()
-	root, err := workspaceRoot(args)
-	if err != nil {
-		fmt.Fprintln(r.stderr, err)
-		return ExitWorkspace
-	}
-	if err := ctx.Err(); err != nil {
-		return ExitInterrupted
-	}
-	snapshot, err := scanWorkspaceWith(root, cliScanOptions(args))
-	if err != nil {
-		fmt.Fprintf(r.stderr, "guget: %v\n", err)
-		return ExitWorkspace
-	}
-	doc := sourcesDocument{SchemaVersion: 1, Command: "sources", Workspace: snapshot.ProjectDir, Sources: []sourceRow{}, Warnings: []string{}}
 	for _, source := range snapshot.Sources {
 		capability := "metadata"
 		if !source.IsHTTP() {
 			capability = "restore-only"
 		}
-		row := sourceRow{Name: source.Name, URL: source.URL, Capability: capability}
-		row.Patterns = snapshot.SourceMapping.Patterns(source)
+		row := sourceRow{Name: source.Name, URL: redactURL(source.URL), Capability: capability, Patterns: []string{}}
+		if patterns := snapshot.SourceMapping.Patterns(source); len(patterns) > 0 {
+			row.Patterns = patterns
+		}
 		row.Mapped = len(row.Patterns) > 0
 		doc.Sources = append(doc.Sources, row)
 	}
-	sort.Slice(doc.Sources, func(i, j int) bool {
+	sort.SliceStable(doc.Sources, func(i, j int) bool {
 		return strings.ToLower(doc.Sources[i].Name) < strings.ToLower(doc.Sources[j].Name)
 	})
-	data, err := renderSources(doc, outputFormat(args, r.stdout))
-	if err != nil {
-		fmt.Fprintln(r.stderr, err)
-		return ExitUsage
-	}
-	return r.writeOutput(args.value("output", ""), data)
+	return inv.emit(cliResult{Document: doc, Items: doc.Sources, Columns: sourceColumns})
 }
 
-func renderSources(doc sourcesDocument, format string) ([]byte, error) {
-	var buffer bytes.Buffer
-	switch format {
-	case "json":
-		encoder := json.NewEncoder(&buffer)
-		encoder.SetIndent("", "  ")
-		if err := encoder.Encode(doc); err != nil {
-			return nil, err
-		}
-	case "jsonl":
-		encoder := json.NewEncoder(&buffer)
-		for _, row := range doc.Sources {
-			if err := encoder.Encode(row); err != nil {
-				return nil, err
-			}
-		}
-	case "table":
-		writer := tabwriter.NewWriter(&buffer, 0, 4, 2, ' ', 0)
-		fmt.Fprintln(writer, "NAME\tURL\tCAPABILITY\tMAPPED PATTERNS")
-		for _, row := range doc.Sources {
-			fmt.Fprintf(writer, "%s\t%s\t%s\t%s\n", row.Name, row.URL, row.Capability, strings.Join(row.Patterns, ","))
-		}
-		if err := writer.Flush(); err != nil {
-			return nil, err
-		}
-	case "tsv":
-		fmt.Fprintln(&buffer, "NAME\tURL\tCAPABILITY\tMAPPED PATTERNS")
-		for _, row := range doc.Sources {
-			fmt.Fprintf(&buffer, "%s\t%s\t%s\t%s\n", row.Name, row.URL, row.Capability, strings.Join(row.Patterns, ","))
-		}
-	default:
-		return nil, fmt.Errorf("invalid --format %q (expected table, tsv, json, or jsonl)", format)
-	}
-	return buffer.Bytes(), nil
+type searchRow struct {
+	Package     string   `json:"package"`
+	Version     string   `json:"version"`
+	Description string   `json:"description"`
+	Authors     []string `json:"authors"`
+	Source      string   `json:"source"`
 }
 
-func (r cliRuntime) runSearch(ctx context.Context, argv []string) ExitCode {
-	values := cloneFlags(commonValueFlags)
-	delete(values, "framework")
-	args, err := parseCLIArgs(argv, values, commonBoolFlags)
-	if err != nil {
-		fmt.Fprintln(r.stderr, err)
-		return ExitUsage
-	}
-	if args.bools["help"] {
-		fmt.Fprint(r.stdout, commandUsage("search"))
-		return ExitSuccess
-	}
-	if len(args.positionals) != 1 {
-		fmt.Fprint(r.stderr, commandUsage("search"))
-		return ExitUsage
-	}
-	ctx, cancel, err := withTimeout(ctx, args.value("timeout", "30s"))
-	if err != nil {
-		fmt.Fprintln(r.stderr, err)
-		return ExitUsage
-	}
-	defer cancel()
-	root, err := workspaceRoot(args)
-	if err != nil {
-		fmt.Fprintln(r.stderr, err)
-		return ExitWorkspace
-	}
-	snapshot, err := scanWorkspaceWith(root, cliScanOptions(args))
-	if err != nil {
-		fmt.Fprintf(r.stderr, "guget: %v\n", err)
-		return ExitWorkspace
+type searchDocument struct {
+	cliDocHeader
+	Workspace string      `json:"workspace"`
+	Query     string      `json:"query"`
+	Results   []searchRow `json:"results"`
+	Warnings  []string    `json:"warnings"`
+}
+
+var searchColumns = []cliColumn{{"PACKAGE", "package"}, {"VERSION", "version"}, {"SOURCE", "source"}, {"DESCRIPTION", "description"}}
+
+func (r *cliRuntime) runSearch(ctx context.Context, inv *cliInvocation) ExitCode {
+	query := inv.args.positionals[0]
+	doc := &searchDocument{cliDocHeader: newDocHeader("search", "ok"), Query: query, Results: []searchRow{}, Warnings: []string{}}
+	inv.document = doc
+	snapshot, code := r.loadCLIWorkspace(ctx, inv, func(root string) { doc.Workspace = root })
+	if code != ExitSuccess {
+		return code
 	}
 	wantedSources := make(map[string]bool)
-	for _, name := range args.values["source"] {
+	for _, name := range inv.args.values["source"] {
 		wantedSources[strings.ToLower(name)] = true
 	}
-	for name := range wantedSources {
+	for _, name := range inv.args.values["source"] {
 		found := false
 		for _, source := range snapshot.Sources {
 			if strings.EqualFold(source.Name, name) {
@@ -751,34 +876,31 @@ func (r cliRuntime) runSearch(ctx context.Context, argv []string) ExitCode {
 			}
 		}
 		if !found {
-			fmt.Fprintf(r.stderr, "guget: unknown --source %q\n", name)
-			return ExitSource
+			return inv.fail(ExitUsage, "unknown --source %q; run guget sources to list configured names", name)
 		}
 	}
-	query := args.positionals[0]
-	document := searchDocument{SchemaVersion: 1, Command: "search", Workspace: root, Query: query, Results: []searchRow{}, Warnings: []string{}}
+	var warnings []string
 	seen := make(map[string]bool)
-	attempted := 0
-	failed := 0
+	attempted, failed := 0, 0
 	for _, source := range snapshot.Sources {
 		if len(wantedSources) > 0 && !wantedSources[strings.ToLower(source.Name)] {
 			continue
 		}
 		if !source.IsHTTP() {
-			document.Warnings = append(document.Warnings, fmt.Sprintf("source %s is restore-only and cannot be searched", source.Name))
+			warnings = append(warnings, fmt.Sprintf("source %s is restore-only and cannot be searched", source.Name))
 			continue
 		}
 		attempted++
 		service, err := r.newService(ctx, source)
 		if err != nil {
 			failed++
-			document.Warnings = append(document.Warnings, fmt.Sprintf("source %s unavailable: %v", source.Name, err))
+			warnings = append(warnings, fmt.Sprintf("source %s unavailable: %v", source.Name, err))
 			continue
 		}
 		results, err := service.SearchContext(ctx, query, 50)
 		if err != nil {
 			failed++
-			document.Warnings = append(document.Warnings, fmt.Sprintf("source %s search failed: %v", source.Name, err))
+			warnings = append(warnings, fmt.Sprintf("source %s search failed: %v", source.Name, err))
 			continue
 		}
 		for _, result := range results {
@@ -790,40 +912,38 @@ func (r cliRuntime) runSearch(ctx context.Context, argv []string) ExitCode {
 				continue
 			}
 			seen[key] = true
-			document.Results = append(document.Results, searchRow{Package: result.ID, Version: result.Version, Description: result.Description, Authors: []string(result.Authors), Source: source.Name})
+			authors := append([]string{}, result.Authors...)
+			doc.Results = append(doc.Results, searchRow{Package: result.ID, Version: result.Version, Description: result.Description, Authors: authors, Source: source.Name})
 		}
 	}
-	if len(wantedSources) > 0 && attempted == 0 {
-		fmt.Fprintln(r.stderr, "guget: none of the requested --source names are configured metadata sources")
-		return ExitSource
-	}
-	sort.Slice(document.Results, func(i, j int) bool {
-		iExact := strings.EqualFold(document.Results[i].Package, query)
-		jExact := strings.EqualFold(document.Results[j].Package, query)
+	sort.SliceStable(doc.Results, func(i, j int) bool {
+		iExact := strings.EqualFold(doc.Results[i].Package, query)
+		jExact := strings.EqualFold(doc.Results[j].Package, query)
 		if iExact != jExact {
 			return iExact
 		}
-		return strings.ToLower(document.Results[i].Package) < strings.ToLower(document.Results[j].Package)
+		return strings.ToLower(doc.Results[i].Package) < strings.ToLower(doc.Results[j].Package)
 	})
-	r.emitWarnings(document.Warnings)
+	doc.Warnings = redactAll(warnings)
+	r.emitWarnings(warnings)
+	if len(wantedSources) > 0 && attempted == 0 {
+		return inv.fail(ExitUsage, "none of the requested --source names are HTTP sources that support search")
+	}
 	if ctx.Err() != nil {
 		return ExitInterrupted
 	}
 	if attempted > 0 && failed == attempted {
-		return ExitSource
+		return inv.fail(ExitSource, "every searched source failed")
 	}
-	data, err := renderSearch(document, outputFormat(args, r.stdout))
-	if err != nil {
-		fmt.Fprintln(r.stderr, err)
-		return ExitUsage
+	partial := failed > 0
+	if partial {
+		doc.Status = "partial"
 	}
-	if code := r.writeOutput(args.value("output", ""), data); code != ExitSuccess {
-		return code
-	}
-	if len(document.Warnings) > 0 {
+	code = inv.emit(cliResult{Document: doc, Items: doc.Results, Columns: searchColumns})
+	if code == ExitSuccess && partial {
 		return ExitPartial
 	}
-	return ExitSuccess
+	return code
 }
 
 func containsFold(values []string, target string) bool {
@@ -835,252 +955,164 @@ func containsFold(values []string, target string) bool {
 	return false
 }
 
-type searchRow struct {
-	Package     string   `json:"package"`
-	Version     string   `json:"version"`
-	Description string   `json:"description,omitempty"`
-	Authors     []string `json:"authors"`
-	Source      string   `json:"source"`
-}
-
-type searchDocument struct {
-	SchemaVersion int         `json:"schemaVersion"`
-	Command       string      `json:"command"`
-	Workspace     string      `json:"workspace"`
-	Query         string      `json:"query"`
-	Results       []searchRow `json:"results"`
-	Warnings      []string    `json:"warnings"`
-}
-
-func renderSearch(document searchDocument, format string) ([]byte, error) {
-	var buffer bytes.Buffer
-	switch format {
-	case "json":
-		encoder := json.NewEncoder(&buffer)
-		encoder.SetIndent("", "  ")
-		if err := encoder.Encode(document); err != nil {
-			return nil, err
-		}
-	case "jsonl":
-		encoder := json.NewEncoder(&buffer)
-		for _, row := range document.Results {
-			if err := encoder.Encode(row); err != nil {
-				return nil, err
-			}
-		}
-	case "table":
-		writer := tabwriter.NewWriter(&buffer, 0, 4, 2, ' ', 0)
-		fmt.Fprintln(writer, "PACKAGE\tVERSION\tSOURCE\tDESCRIPTION")
-		for _, row := range document.Results {
-			fmt.Fprintf(writer, "%s\t%s\t%s\t%s\n", row.Package, row.Version, row.Source, strings.ReplaceAll(row.Description, "\n", " "))
-		}
-		if err := writer.Flush(); err != nil {
-			return nil, err
-		}
-	case "tsv":
-		fmt.Fprintln(&buffer, "PACKAGE\tVERSION\tSOURCE\tDESCRIPTION")
-		for _, row := range document.Results {
-			description := strings.NewReplacer("\t", " ", "\r", " ", "\n", " ").Replace(row.Description)
-			fmt.Fprintf(&buffer, "%s\t%s\t%s\t%s\n", row.Package, row.Version, row.Source, description)
-		}
-	default:
-		return nil, fmt.Errorf("invalid --format %q (expected table, tsv, json, or jsonl)", format)
-	}
-	return buffer.Bytes(), nil
-}
-
 type planRow struct {
 	Operation string `json:"operation"`
 	Package   string `json:"package"`
-	Version   string `json:"version,omitempty"`
+	Version   string `json:"version"`
 	Path      string `json:"path"`
 }
 
 type planDocument struct {
-	RolledBack    []string  `json:"rolledBack,omitempty"`
-	Conflicting   []string  `json:"conflicting,omitempty"`
-	Unrecovered   []string  `json:"unrecovered,omitempty"`
-	Error         string    `json:"error,omitempty"`
-	Status        string    `json:"status"`
-	Changed       []string  `json:"changed"`
-	Restore       string    `json:"restore"`
-	SchemaVersion int       `json:"schemaVersion"`
-	Command       string    `json:"command"`
-	Workspace     string    `json:"workspace"`
-	DryRun        bool      `json:"dryRun"`
-	Changes       []planRow `json:"changes"`
-	Warnings      []string  `json:"warnings"`
+	cliDocHeader
+	Workspace   string    `json:"workspace"`
+	DryRun      bool      `json:"dryRun"`
+	Changes     []planRow `json:"changes"`
+	Skipped     int       `json:"skipped"`
+	Changed     []string  `json:"changed"`
+	Restore     string    `json:"restore"`
+	RolledBack  []string  `json:"rolledBack"`
+	Conflicting []string  `json:"conflicting"`
+	Unrecovered []string  `json:"unrecovered"`
+	Warnings    []string  `json:"warnings"`
 }
 
-func mutationFlags() (map[string]bool, map[string]bool) {
-	values := cloneFlags(commonValueFlags, "file", "version")
-	bools := cloneFlags(commonBoolFlags, "all", "dry-run", "restore", "interactive", "latest-compatible", "latest-stable")
-	return values, bools
-}
+var planColumns = []cliColumn{{"OPERATION", "operation"}, {"PACKAGE", "package"}, {"VERSION", "version"}, {"PATH", "path"}}
 
-func (r cliRuntime) runMutation(ctx context.Context, verb string, argv []string) ExitCode {
-	values, bools := mutationFlags()
-	args, err := parseCLIArgs(argv, values, bools)
-	if err != nil {
-		fmt.Fprintln(r.stderr, err)
-		return ExitUsage
+func (r *cliRuntime) runMutation(ctx context.Context, verb string, inv *cliInvocation) ExitCode {
+	args := inv.args
+	dryRun := args.bools["dry-run"]
+	doc := &planDocument{
+		cliDocHeader: newDocHeader(verb, "dry-run"), DryRun: dryRun,
+		Changes: []planRow{}, Changed: []string{}, Restore: "not-requested",
+		RolledBack: []string{}, Conflicting: []string{}, Unrecovered: []string{}, Warnings: []string{},
 	}
-	if args.bools["help"] {
-		fmt.Fprint(r.stdout, commandUsage(verb))
-		return ExitSuccess
+	if !dryRun {
+		doc.Status = "unchanged"
 	}
-	if len(args.positionals) != 1 {
-		fmt.Fprint(r.stderr, commandUsage(verb))
-		return ExitUsage
-	}
-	if len(args.values["framework"]) > 0 || len(args.values["source"]) > 0 {
-		fmt.Fprintln(r.stderr, "--framework and --source do not define a supported mutation scope; use --file or --all")
-		return ExitRefused
-	}
-	files := args.values["file"]
-	if args.bools["all"] == (len(files) > 0) {
-		fmt.Fprintln(r.stderr, "choose exactly one mutation scope: repeatable --file or --all")
-		return ExitUsage
-	}
-	if verb == "add" && args.bools["all"] {
-		fmt.Fprintln(r.stderr, "guget add requires one or more explicit --file targets")
-		return ExitUsage
-	}
-	if args.bools["interactive"] && !args.bools["restore"] {
-		fmt.Fprintln(r.stderr, "--interactive requires --restore for mutation commands")
-		return ExitUsage
-	}
-	selectors := 0
-	if args.value("version", "") != "" {
-		selectors++
-	}
-	if args.bools["latest-compatible"] {
-		selectors++
-	}
-	if args.bools["latest-stable"] {
-		selectors++
-	}
-	if verb != "remove" && selectors != 1 {
-		fmt.Fprintln(r.stderr, "choose exactly one version selector: --version, --latest-compatible, or --latest-stable")
-		return ExitUsage
-	}
-	if selectors > 0 && verb == "remove" {
-		fmt.Fprintln(r.stderr, "guget remove does not accept a version selector")
-		return ExitUsage
-	}
+	inv.document = doc
 	if args.bools["latest-compatible"] || args.bools["latest-stable"] {
-		fmt.Fprintln(r.stderr, "latest-version selection requires evaluated framework compatibility and is not available yet")
-		return ExitRefused
+		return inv.fail(ExitRefused, "latest-version selection requires evaluated framework compatibility and is not available yet")
 	}
-	ctx, cancel, err := withTimeout(ctx, args.value("timeout", ""))
-	if err != nil {
-		fmt.Fprintln(r.stderr, err)
-		return ExitUsage
-	}
-	defer cancel()
-
-	root, err := workspaceRoot(args)
-	if err != nil {
-		fmt.Fprintln(r.stderr, err)
-		return ExitWorkspace
-	}
-	snapshot, err := scanWorkspaceWith(root, cliScanOptions(args))
-	if err != nil {
-		fmt.Fprintf(r.stderr, "guget: %v\n", err)
-		return ExitWorkspace
-	}
-	targets, err := mutationTargets(snapshot, root, files, args.bools["all"])
-	if err != nil {
-		fmt.Fprintf(r.stderr, "guget: %v\n", err)
-		return ExitUsage
+	snapshot, code := r.loadCLIWorkspace(ctx, inv, func(root string) { doc.Workspace = root })
+	if code != ExitSuccess {
+		return code
 	}
 	packageID := args.positionals[0]
-	requestedVersion := args.value("version", "")
-	plan, rows, err := buildMutationPlanContext(ctx, verb, packageID, requestedVersion, targets)
+	targets, err := mutationTargets(snapshot, doc.Workspace, args.values["file"], args.bools["all"], packageID)
 	if err != nil {
-		if ctx.Err() != nil {
-			fmt.Fprintf(r.stderr, "guget: %s interrupted: %v\n", verb, ctx.Err())
+		return inv.fail(ExitUsage, "%v", err)
+	}
+	options := mutationOptions{ctx: ctx, runner: r.runner}
+	if verb == "update" && !args.bools["include-pinned"] {
+		options.skipLocked = args.bools["all"]
+		options.refuseLocked = !args.bools["all"]
+	}
+	plan, rows, skipped, err := planPackageMutation(verb, packageID, args.value("version", ""), mutationTargetsFor(targets), options)
+	if err != nil {
+		var evaluation evaluationError
+		var pinned pinnedPackageError
+		switch {
+		case ctx.Err() != nil:
 			return ExitInterrupted
+		case errors.As(err, &evaluation):
+			return inv.fail(ExitWorkspace, "%v", err)
+		case errors.As(err, &pinned):
+			return inv.fail(ExitRefused, "edit refused: %v; pass --include-pinned to update it", err)
+		default:
+			return inv.fail(ExitRefused, "edit refused: %v", err)
 		}
-		fmt.Fprintf(r.stderr, "guget: edit refused: %v\n", err)
-		return ExitRefused
 	}
-	doc := planDocument{SchemaVersion: 1, Command: verb, Workspace: root, DryRun: args.bools["dry-run"], Changes: rows, Warnings: []string{}, Status: "dry-run", Changed: []string{}, Restore: "not-requested"}
-	format := outputFormat(args, r.stdout)
-	if _, err := renderPlan(doc, format); err != nil {
-		fmt.Fprintln(r.stderr, err)
-		return ExitUsage
+	paths := newPathDisplay(snapshot)
+	for i := range rows {
+		rows[i].Path = paths.show(rows[i].Path)
 	}
-	if err := preflightMutationOutput(args.value("output", ""), snapshot); err != nil {
-		fmt.Fprintf(r.stderr, "guget: output unavailable before apply: %v\n", err)
-		return ExitWrite
-	}
-	if args.bools["dry-run"] {
-		data, err := renderPlan(doc, outputFormat(args, r.stdout))
-		if err != nil {
-			fmt.Fprintln(r.stderr, err)
-			return ExitUsage
+	doc.Changes, doc.Skipped = rows, skipped
+	if dryRun {
+		if args.bools["restore"] {
+			doc.Restore = "skipped-dry-run"
 		}
-		return r.writeOutput(args.value("output", ""), data)
+		return inv.emit(cliResult{Document: doc, Items: doc.Changes, Columns: planColumns})
 	}
-	if err := ctx.Err(); err != nil {
+	if ctx.Err() != nil {
 		return ExitInterrupted
 	}
+	applyResult := cliResult{Document: doc, Items: []*planDocument{doc}, Rows: &doc.Changes, Columns: planColumns}
 	result, err := plan.ApplyContext(ctx)
 	if err != nil {
-		fmt.Fprintf(r.stderr, "guget: apply failed: %v\n", err)
-		doc.Status, doc.Error = "failed", err.Error()
-		doc.Changed = append(doc.Changed, result.Changed...)
-		doc.RolledBack, doc.Conflicting, doc.Unrecovered = result.RolledBack, result.Conflicting, result.Unrecovered
+		doc.Status = "failed"
+		doc.Changed = append(doc.Changed, paths.showAll(result.Changed)...)
+		doc.RolledBack = append(doc.RolledBack, paths.showAll(result.RolledBack)...)
+		doc.Conflicting = append(doc.Conflicting, paths.showAll(result.Conflicting)...)
+		doc.Unrecovered = append(doc.Unrecovered, paths.showAll(result.Unrecovered)...)
+		code := inv.fail(ExitWrite, "apply failed: %v", err)
+		message := redactCredentials(inv.failure)
+		doc.Error = &message
 		if len(result.Unrecovered) > 0 {
-			fmt.Fprintf(r.stderr, "guget: inspect and recover these files before retrying: %s\n", strings.Join(result.Unrecovered, ", "))
+			fmt.Fprintf(r.stderr, "guget: inspect and recover these files before retrying: %s\n", strings.Join(doc.Unrecovered, ", "))
 		}
 		if len(result.Conflicting) > 0 {
-			fmt.Fprintf(r.stderr, "guget: external edits were preserved; inspect these conflicts before retrying: %s\n", strings.Join(result.Conflicting, ", "))
+			fmt.Fprintf(r.stderr, "guget: external edits were preserved; inspect these conflicts before retrying: %s\n", strings.Join(doc.Conflicting, ", "))
 		}
-		if data, renderErr := renderPlan(doc, format); renderErr == nil {
-			r.writeOutput(args.value("output", ""), data)
-		}
+		inv.emit(applyResult)
 		if ctx.Err() != nil {
 			return ExitInterrupted
 		}
-		return ExitWrite
+		return code
 	}
-	for _, path := range result.Changed {
+	doc.Changed = append(doc.Changed, paths.showAll(result.Changed)...)
+	for _, path := range doc.Changed {
 		fmt.Fprintf(r.stderr, "%s: changed %s\n", verb, path)
 	}
-	if len(result.Changed) == 0 {
+	if len(doc.Changed) == 0 {
 		fmt.Fprintln(r.stderr, "no changes needed")
-	}
-	doc.Status = "unchanged"
-	if len(result.Changed) > 0 {
+	} else {
 		doc.Status = "changed"
 	}
-	doc.Changed = append(doc.Changed, result.Changed...)
-	code := ExitSuccess
+	code = ExitSuccess
 	if args.bools["restore"] {
 		doc.Restore = "skipped"
-		if len(result.Changed) > 0 {
-			code = r.restoreProjects(ctx, targets, args.bools["interactive"])
+		if len(doc.Changed) > 0 {
+			var restoreRows []restoreRow
+			restoreRows, code = r.restoreProjects(ctx, targets, args.bools["interactive"])
 			doc.Restore = "succeeded"
 			if code != ExitSuccess {
 				doc.Restore = "failed"
+				inv.failure = restoreFailure(restoreRows)
+				message := inv.failure
+				doc.Error = &message
 			}
 		}
 	}
-	data, err := renderPlan(doc, format)
-	if err != nil {
-		fmt.Fprintf(r.stderr, "guget: changes applied but result rendering failed: %v\n", err)
-		return ExitWrite
-	}
-	if outputCode := r.writeOutput(args.value("output", ""), data); outputCode != ExitSuccess {
+	if outputCode := inv.emit(applyResult); outputCode != ExitSuccess {
 		fmt.Fprintln(r.stderr, "guget: package changes were applied; result output failed, inspect files before retrying")
 		return outputCode
 	}
 	return code
 }
 
-func mutationTargets(snapshot *workspaceSnapshot, root string, files []string, all bool) ([]*ParsedProject, error) {
+func mutationTargetsFor(projects []*ParsedProject) []mutationTarget {
+	targets := make([]mutationTarget, 0, len(projects))
+	for _, project := range projects {
+		targets = append(targets, mutationTarget{project: project})
+	}
+	return targets
+}
+
+// mutationTargets resolves --file paths to discovered projects. With --all it
+// returns only the projects that reference packageID, as the TUI does, so an
+// unrelated project that needs MSBuild evaluation cannot abort the plan. An
+// empty packageID selects every project.
+func mutationTargets(snapshot *workspaceSnapshot, root string, files []string, all bool, packageID string) ([]*ParsedProject, error) {
+	if all {
+		if packageID == "" {
+			return append([]*ParsedProject(nil), snapshot.ParsedProjects...), nil
+		}
+		var targets []*ParsedProject
+		for _, target := range declaredPackageTargets(snapshot.ParsedProjects, packageID) {
+			targets = append(targets, target.project)
+		}
+		return targets, nil
+	}
 	byPath := make(map[string]*ParsedProject, len(snapshot.ParsedProjects))
 	for _, project := range snapshot.ParsedProjects {
 		abs, err := filepath.Abs(project.FilePath)
@@ -1088,9 +1120,6 @@ func mutationTargets(snapshot *workspaceSnapshot, root string, files []string, a
 			return nil, err
 		}
 		byPath[filepath.Clean(abs)] = project
-	}
-	if all {
-		return append([]*ParsedProject(nil), snapshot.ParsedProjects...), nil
 	}
 	var targets []*ParsedProject
 	seen := make(map[string]bool)
@@ -1116,122 +1145,114 @@ func mutationTargets(snapshot *workspaceSnapshot, root string, files []string, a
 	return targets, nil
 }
 
-func renderPlan(doc planDocument, format string) ([]byte, error) {
-	var buffer bytes.Buffer
-	switch format {
-	case "json":
-		encoder := json.NewEncoder(&buffer)
-		encoder.SetIndent("", "  ")
-		if err := encoder.Encode(doc); err != nil {
-			return nil, err
-		}
-	case "jsonl":
-		encoder := json.NewEncoder(&buffer)
-		if !doc.DryRun {
-			if err := encoder.Encode(doc); err != nil {
-				return nil, err
-			}
-			break
-		}
-		for _, row := range doc.Changes {
-			if err := encoder.Encode(row); err != nil {
-				return nil, err
-			}
-		}
-	case "table":
-		writer := tabwriter.NewWriter(&buffer, 0, 4, 2, ' ', 0)
-		fmt.Fprintln(writer, "OPERATION\tPACKAGE\tVERSION\tPATH")
-		for _, row := range doc.Changes {
-			fmt.Fprintf(writer, "%s\t%s\t%s\t%s\n", row.Operation, row.Package, row.Version, row.Path)
-		}
-		if err := writer.Flush(); err != nil {
-			return nil, err
-		}
-	case "tsv":
-		fmt.Fprintln(&buffer, "OPERATION\tPACKAGE\tVERSION\tPATH")
-		for _, row := range doc.Changes {
-			fmt.Fprintf(&buffer, "%s\t%s\t%s\t%s\n", row.Operation, row.Package, row.Version, row.Path)
-		}
-	default:
-		return nil, fmt.Errorf("invalid --format %q (expected table, tsv, json, or jsonl)", format)
-	}
-	return buffer.Bytes(), nil
+type restoreRow struct {
+	Project     string  `json:"project"`
+	ProjectPath string  `json:"projectPath"`
+	Status      string  `json:"status"`
+	Error       *string `json:"error"`
 }
 
-func (r cliRuntime) runRestore(ctx context.Context, argv []string) ExitCode {
-	values := map[string]bool{"project": true, "timeout": true, "file": true}
-	bools := cloneFlags(commonBoolFlags, "all", "interactive")
-	args, err := parseCLIArgs(argv, values, bools)
-	if err != nil || len(args.positionals) != 0 {
-		if err != nil {
-			fmt.Fprintln(r.stderr, err)
-		} else {
-			fmt.Fprint(r.stderr, commandUsage("restore"))
-		}
-		return ExitUsage
-	}
-	if args.bools["help"] {
-		fmt.Fprint(r.stdout, commandUsage("restore"))
-		return ExitSuccess
-	}
-	ctx, cancel, err := withTimeout(ctx, args.value("timeout", ""))
-	if err != nil {
-		fmt.Fprintln(r.stderr, err)
-		return ExitUsage
-	}
-	defer cancel()
-	files := args.values["file"]
-	if args.bools["all"] == (len(files) > 0) {
-		fmt.Fprintln(r.stderr, "choose exactly one restore scope: repeatable --file or --all")
-		return ExitUsage
-	}
-	root, err := workspaceRoot(args)
-	if err != nil {
-		fmt.Fprintln(r.stderr, err)
-		return ExitWorkspace
-	}
-	snapshot, err := scanWorkspaceWith(root, cliScanOptions(args))
-	if err != nil {
-		fmt.Fprintf(r.stderr, "guget: %v\n", err)
-		return ExitWorkspace
-	}
-	targets, err := mutationTargets(snapshot, root, files, args.bools["all"])
-	if err != nil {
-		fmt.Fprintf(r.stderr, "guget: %v\n", err)
-		return ExitUsage
-	}
-	return r.restoreProjects(ctx, targets, args.bools["interactive"])
+type restoreDocument struct {
+	cliDocHeader
+	Workspace string       `json:"workspace"`
+	Projects  []restoreRow `json:"projects"`
+	Warnings  []string     `json:"warnings"`
 }
 
-func (r cliRuntime) restoreProjects(ctx context.Context, projects []*ParsedProject, interactive bool) ExitCode {
+var restoreColumns = []cliColumn{{"PROJECT", "project"}, {"STATUS", "status"}, {"PATH", "projectPath"}, {"ERROR", "error"}}
+
+func (r *cliRuntime) runRestore(ctx context.Context, inv *cliInvocation) ExitCode {
+	doc := &restoreDocument{cliDocHeader: newDocHeader("restore", "ok"), Projects: []restoreRow{}, Warnings: []string{}}
+	inv.document = doc
+	snapshot, code := r.loadCLIWorkspace(ctx, inv, func(root string) { doc.Workspace = root })
+	if code != ExitSuccess {
+		return code
+	}
+	targets, err := mutationTargets(snapshot, doc.Workspace, inv.args.values["file"], inv.args.bools["all"], "")
+	if err != nil {
+		return inv.fail(ExitUsage, "%v", err)
+	}
+	rows, code := r.restoreProjects(ctx, targets, inv.args.bools["interactive"])
+	doc.Projects = rows
+	if code == ExitInterrupted || ctx.Err() != nil {
+		return ExitInterrupted
+	}
+	if code != ExitSuccess {
+		doc.Status = "failed"
+		inv.failure = restoreFailure(rows)
+		message := inv.failure
+		doc.Error = &message
+	}
+	if outputCode := inv.emit(cliResult{Document: doc, Items: doc.Projects, Columns: restoreColumns}); outputCode != ExitSuccess {
+		return outputCode
+	}
+	return code
+}
+
+func restoreFailure(rows []restoreRow) string {
+	failed := 0
+	for _, row := range rows {
+		if row.Status == "failed" {
+			failed++
+		}
+	}
+	return fmt.Sprintf("restore failed for %d of %d project(s)", failed, len(rows))
+}
+
+// restoreProjects restores every project in order. A failing project does not
+// stop the rest; the result is ExitRestore when any failed. An interrupt or
+// timeout stops at the current project.
+func (r *cliRuntime) restoreProjects(ctx context.Context, projects []*ParsedProject, interactive bool) ([]restoreRow, ExitCode) {
 	runCommand := r.runCommand
 	if runCommand == nil {
 		runCommand = runCLICommand
 	}
+	stdin := r.stdin
+	if stdin == nil {
+		stdin = strings.NewReader("")
+	}
+	rows := make([]restoreRow, 0, len(projects))
+	code := ExitSuccess
 	for _, project := range projects {
+		if ctx.Err() != nil {
+			return rows, ExitInterrupted
+		}
+		row := restoreRow{Project: project.FileName, ProjectPath: project.FilePath, Status: "succeeded"}
+		if row.Project == "" {
+			row.Project = filepath.Base(project.FilePath)
+		}
 		args := []string{"restore", project.FilePath}
 		if interactive {
 			args = append(args, "--interactive")
 		}
-		if err := runCommand(ctx, "dotnet", args, r.stdin, r.stderr, r.stderr); err != nil {
+		if err := runCommand(ctx, "dotnet", args, stdin, r.stderr, r.stderr); err != nil {
+			row.Status = "failed"
+			row.Error = stringPtr(redactCredentials(err.Error()))
+			rows = append(rows, row)
 			if ctx.Err() != nil {
-				fmt.Fprintf(r.stderr, "guget: restore interrupted: %v\n", ctx.Err())
-				return ExitInterrupted
+				return rows, ExitInterrupted
 			}
-			fmt.Fprintf(r.stderr, "guget: restore %s: %v\n", project.FilePath, err)
-			return ExitRestore
+			fmt.Fprintf(r.stderr, "guget: restore %s: %v\n", project.FilePath, redactCredentials(err.Error()))
+			code = ExitRestore
+			continue
 		}
+		rows = append(rows, row)
 	}
-	return ExitSuccess
+	return rows, code
 }
 
-func (r cliRuntime) emitWarnings(warnings []string) {
-	for _, warning := range warnings {
-		fmt.Fprintf(r.stderr, "guget: warning: %s\n", warning)
+// workspaceOutputInputs lists the files an --output path must never replace.
+func workspaceOutputInputs(snapshot *workspaceSnapshot) []string {
+	inputs := workspaceInputPaths(snapshot.ProjectDir, snapshot)
+	for _, project := range snapshot.ParsedProjects {
+		inputs = append(inputs, project.FilePath)
 	}
+	return inputs
 }
 
-func preflightMutationOutput(path string, snapshot *workspaceSnapshot) error {
+// preflightOutputPath refuses an --output path that is one of inputs, is not a
+// regular file, or sits in a directory where Guget cannot create files.
+func preflightOutputPath(path string, inputs []string) error {
 	if path == "" || path == "-" {
 		return nil
 	}
@@ -1246,7 +1267,10 @@ func preflightMutationOutput(path string, snapshot *workspaceSnapshot) error {
 	if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
 		return statErr
 	}
-	for _, source := range workspaceInputPaths(snapshot.ProjectDir, snapshot) {
+	for _, source := range inputs {
+		if source == "" {
+			continue
+		}
 		sourceAbs, _ := filepath.Abs(source)
 		info, err := os.Stat(sourceAbs)
 		if outputPathIdentity(sourceAbs) == outputPathIdentity(abs) || existing != nil && err == nil && os.SameFile(existing, info) {

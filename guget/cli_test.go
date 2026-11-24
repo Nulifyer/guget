@@ -86,8 +86,8 @@ func TestDispatchCLI_ListJSONPreservesRequestedExpression(t *testing.T) {
 		t.Fatalf("document = %#v", document)
 	}
 	row := document.Packages[0]
-	if row.RequestedExpression != "[1.2.0,2.0.0)" {
-		t.Fatalf("requested = %q", row.RequestedExpression)
+	if row.RequestedExpression == nil || *row.RequestedExpression != "[1.2.0,2.0.0)" {
+		t.Fatalf("requested = %v", row.RequestedExpression)
 	}
 	if row.ProjectPath != project {
 		t.Fatalf("project path = %q, want %q", row.ProjectPath, project)
@@ -113,7 +113,7 @@ func TestDispatchCLI_AddDryRunAndApply(t *testing.T) {
 	if err := json.Unmarshal([]byte(stdout), &plan); err != nil {
 		t.Fatalf("invalid plan JSON: %v", err)
 	}
-	if !plan.DryRun || len(plan.Changes) != 1 || plan.Changes[0].Path != canonicalTestOwnerPath(t, project) {
+	if !plan.DryRun || len(plan.Changes) != 1 || plan.Changes[0].Path != project {
 		t.Fatalf("plan = %#v", plan)
 	}
 	afterDryRun, _ := os.ReadFile(project)
@@ -146,7 +146,7 @@ func TestDispatchCLI_AddIgnoresDisabledCentralPackageFile(t *testing.T) {
 	if err := json.Unmarshal([]byte(stdout), &plan); err != nil {
 		t.Fatal(err)
 	}
-	if len(plan.Changes) != 1 || plan.Changes[0].Path != canonicalTestOwnerPath(t, project) || plan.Changes[0].Version != "1.4.0" {
+	if len(plan.Changes) != 1 || plan.Changes[0].Path != project || plan.Changes[0].Version != "1.4.0" {
 		t.Fatalf("plan = %#v", plan)
 	}
 }
@@ -172,7 +172,7 @@ func TestRestoreProjectsPassesInteractiveFlag(t *testing.T) {
 					return nil
 				},
 			}
-			if code := runtime.restoreProjects(context.Background(), []*ParsedProject{project}, test.interactive); code != ExitSuccess {
+			if _, code := runtime.restoreProjects(context.Background(), []*ParsedProject{project}, test.interactive); code != ExitSuccess {
 				t.Fatalf("code = %d", code)
 			}
 			if gotName != "dotnet" || strings.Join(gotArgs, "\x00") != strings.Join(test.wantArgs, "\x00") {
@@ -281,7 +281,7 @@ func TestDispatchCLI_SearchUsesContextAwareConfiguredSource(t *testing.T) {
 			return &NugetService{sourceName: source.Name, sourceURL: source.URL, searchBase: "https://packages.example.test/search", regBase: "https://packages.example.test/registration/", client: &http.Client{Transport: transport}}, nil
 		},
 	}
-	code := runtime.runSearch(context.Background(), []string{"Example", "--project", root, "--format", "json"})
+	code := runtime.dispatch(context.Background(), []string{"search", "Example", "--project", root, "--format", "json"})
 	if code != ExitSuccess || stderr.String() != "" {
 		t.Fatalf("code = %d, stderr = %q", code, stderr.String())
 	}
@@ -328,7 +328,7 @@ func TestMutationOutputIsValidatedBeforeWrites(t *testing.T) {
 				args = append(args, "--output", project)
 			case "invalid-version":
 				args = append(args, "--version", "not-a-version")
-				expected = ExitRefused
+				expected = ExitUsage
 			}
 			code, _, diagnostic := runCLIForTest(t, args...)
 			if code != expected {
@@ -372,7 +372,7 @@ func TestSearchFailurePreservesOutputAndReportsWarnings(t *testing.T) {
 	mustWriteFile(t, output, "previous-results")
 	var stdout, stderr bytes.Buffer
 	runtime := cliRuntime{stdout: &stdout, stderr: &stderr, newService: func(context.Context, NugetSource) (*NugetService, error) { return nil, errors.New("offline") }}
-	code := runtime.runSearch(context.Background(), []string{"Example", "--project", root, "--output", output})
+	code := runtime.dispatch(context.Background(), []string{"search", "Example", "--project", root, "--output", output})
 	if code != ExitSource || !strings.Contains(stderr.String(), "source test unavailable") {
 		t.Fatalf("code=%d stderr=%s", code, stderr.String())
 	}
@@ -381,8 +381,8 @@ func TestSearchFailurePreservesOutputAndReportsWarnings(t *testing.T) {
 		t.Fatal("fatal search replaced output")
 	}
 	stderr.Reset()
-	code = runtime.runSearch(context.Background(), []string{"Example", "--project", root, "--source", "test", "--source", "typo"})
-	if code != ExitSource || !strings.Contains(stderr.String(), `unknown --source "typo"`) {
+	code = runtime.dispatch(context.Background(), []string{"search", "Example", "--project", root, "--source", "test", "--source", "typo"})
+	if code != ExitUsage || !strings.Contains(stderr.String(), `unknown --source "typo"`) {
 		t.Fatalf("code=%d stderr=%s", code, stderr.String())
 	}
 }
@@ -403,7 +403,7 @@ func TestMutationReportingFailureExplainsCommittedChanges(t *testing.T) {
 	project := writeCLIProject(t, root, "App", `<Project><ItemGroup><PackageReference Include="Example" Version="1.0.0" /></ItemGroup></Project>`)
 	var stderr bytes.Buffer
 	runtime := cliRuntime{stdout: failingCLIWriter{}, stderr: &stderr}
-	code := runtime.runMutation(context.Background(), "update", []string{"Example", "--project", root, "--file", project, "--version", "2.0.0", "--format", "json"})
+	code := runtime.dispatch(context.Background(), []string{"update", "Example", "--project", root, "--file", project, "--version", "2.0.0", "--format", "json"})
 	data, _ := os.ReadFile(project)
 	if code != ExitWrite || !strings.Contains(string(data), `Version="2.0.0"`) || !strings.Contains(stderr.String(), "package changes were applied") {
 		t.Fatalf("code=%d project=%s stderr=%s", code, data, stderr.String())
@@ -417,7 +417,7 @@ func TestMutationRestoreFailureHasMachineResult(t *testing.T) {
 	runtime := cliRuntime{stdout: &stdout, stderr: &stderr, runCommand: func(context.Context, string, []string, io.Reader, io.Writer, io.Writer) error {
 		return errors.New("restore unavailable")
 	}}
-	code := runtime.runMutation(context.Background(), "update", []string{"Example", "--project", root, "--file", project, "--version", "2.0.0", "--restore", "--format", "jsonl"})
+	code := runtime.dispatch(context.Background(), []string{"update", "Example", "--project", root, "--file", project, "--version", "2.0.0", "--restore", "--format", "jsonl"})
 	var result planDocument
 	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
 		t.Fatal(err)
@@ -429,9 +429,12 @@ func TestMutationRestoreFailureHasMachineResult(t *testing.T) {
 
 func TestUnsupportedReadAndRestoreFlagsAreRejected(t *testing.T) {
 	for _, args := range [][]string{
-		{"restore", "--all", "--format", "json"},
-		{"restore", "--all", "--output", "result.json"},
 		{"restore", "--all", "--framework", "net8.0"},
+		{"list", "--source", "nuget.org"},
+		{"show", "Example", "--source", "nuget.org"},
+		{"update", "Example", "--all", "--version", "2.0.0", "--framework", "net8.0"},
+		{"add", "Example", "--file", "App.csproj", "--version", "2.0.0", "--source", "nuget.org"},
+		{"remove", "Example", "--all", "--version", "2.0.0"},
 		{"sources", "--source", "typo"},
 		{"search", "Example", "--framework", "net8.0"},
 	} {
@@ -488,13 +491,17 @@ func TestMutationTimeoutPreservesInputsAndReportsInterruption(t *testing.T) {
 		t.Fatal(err)
 	}
 	code, stdout, stderr := runCLIForTest(t, "update", "Dapper", "--project", root, "--file", project, "--version", "2.1.89", "--timeout", "1ns", "--format", "json", "--output", output)
-	if code != ExitInterrupted || stdout != "" {
+	if code != ExitTimeout || stdout != "" || !strings.Contains(stderr, "guget: timed out after 1ns") {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
 	after, _ := os.ReadFile(project)
-	result, _ := os.ReadFile(output)
-	if !bytes.Equal(before, after) || string(result) != "existing output" {
-		t.Fatal("interrupted planning changed inputs or output")
+	if !bytes.Equal(before, after) {
+		t.Fatal("timed-out planning changed inputs")
+	}
+	var result planDocument
+	data, _ := os.ReadFile(output)
+	if err := json.Unmarshal(data, &result); err != nil || result.Status != "timed-out" || result.Error == nil {
+		t.Fatalf("timeout document=%s err=%v", data, err)
 	}
 }
 
@@ -504,7 +511,7 @@ func TestRestoreDeadlineReportsInterruption(t *testing.T) {
 	runtime := cliRuntime{stdin: strings.NewReader(""), stdout: io.Discard, stderr: io.Discard,
 		runCommand: func(ctx context.Context, _ string, _ []string, _ io.Reader, _, _ io.Writer) error { return ctx.Err() },
 	}
-	if code := runtime.restoreProjects(ctx, []*ParsedProject{{FilePath: "App.csproj"}}, false); code != ExitInterrupted {
+	if _, code := runtime.restoreProjects(ctx, []*ParsedProject{{FilePath: "App.csproj"}}, false); code != ExitInterrupted {
 		t.Fatalf("deadline returned %d", code)
 	}
 }

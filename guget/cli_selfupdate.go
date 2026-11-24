@@ -9,19 +9,22 @@ import (
 	"github.com/nulifyer/guget/internal/selfupdate"
 )
 
-func (r cliRuntime) runSelfUpdate(ctx context.Context, argv []string, updater *selfupdate.Updater, executable func() (string, error)) ExitCode {
-	args, err := parseCLIArgs(argv, nil, map[string]bool{"check": true, "help": true})
-	if err != nil || len(args.positionals) != 0 {
-		if err != nil {
-			fmt.Fprintln(r.stderr, err)
-		}
-		fmt.Fprint(r.stderr, commandUsage("self-update"))
-		return ExitUsage
-	}
-	if args.bools["help"] {
-		fmt.Fprint(r.stdout, commandUsage("self-update"))
+// runSelfUpdate parses argv itself so tests can inject the updater.
+func (r *cliRuntime) runSelfUpdate(ctx context.Context, argv []string, updater *selfupdate.Updater, executable func() (string, error)) ExitCode {
+	spec := lookupCLIVerb("self-update")
+	if wantsHelp(argv) {
+		fmt.Fprint(r.stdout, verbHelp(spec))
 		return ExitSuccess
 	}
+	inv, err := r.prepareInvocation(spec, argv)
+	if err != nil {
+		return r.usageError(spec, err)
+	}
+	return r.runSelfUpdateWith(ctx, inv, updater, executable)
+}
+
+func (r *cliRuntime) runSelfUpdateWith(ctx context.Context, inv *cliInvocation, updater *selfupdate.Updater, executable func() (string, error)) ExitCode {
+	args := inv.args
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	release, err := updater.Latest(ctx)
