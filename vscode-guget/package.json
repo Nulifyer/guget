@@ -172,7 +172,7 @@
             "type": "string"
           },
           "default": [],
-          "description": "Additional CLI arguments to pass to guget."
+          "description": "Additional TUI arguments to pass to guget, such as --no-mouse."
         }
       }
     }

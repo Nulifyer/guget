@@ -35,7 +35,7 @@ or the headless CLI for scripts and agents.
 | 🔄 | Restore | Run restore for a selected project or the workspace. |
 | 🖱️ | Keyboard and mouse | Navigate panels, select versions, open links, and use visible action buttons. |
 | 🎨 | Themes and layout | Choose light or dark themes, resize panels, and sort package lists. |
-| ⌨️ | CLI for scripts and agents | Inspect JSON, preview scoped changes, and manage packages without the TUI. |
+| ⌨️ | CLI for scripts and agents | List outdated, vulnerable, or deprecated packages as JSON, preview scoped changes, and apply them without the TUI. |
 | 🧩 | VS Code integration | Open Guget in an editor tab from project files, the command palette, or the status bar. |
 
 <a id="installation"></a>
@@ -85,6 +85,7 @@ and paths with your own.
 
 ## Guides
 
+- [Install and update Guget](docs/installation.md): installers, custom locations, source builds, and `self-update`.
 - [Use the TUI](docs/tui.md): navigate, add, update, remove, restore, and browse package details.
 - [Use the CLI](docs/cli.md): explicit project scope, JSON output, and scripting examples.
 - [Configure package sources](docs/sources.md): public and private feeds, source mapping, and local feeds.

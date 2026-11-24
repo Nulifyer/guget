@@ -43,6 +43,20 @@ Integration tests contact public services and use pinned external repository
 fixtures. Keep unit tests deterministic with temporary projects, injected
 runners, and local HTTP servers.
 
+Some integration tests compare Guget with `dotnet` itself. They run
+`dotnet restore`, `dotnet list package --outdated`, `dotnet package update`,
+and `dotnet add package` or `dotnet remove package` against local feeds. Each
+test checks that Guget reaches the same result for NuGet configuration, package
+declarations, framework compatibility, or the stable update target. The tests
+give `dotnet` a temporary `HOME` and NuGet folders, and give Guget a temporary
+settings file, so your configuration and caches do not affect them. These
+tests need the .NET SDK on Linux. They skip on other systems or when `dotnet`
+is missing. Run them when you change one of those areas:
+
+```bash
+go test -tags=integration -run 'MatchesDotnet|MatchDotnet' -timeout=20m .
+```
+
 ## Check extension changes
 
 Run from `vscode-guget/`:
