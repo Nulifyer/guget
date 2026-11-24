@@ -46,8 +46,11 @@ guget list --project ./src --format json
 ```
 
 Choose a directory above the intended projects. Guget scans its descendants and
-excludes common build-output directories. Check that project XML is readable
-and complete, especially during an editor save.
+excludes common build-output directories. Inside a Git repository it also skips
+paths that Git ignores. If a project is missing because its directory is
+ignored, pass `--include-ignored`. See
+[project support](project-support.md). Check that project XML is readable and
+complete, especially during an editor save.
 
 For CLI changes, `--file` is relative to `--project`:
 
@@ -91,8 +94,23 @@ guget restore --project ./src --file App/App.csproj --interactive
 ```
 
 Replace `company` and the package ID with values from your feed. Run interactive
-authentication in a terminal. Keep credentials out of committed files and shared
-logs. See [private feeds](sources.md#use-a-private-feed).
+authentication in a terminal.
+
+If Guget sends no credentials or the wrong ones, check how they reach it:
+
+- A `NuGetPackageSourceCredentials_<source name>` variable must match the
+  source key exactly, including case on Linux, and have the form
+  `Username=<user>;Password=<token>`. It overrides the configuration file.
+- A `%NAME%` reference in a configuration value expands only when `NAME` is set
+  in the environment that runs Guget. An undefined `%NAME%` stays as written,
+  and `$NAME` is never expanded.
+- A `<packageSourceCredentials>` entry needs both a username and a password.
+  Otherwise Guget, like `dotnet restore`, rejects the whole file.
+- Encrypted `Password` values work only on Windows. Use `ClearTextPassword`
+  with a `%NAME%` reference elsewhere.
+
+Keep credentials out of committed files and shared logs. See
+[private feeds](sources.md#use-a-private-feed).
 
 ## Sources exist but search returns no results
 
@@ -136,10 +154,33 @@ guget show Newtonsoft.Json --project ./src --format json
 
 A restore failure does not undo a successful reference change. Correct the feed,
 SDK, compatibility, or lock-file problem, then rerun restore. For a shared CPM
-change, restore every affected project.
+change, restore every affected project. An edit with `--restore` already
+includes the projects that read the changed file and the projects that
+reference them.
+
+A project with a `packages.lock.json` in locked mode (`RestoreLockedMode`)
+fails with NU1004 when its dependencies no longer match the lock file. After a
+Guget edit with `--restore`, Guget regenerates such lock files with
+`dotnet restore --force-evaluate`. `guget restore` on its own never adds that
+option. If a lock file is out of date after an edit made outside Guget, run
+`dotnet restore --force-evaluate` for that project, then commit the
+regenerated lock file. See
+[restore after an edit](project-support.md#restore-after-an-edit).
 
 For a write or rollback error, inspect the reported files and your version-control
 diff before taking further action.
+
+## A command stops with exit code 124
+
+A time limit expired, and Guget printed `guget: timed out after` and the
+duration. `search` stops after 30 seconds by default. `list` with
+`--outdated`, `--vulnerable`, `--deprecated`, or `--metadata`, and `update`
+with `--latest`, stop fetching package metadata after 30 seconds. Pass a longer
+`--timeout`, such as `--timeout 2m`, for a slow feed. `--timeout` bounds the
+whole command, including workspace scanning and MSBuild evaluation.
+
+Exit code 124 differs from 130, which means the command was interrupted. After
+either code, check the project files before retrying a mutation.
 
 ## A version says today or has no date
 

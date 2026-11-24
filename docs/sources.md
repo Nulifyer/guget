@@ -118,8 +118,9 @@ nuget.org:
 An exact ID wins over a prefix, and a longer prefix wins over a shorter pattern
 or `*`. A `*` ends a prefix wherever it appears, so `Contoso*` and `Contoso.*`
 are both prefixes. A mapping entry for a source in a closer configuration file
-replaces the entry for that source in files further away. If mapping is configured and nothing matches a package, Guget has no
-eligible metadata source for it. Correct the mapping or feed availability rather
+replaces the entry for that source in files further away. If mapping is
+configured and nothing matches a package, Guget has no eligible metadata source
+for it. Correct the mapping or feed availability rather
 than expecting fallback to an unrelated source.
 
 Inspect `patterns` in `guget sources --format json` output for the workspace.
@@ -145,6 +146,11 @@ Relative directory paths resolve from the configuration file. Local directories
 and UNC shares appear as `restore-only`. They can supply restore packages but
 cannot supply Guget's search or version metadata. This is expected for a local
 feed, even when restore succeeds.
+
+A package that only local feeds supply has no version metadata, so Guget cannot
+find its update target. `list --outdated` warns about it and exits 7, or exits 3
+when no package in the listing has metadata. `update --latest` exits 3. Use
+`update --version` to write a version that only a local feed has.
 
 ## How Guget finds configuration
 
