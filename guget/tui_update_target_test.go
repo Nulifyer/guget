@@ -49,7 +49,7 @@ func TestTUIIncompatibleOnlyUpdateIsNotOffered(t *testing.T) {
 	}
 	// Nothing compatible newer, and also nothing compatible at all.
 	setTestPackage(m, "A", "2.0.0@net9.0", "3.0.0@net9.0")
-	if row := selectedRow(m); row.updateTarget != nil || row.statusIcon() != "✓" || availableVersionText(row) != "-" {
+	if row := selectedRow(m); row.updateTarget != nil || row.statusIcon() != "✓" || availableVersionText(row) != "- (3.0.0)" {
 		t.Fatalf("icon %s available %q", row.statusIcon(), availableVersionText(row))
 	}
 	before, _ := os.ReadFile(path)

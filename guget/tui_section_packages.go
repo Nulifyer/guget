@@ -29,6 +29,11 @@ func currentVersionText(row packageRow) string {
 // availableVersionText returns the plain text for the merged available column.
 func availableVersionText(row packageRow) string {
 	if row.latestCompatible == nil {
+		// No version qualifies as the update target; the a key's choice still
+		// follows in parentheses.
+		if row.latestStable != nil {
+			return "- (" + row.latestStable.SemVer.String() + ")"
+		}
 		return "-"
 	}
 	compat := row.latestCompatible.SemVer.String()
@@ -45,10 +50,27 @@ func availableDependencyMarker(row packageRow) string {
 	return ""
 }
 
-// renderAvailableVersion returns the styled string for the merged available column.
-func renderAvailableVersion(row packageRow) string {
+// availableVersionParts returns the styled update target and, when the stable
+// policy chooses differently, that choice in parentheses (empty otherwise).
+func availableVersionParts(row packageRow) (target, stable string) {
+	stableStyle := func() style.Style {
+		switch {
+		case row.latestStable.SemVer.IsNewerThan(row.ref.Version):
+			return stylePurple
+		case row.ref.Version.IsNewerThan(row.latestStable.SemVer):
+			return styleMuted
+		default:
+			return styleGreen
+		}
+	}
+	parenthesized := func() string {
+		return styleMuted.Render("(") + stableStyle().Render(row.latestStable.SemVer.String()) + styleMuted.Render(")")
+	}
 	if row.latestCompatible == nil {
-		return styleSubtle.Render("-")
+		if row.latestStable != nil {
+			return styleSubtle.Render("-"), parenthesized()
+		}
+		return styleSubtle.Render("-"), ""
 	}
 	compat := row.latestCompatible.SemVer.String()
 	var compStyle style.Style
@@ -60,20 +82,42 @@ func renderAvailableVersion(row packageRow) string {
 	default:
 		compStyle = styleGreen
 	}
+	target = compStyle.Render(compat) + styleYellow.Render(availableDependencyMarker(row))
 	if row.latestStable != nil && row.latestStable.SemVer.String() != compat {
-		latest := row.latestStable.SemVer.String()
-		var latestStyle style.Style
-		switch {
-		case row.latestStable.SemVer.IsNewerThan(row.ref.Version):
-			latestStyle = stylePurple
-		case row.ref.Version.IsNewerThan(row.latestStable.SemVer):
-			latestStyle = styleMuted
-		default:
-			latestStyle = styleGreen
-		}
-		return compStyle.Render(compat) + styleYellow.Render(availableDependencyMarker(row)) + " " + styleMuted.Render("(") + latestStyle.Render(latest) + styleMuted.Render(")")
+		stable = parenthesized()
 	}
-	return compStyle.Render(compat) + styleYellow.Render(availableDependencyMarker(row))
+	return target, stable
+}
+
+// renderAvailableVersion returns the styled string for the merged available column.
+func renderAvailableVersion(row packageRow) string {
+	target, stable := availableVersionParts(row)
+	if stable != "" {
+		return target + " " + stable
+	}
+	return target
+}
+
+// renderAvailableCell fits the Available value into a column of width cells,
+// keeping the one-cell gutter the Requested column has. When the pair does
+// not fit, the stable choice collapses to "(...)" before the update target
+// itself is cut, so a narrow column never shows half a version as a whole one.
+func renderAvailableCell(row packageRow, width int) string {
+	limit := max(1, width-1)
+	target, stable := availableVersionParts(row)
+	if stable == "" {
+		if style.Width(target) <= limit {
+			return target
+		}
+	} else if style.Width(target)+1+style.Width(stable) <= limit {
+		return target + " " + stable
+	} else if style.Width(target)+len(" (...)") <= limit {
+		return target + " " + styleMuted.Render("(...)")
+	}
+	if limit <= 3 {
+		return truncateStyled(target, limit)
+	}
+	return truncateStyled(target, limit-3) + styleMuted.Render("...")
 }
 
 func renderCurrentVersion(row packageRow, width int) string {
@@ -131,6 +175,12 @@ func (m *App) packageColumns(w int) packageColumnLayout {
 	showSource := budget >= minNameW+availableW+sourceW
 	if showSource {
 		budget -= sourceW
+	}
+	// A long prerelease or a "target (stable)" pair must not hide the column
+	// for every row: narrow it to what the package column can spare, down to
+	// the header's width, and let the cells show an ellipsis.
+	if spare := budget - minNameW; spare < availableW && spare >= len("Available")+versionColPad {
+		availableW = spare
 	}
 	showAvail := budget >= minNameW+availableW
 	if showAvail {
@@ -254,7 +304,7 @@ func (p *packagePanel) Draw(r ui.Rect) string {
 
 		// available version (merged compatible + latest)
 		if showAvail {
-			line += padRight(renderAvailableVersion(row), colAvail)
+			line += padRight(renderAvailableCell(row, colAvail), colAvail)
 		}
 
 		if showSource {
