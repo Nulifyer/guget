@@ -39,6 +39,9 @@ type App struct {
 	send        func(ui.Event)
 	mouse       bool
 
+	// updateTarget is the update-target policy for rows and quick updates.
+	updateTarget UpdateTarget
+
 	updateVersion        string
 	updateChecksDisabled bool
 	updateCachePath      string
@@ -143,6 +146,7 @@ func NewApp(projectDir string, snapshot *workspaceSnapshot, initialLogLines []st
 		projectDir:           projectDir,
 		scanOptions:          workspaceScanOptions{IncludeIgnored: flags.IncludeIgnored},
 		mouse:                !flags.NoMouse,
+		updateTarget:         updateTargetOrDefault(flags.UpdateTarget),
 		updateChecksDisabled: flags.NoUpdateCheck,
 		sourceSignature:      workspaceSourceSignature(snapshot.Sources, snapshot.SourceMapping),
 		sourceInputRevisions: snapshot.InputRevisions,

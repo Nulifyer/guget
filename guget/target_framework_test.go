@@ -359,7 +359,7 @@ func TestPickerCursorAndAvailableAgree(t *testing.T) {
 	} {
 		info := &PackageInfo{Versions: versions}
 		latest := info.LatestStableForFramework(targets)
-		cursor := defaultVersionCursor(versions, targets)
+		cursor := defaultVersionCursor(versions, targets, nil, UpdateTargetCompatibleStable)
 		if latest == nil {
 			t.Fatalf("%v: no compatible version", targets.ToSlice())
 		}

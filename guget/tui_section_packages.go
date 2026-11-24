@@ -286,16 +286,44 @@ func versionCompatible(v PackageVersion, targets Set[TargetFramework]) bool {
 	return v.compatibilityFor(targets) != FrameworkIncompatible
 }
 
-// defaultVersionCursor returns the index of the first listed, stable,
-// compatible version in a newest-first sorted slice — the natural default
-// selection. Falls back to 0 if nothing matches.
-func defaultVersionCursor(versions []PackageVersion, targets Set[TargetFramework]) int {
-	for i, v := range versions {
-		if !v.SemVer.IsPreRelease() && !v.Unlisted && versionCompatible(v, targets) {
+// defaultVersionCursor returns the index, in a newest-first sorted slice, of
+// the version the update-target policy chooses for refs (nil when adding) and
+// targets — the natural default selection. Falls back to 0 if nothing
+// qualifies.
+func defaultVersionCursor(versions []PackageVersion, targets Set[TargetFramework], refs []PackageReference, policy UpdateTarget) int {
+	candidate := assessPackage(&PackageInfo{Versions: versions}, refs, targets, policy).Candidate
+	if candidate == nil {
+		return 0
+	}
+	for i := range versions {
+		if &versions[i] == candidate {
 			return i
 		}
 	}
 	return 0
+}
+
+// assessRow fills a row's version, vulnerability, and deprecation fields from
+// the assessment of refs under the app's policy. latestStable is what the
+// stable policy (and the a key) would choose.
+func (m *App) assessRow(row *packageRow, refs []PackageReference, targets Set[TargetFramework]) {
+	if row.info == nil {
+		return
+	}
+	assessment := assessPackage(row.info, refs, targets, m.updateTarget)
+	stable := assessment
+	if m.updateTarget != UpdateTargetStable {
+		stable = assessPackage(row.info, refs, targets, UpdateTargetStable)
+	}
+	row.latestCompatible = assessment.Candidate
+	row.latestStable = stable.Candidate
+	row.updateTarget = assessment.Target
+	row.vulnerable = assessment.Vulnerable()
+	row.deprecated = assessment.Deprecated()
+	row.deprecation = nil
+	if row.deprecated {
+		row.deprecation = &assessment.Deprecations[0]
+	}
 }
 
 // rowVersion is the version a row treats as current: the reference's known
@@ -384,19 +412,7 @@ func (m *App) rebuildPackageRows() {
 				diverged:          diverged,
 				oldest:            oldest,
 			}
-			if res.pkg != nil {
-				row.latestCompatible = res.pkg.LatestStableForFramework(frameworks[strings.ToLower(name)])
-				row.latestStable = res.pkg.LatestStable()
-				row.deprecated = res.pkg.Deprecated
-				for _, v := range res.pkg.Versions {
-					if installed.Contains(v.SemVer.versionKey()) {
-						if len(v.Vulnerabilities) > 0 {
-							row.vulnerable = true
-							break
-						}
-					}
-				}
-			}
+			m.assessRow(&row, g.refs, frameworks[strings.ToLower(name)])
 			rows = append(rows, row)
 		}
 	} else {
@@ -411,17 +427,7 @@ func (m *App) rebuildPackageRows() {
 				loading: m.ctx.PendingPackages.Contains(ref.Name),
 			}
 			row.ref.Version = rowVersion(ref, res.pkg)
-			if res.pkg != nil {
-				row.latestCompatible = res.pkg.LatestStableForFramework(frameworks[strings.ToLower(ref.Name)])
-				row.latestStable = res.pkg.LatestStable()
-				row.deprecated = res.pkg.Deprecated
-				for _, v := range res.pkg.Versions {
-					if v.SemVer.Equal(row.ref.Version) {
-						row.vulnerable = len(v.Vulnerabilities) > 0
-						break
-					}
-				}
-			}
+			m.assessRow(&row, []PackageReference{ref}, frameworks[strings.ToLower(ref.Name)])
 			rows = append(rows, row)
 		}
 	}
@@ -484,12 +490,7 @@ func sortPackageRowsByStatus(rows []packageRow) {
 		if r.deprecated {
 			return 2
 		}
-		ver := r.effectiveVersion()
-		check := r.latestCompatible
-		if check == nil {
-			check = r.latestStable
-		}
-		if check != nil && check.SemVer.IsNewerThan(ver) {
+		if r.updateTarget != nil {
 			return 3
 		}
 		return 4

@@ -348,13 +348,15 @@ type packageRow struct {
 	source             string
 	err                error
 	loading            bool
-	latestCompatible   *PackageVersion
-	latestStable       *PackageVersion
+	latestCompatible   *PackageVersion // the update-target policy's choice (PackageAssessment.Candidate), even if not newer
+	latestStable       *PackageVersion // the stable policy's choice: newest listed stable, ignoring frameworks
+	updateTarget       *PackageVersion // latestCompatible when it is an update; nil when up to date
 	updateRequirements []updateDependencyRequirement
 	diverged           bool
 	oldest             SemVer
-	vulnerable         bool // installed version has ≥1 known vulnerability
-	deprecated         bool // package is deprecated in the registry
+	vulnerable         bool                  // an installed version has ≥1 known vulnerability
+	deprecated         bool                  // an installed version is deprecated in the registry
+	deprecation        *InstalledDeprecation // the first deprecated installed version
 }
 
 // effectiveVersion returns the version used for status comparisons.
@@ -377,14 +379,8 @@ func (r packageRow) statusIcon() string {
 	if r.err != nil {
 		return "✗"
 	}
-	ver := r.effectiveVersion()
-	check := r.latestCompatible
-	if check == nil {
-		check = r.latestStable
-	}
-	if check != nil && check.SemVer.IsNewerThan(ver) {
-		if r.latestStable != nil && r.latestCompatible != nil &&
-			r.latestStable.SemVer.IsNewerThan(r.latestCompatible.SemVer) {
+	if r.updateTarget != nil {
+		if r.latestStable != nil && r.latestStable.SemVer.IsNewerThan(r.updateTarget.SemVer) {
 			return "⇑"
 		}
 		return "↑"
@@ -405,14 +401,8 @@ func (r packageRow) statusStyle() style.Style {
 	if r.err != nil {
 		return styleRed
 	}
-	ver := r.effectiveVersion()
-	check := r.latestCompatible
-	if check == nil {
-		check = r.latestStable
-	}
-	if check != nil && check.SemVer.IsNewerThan(ver) {
-		if r.latestStable != nil && r.latestCompatible != nil &&
-			r.latestStable.SemVer.IsNewerThan(r.latestCompatible.SemVer) {
+	if r.updateTarget != nil {
+		if r.latestStable != nil && r.latestStable.SemVer.IsNewerThan(r.updateTarget.SemVer) {
 			return stylePurple
 		}
 		return styleYellow

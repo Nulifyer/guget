@@ -83,11 +83,15 @@ func (s *versionPicker) applyPickerVersion(scope actionScope) ui.Effect {
 }
 
 func newVersionPicker(m *App, pkgName string, versions []PackageVersion, targets Set[TargetFramework], project *ParsedProject, addMode bool) versionPicker {
+	var refs []PackageReference
+	if !addMode {
+		refs = m.scopeReferences(pkgName, scopeSelected)
+	}
 	return versionPicker{
 		sectionBase:   sectionBase{app: m, baseWidth: 50, minWidth: 40, maxMargin: 4, active: true, requestID: m.nextRequestID()},
 		pkgName:       pkgName,
 		versions:      versions,
-		cursor:        defaultVersionCursor(versions, targets),
+		cursor:        defaultVersionCursor(versions, targets, refs, m.updateTarget),
 		targets:       targets,
 		addMode:       addMode,
 		targetProject: project,

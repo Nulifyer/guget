@@ -173,16 +173,17 @@ func (m *App) renderDetailVulnerabilities(row packageRow) string {
 }
 
 func (m *App) renderDetailDeprecation(row packageRow, w int) string {
-	if !row.info.Deprecated {
+	deprecation := row.deprecation
+	if deprecation == nil {
 		return ""
 	}
 	var s strings.Builder
 	s.WriteString(styleYellowBold.Render("Deprecated") + "\n")
-	if row.info.DeprecationMessage != "" {
-		s.WriteString(styleText.Render(wordWrap(row.info.DeprecationMessage, w)) + "\n")
+	if deprecation.Message != "" {
+		s.WriteString(styleText.Render(wordWrap(deprecation.Message, w)) + "\n")
 	}
-	if row.info.AlternatePackageID != "" {
-		s.WriteString(styleMuted.Render("Use instead: ") + styleText.Render(row.info.AlternatePackageID) + "\n")
+	if deprecation.AlternatePackageID != "" {
+		s.WriteString(styleMuted.Render("Use instead: ") + styleText.Render(deprecation.AlternatePackageID) + "\n")
 	}
 	s.WriteString("\n")
 	return s.String()

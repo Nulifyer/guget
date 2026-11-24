@@ -100,6 +100,8 @@ type BuiltFlags struct {
 	NoUpdateCheck bool
 	// IncludeIgnored searches paths excluded by .gitignore rules.
 	IncludeIgnored bool
+	// UpdateTarget is the update-target setting; it has no TUI flag.
+	UpdateTarget string
 }
 
 func BuildFlags(flags map[string]IParsedFlag) BuiltFlags {
@@ -218,6 +220,7 @@ func initCLI(settings Settings) BuiltFlags {
 	usageEpilogue = tuiUsageEpilogue()
 	parsedFlags, _ := ParseFlags()
 	builtFlags := BuildFlags(parsedFlags)
+	builtFlags.UpdateTarget = settings.UpdateTarget
 
 	logSetLevel(logParseLevel(builtFlags.Verbosity))
 	logSetColor(!builtFlags.NoColor)

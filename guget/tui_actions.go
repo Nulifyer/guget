@@ -29,23 +29,39 @@ func (m *App) updatePackage(useStable bool, scope actionScope) ui.Effect {
 	if row.err != nil {
 		return m.setStatus("Cannot update "+row.ref.Name+": "+row.err.Error()+"; Ctrl+R to retry", true)
 	}
-	var target *PackageVersion
-	if useStable {
-		target = row.latestStable
-	} else {
-		if row.info != nil {
-			target = row.info.LatestStableForFramework(m.packageTargets(row.ref.Name, scope))
-		}
+	var project *ParsedProject
+	if scope == scopeSelected {
+		project = m.selectedProject()
 	}
+	// u and U aim for the update-target policy; a and A for the stable
+	// policy, which is what dotnet package update chooses. Bulk updates skip
+	// pins, so a pin does not hold the other references back.
+	policy := m.updateTarget
+	if useStable {
+		policy = UpdateTargetStable
+	}
+	var refs []PackageReference
+	for _, ref := range m.scopeReferences(row.ref.Name, scope) {
+		if project == nil && ref.Locked {
+			continue
+		}
+		refs = append(refs, ref)
+	}
+	assessment := assessPackage(row.info, refs, m.packageTargets(row.ref.Name, scope), policy)
+	target := assessment.Candidate
 	if target == nil {
 		if useStable {
 			return m.setStatus("No stable version for "+row.ref.Name+"; v to choose a version", true)
 		}
 		return m.setStatus("No compatible stable version for "+row.ref.Name+"; v to choose a version", true)
 	}
-	var project *ParsedProject
-	if scope == scopeSelected {
-		project = m.selectedProject()
+	if assessment.Target == nil {
+		for _, installed := range assessment.Installed {
+			if installed.IsNewerThan(target.SemVer) {
+				return m.setStatus(row.ref.Name+" "+installed.String()+" is newer than "+target.SemVer.String()+"; v to choose a version", false)
+			}
+		}
+		return m.setStatus(row.ref.Name+" is already at "+target.SemVer.String(), false)
 	}
 	version := target.SemVer.String()
 	projects := m.ctx.ParsedProjects
@@ -84,6 +100,24 @@ func (m *App) updatePackage(useStable bool, scope actionScope) ui.Effect {
 		}
 	}
 	return m.applyOrConfirmUpdateWithSelection(row.ref.Name, version, project, m.rowReloadSelection())
+}
+
+// scopeReferences returns the references to packageID that an action in
+// scope changes: the selected project's, or every project's.
+func (m *App) scopeReferences(packageID string, scope actionScope) []PackageReference {
+	projects := m.ctx.ParsedProjects
+	if scope == scopeSelected && m.selectedProject() != nil {
+		projects = []*ParsedProject{m.selectedProject()}
+	}
+	var refs []PackageReference
+	for _, project := range projects {
+		for ref := range project.Packages {
+			if strings.EqualFold(ref.Name, packageID) {
+				refs = append(refs, ref)
+			}
+		}
+	}
+	return refs
 }
 
 // packageTargets includes all consumers of each version owner the action can change.

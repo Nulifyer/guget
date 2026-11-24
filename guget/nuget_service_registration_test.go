@@ -73,7 +73,7 @@ func TestUnlistedVersionsAreNeverLatest(t *testing.T) {
 	if v := info.LatestStableForFramework(targetsOf("net8.0")); v == nil || v.SemVer.String() != "2.0.0" {
 		t.Fatalf("LatestStableForFramework = %v", v)
 	}
-	if cursor := defaultVersionCursor(info.Versions, targetsOf("net8.0")); cursor != 1 {
+	if cursor := defaultVersionCursor(info.Versions, targetsOf("net8.0"), nil, UpdateTargetCompatibleStable); cursor != 1 {
 		t.Fatalf("default cursor on unlisted version %d", cursor)
 	}
 	only := &PackageInfo{Versions: []PackageVersion{{SemVer: ParseSemVer("1.0.0"), Unlisted: true}}}
