@@ -1,7 +1,7 @@
 # Settings
 
-Save your TUI preferences in a settings file so you don't have to pass the same
-flags every time. You can also set them with environment variables, and a
+Save your TUI preferences in a settings file so you do not have to pass the
+same flags every time. You can also set them with environment variables, and a
 command-line flag still overrides both for one run.
 
 ## Where the file lives
@@ -38,11 +38,11 @@ update-check = false
 
 The file is valid TOML. Text values use TOML string syntax, so write `\"` for a
 quote and `\\` for a backslash inside double quotes. Single-quoted strings take
-their text literally. Tables such as `[tui]` aren't supported: Guget ignores a
-table and every key after it.
+their text literally. Guget does not support tables such as `[tui]`. It ignores
+a table and every key after it.
 
 A mistake in the file never stops Guget from starting. An unknown key, a value
-that isn't allowed, a repeated key, or a file that can't be read produces a
+that is not allowed, a repeated key, or a file that cannot be read produces a
 warning in the TUI log panel and in `guget config show`, and Guget uses the
 next source instead. When a key appears twice, the later line wins.
 
@@ -95,9 +95,11 @@ remains the final check. Target frameworks Guget cannot evaluate, such as
 version one edit changes, for example every project using a shared
 `Directory.Packages.props` entry.
 
-Every value uses only listed versions, merged from every source that package
-source mapping allows. An update never lowers a version: when nothing newer
-qualifies, the package is up to date. Under `compatible-stable` and
+Every value uses only listed versions. For each project, Guget merges the
+versions from every source that the project's NuGet configuration and package
+source mapping allow. See
+[package sources](sources.md#how-guget-finds-configuration). An update never
+lowers a version: when nothing newer qualifies, the package is up to date. Under `compatible-stable` and
 `compatible`, a newer version that some framework cannot use is not an update.
 
 Set it for good, or for one command:
@@ -188,10 +190,10 @@ The real output lists every key; this example shows one. For `mouse`,
 rather than strings.
 
 `guget config set` checks the value before it writes and exits with status 1
-for an unknown key or a value that isn't allowed. It exits with status 5 when
-the file can't be written. It changes only the line for
-that key, so your comments and the rest of the file stay as they are. If an
-environment variable overrides the key you just set, the command prints a
+for an unknown key or a value that is not allowed. It exits with status 5 when
+the file cannot be written. It changes only the line for that key, so your
+comments and the rest of the file stay as they are. If an environment
+variable overrides the key you just set, the command prints a
 warning. `guget config unset` removes the key's lines and leaves the rest of
 the file alone.
 
