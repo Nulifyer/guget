@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	ui "github.com/nulifyer/guget/internal/ui"
+	style "github.com/nulifyer/guget/internal/ui/style"
 )
 
 // packageSelection describes the view in which an action began. A completion
@@ -62,10 +63,44 @@ func (m *App) addSourceProblem(pkgName, version string, targets []mutationTarget
 	}
 	for _, target := range targets {
 		if !allowedFor(target.project.FilePath) {
-			return fmt.Sprintf("Not added: %s %s comes from source %s, which %s's NuGet configuration does not allow for this package", pkgName, version, source, target.project.FileName)
+			return fmt.Sprintf("%s %s comes from source %s, which %s's NuGet configuration does not allow for this package", pkgName, version, source, target.project.FileName)
 		}
 		if location := target.addTarget; location != nil && (location.Kind == AddTargetBuildProps || location.Kind == AddTargetImportedProps) && !allowedFor(location.FilePath) {
-			return fmt.Sprintf("Not added: %s %s comes from source %s, which a project importing %s may not use for this package", pkgName, version, source, filepath.Base(location.FilePath))
+			return fmt.Sprintf("%s %s comes from source %s, which a project importing %s may not use for this package", pkgName, version, source, filepath.Base(location.FilePath))
+		}
+	}
+	return ""
+}
+
+// refusalStatus logs a refused action in full and shows it on the status
+// row, pointing at the log panel when the row cannot hold the reason.
+func (m *App) refusalStatus(action, problem string) ui.Effect {
+	logWarn("%s: %s", action, problem)
+	text := "▲ " + action + ": " + problem
+	if style.Width(text) > m.layoutWidth()-6 {
+		text = "▲ " + action + " (l for logs): " + problem
+	}
+	return m.setStatus(text, true)
+}
+
+// sharedOwnerProblem explains why an update must not write version: a file
+// it writes holds the package's version for projects with different NuGet
+// source scopes, and version is not listed in the package's metadata, which
+// holds only versions every referencing project can use. It returns "" when
+// no written file is shared across scopes, as in a single-scope workspace.
+func (m *App) sharedOwnerProblem(packageID, version string, targets []mutationTarget) string {
+	projects := make([]*ParsedProject, len(targets))
+	for i, target := range targets {
+		projects[i] = target.project
+	}
+	result := m.ctx.Results[packageID]
+	for _, owner := range sharedOwnersFor(m.ctx.SourceMapping, m.ctx.ParsedProjects, projects, packageID) {
+		name := filepath.Base(owner.path)
+		switch {
+		case result.pkg == nil:
+			return fmt.Sprintf("%s's metadata is not loaded, so %s %s cannot be checked against the NuGet sources of every project sharing %s (%s)", packageID, packageID, version, name, owner.consumerNames())
+		case !versionListed(result.pkg, version):
+			return fmt.Sprintf("%s %s is not available from the NuGet sources of every project sharing %s (%s)", packageID, version, name, owner.consumerNames())
 		}
 	}
 	return ""
@@ -102,6 +137,11 @@ type mutationReconciledMsg struct {
 func (m *App) startMutation(verb, packageID, version string, targets []mutationTarget, options mutationOptions, selection *reloadSelection) ui.Effect {
 	if !m.canMutate() {
 		return nil
+	}
+	if verb == "update" {
+		if problem := m.sharedOwnerProblem(packageID, version, targets); problem != "" {
+			return m.refusalStatus("Not updated", problem)
+		}
 	}
 	m.ctx.Saving = true
 	m.setStatus("Saving "+packageID, false)

@@ -101,7 +101,7 @@ func (m *App) addPackageToTargets(pkgName, version string, targets []mutationTar
 		return nil
 	}
 	if problem := m.addSourceProblem(pkgName, version, targets); problem != "" {
-		return m.setStatus("▲ "+problem, true)
+		return m.refusalStatus("Not added", problem)
 	}
 	m.focus = focusPackages
 	if m.search.fetchedInfo != nil {

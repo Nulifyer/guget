@@ -176,7 +176,10 @@ package to. `list` and `update --latest` assess each project separately. The
 TUI shows a package's versions only when every project referencing it can
 use them, offers search results from the selected project's sources (from any
 project's sources in All Projects), and refuses an add when the version comes
-from a source the target project cannot use.
+from a source the target project cannot use. A version written to a shared
+file such as `Directory.Packages.props` must be available from the sources of
+every project that takes the package's version from it; see
+[update](cli.md#preview-and-apply-an-update).
 
 ## Refresh source information
 

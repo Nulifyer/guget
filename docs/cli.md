@@ -237,6 +237,25 @@ differently: it assesses every reference in scope together, chooses one
 target, and refuses the update when a project already uses a newer version
 than that target.
 
+A version written to a shared file, such as `Directory.Packages.props` or an
+imported props file, applies to every project that takes the package's
+version from that file, selected or not. When those projects use different
+NuGet sources, Guget writes only a version that the sources of every one of
+them list:
+
+- `--latest` chooses the target from the versions they all have. When they
+  have no newer common version, the file keeps its version, the plan lists it
+  as `unchanged`, and a warning names the projects. When a source failed for
+  one of them, the warning says so and the command exits 7.
+- `--version` checks the version against each project's sources and exits 4,
+  naming the projects whose sources lack it. It exits 3 when a source failed
+  and the version cannot be checked.
+- `add` makes the same check when it writes a new central version that
+  targets with different sources share.
+
+When every project sharing the file uses the same sources, `--version` and
+`add` do not contact the sources, as before.
+
 Two shorter forms name the target themselves:
 
 | Flag | Same as |

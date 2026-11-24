@@ -1157,15 +1157,32 @@ func (r *cliRuntime) runMutation(ctx context.Context, verb string, inv *cliInvoc
 		options.refuseLocked = !args.bools["all"]
 	}
 	partialMetadata := false
-	if latest {
-		policy := cliUpdateTarget(args)
-		doc.UpdateTarget = stringPtr(string(policy))
+	// A version written to a file other projects take it from too must be
+	// available from the sources of each of them, not only the targets.
+	var owners []sharedOwner
+	switch verb {
+	case "update":
+		owners = sharedOwnersFor(snapshot.SourceMapping, snapshot.ParsedProjects, targets, packageID)
+	case "add":
+		owners = sharedAddOwners(snapshot.SourceMapping, targets, packageID)
+	}
+	explicitVersion := args.value("version", "")
+	checkShared := !latest && len(owners) > 0 && projectedit.ValidateVersion(explicitVersion) == nil
+	var metadata cliMetadata
+	if latest || checkShared {
 		metaCtx, cancel := metadataContext(ctx, inv)
 		request := metadataRequest{ID: packageID}
 		for _, target := range targets {
 			request.Projects = append(request.Projects, target.FilePath)
 		}
-		metadata := r.fetchCLIMetadata(metaCtx, snapshot, []metadataRequest{request})
+		for _, owner := range owners {
+			for _, path := range owner.consumerPaths() {
+				if !slices.Contains(request.Projects, path) {
+					request.Projects = append(request.Projects, path)
+				}
+			}
+		}
+		metadata = r.fetchCLIMetadata(metaCtx, snapshot, []metadataRequest{request})
 		timedOut := metadataTimedOut(ctx, metaCtx)
 		cancel()
 		if ctx.Err() != nil {
@@ -1176,6 +1193,25 @@ func (r *cliRuntime) runMutation(ctx context.Context, verb string, inv *cliInvoc
 		}
 		doc.Warnings = redactAll(metadata.warnings)
 		r.emitWarnings(metadata.warnings)
+	}
+	if checkShared {
+		for _, owner := range owners {
+			problem, missing := sharedOwnerVersionProblem(owner, packageID, explicitVersion, func(project *ParsedProject) packageMetadata {
+				return metadata.forProject(packageID, project.FilePath)
+			})
+			switch {
+			case problem == "":
+			case missing:
+				return inv.fail(ExitSource, "%s", problem)
+			default:
+				return inv.fail(ExitRefused, "edit refused: %s", problem)
+			}
+		}
+	}
+	var sharedWarnings []string
+	if latest {
+		policy := cliUpdateTarget(args)
+		doc.UpdateTarget = stringPtr(string(policy))
 		// Each project updates from what its own NuGet configuration allows,
 		// as restore and dotnet package update resolve each project alone.
 		infos := make(map[*ParsedProject]*PackageInfo, len(targets))
@@ -1190,12 +1226,53 @@ func (r *cliRuntime) runMutation(ctx context.Context, verb string, inv *cliInvoc
 			infos[target] = info
 		}
 		partialMetadata = metadata.incomplete
-		options.selectVersion = latestVersionSelector(snapshot, func(project *ParsedProject) *PackageInfo {
+		own := latestVersionSelector(snapshot, func(project *ParsedProject) *PackageInfo {
 			if info, ok := infos[project]; ok {
 				return info
 			}
 			return metadata.forProject(packageID, project.FilePath).Info
 		}, policy)
+		shared := make(map[string]sharedOwner, len(owners))
+		for _, owner := range owners {
+			shared[snapshotPackageOwner(owner.consumers[0], packageID)] = owner
+		}
+		warn := func(format string, args ...any) {
+			if warning := fmt.Sprintf(format, args...); !slices.Contains(sharedWarnings, warning) {
+				sharedWarnings = append(sharedWarnings, warning)
+			}
+		}
+		// A shared owner gets the target of the versions every project taking
+		// its version from it can use; otherwise it is left unchanged.
+		options.selectVersion = func(project *ParsedProject, installed PackageReference) (string, bool) {
+			owner, isShared := shared[snapshotPackageOwner(project, packageID)]
+			if !isShared {
+				return own(project, installed)
+			}
+			name := filepath.Base(owner.path)
+			combined := intersectScopedMetadata(owner.scopes, metadata.packages[strings.ToLower(packageID)])
+			if combined.Info == nil {
+				var unknown []string
+				for _, consumer := range owner.consumers {
+					if !metadataAnswered(metadata.forProject(packageID, consumer.FilePath)) {
+						unknown = append(unknown, consumer.FileName)
+					}
+				}
+				if len(unknown) > 0 {
+					partialMetadata = true
+					warn("%s in %s left unchanged: %s takes its version from there too, and no source supplied its metadata", packageID, name, strings.Join(unknown, ", "))
+				} else {
+					warn("%s in %s left unchanged: no version is available from the NuGet sources of every project sharing it (%s)", packageID, name, owner.consumerNames())
+				}
+				return "", false
+			}
+			version, ok := latestVersionSelector(snapshot, func(*ParsedProject) *PackageInfo { return combined.Info }, policy)(project, installed)
+			if !ok {
+				if _, newer := own(project, installed); newer {
+					warn("%s in %s left unchanged: no newer version is available from the NuGet sources of every project sharing it (%s)", packageID, name, owner.consumerNames())
+				}
+			}
+			return version, ok
+		}
 	}
 	plan, rows, skipped, err := planPackageMutation(verb, packageID, args.value("version", ""), mutationTargetsFor(targets), options)
 	if err != nil {
@@ -1211,6 +1288,10 @@ func (r *cliRuntime) runMutation(ctx context.Context, verb string, inv *cliInvoc
 		default:
 			return inv.fail(ExitRefused, "edit refused: %v", err)
 		}
+	}
+	if len(sharedWarnings) > 0 {
+		doc.Warnings = append(doc.Warnings, redactAll(sharedWarnings)...)
+		r.emitWarnings(sharedWarnings)
 	}
 	paths := newPathDisplay(snapshot)
 	for i := range rows {
