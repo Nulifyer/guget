@@ -15,7 +15,7 @@ type token struct {
 }
 
 func tokens(s string) []token {
-	var out []token
+	out := make([]token, 0, len(s))
 	for len(s) > 0 {
 		if s[0] == 27 {
 			n := 1
@@ -55,6 +55,39 @@ func tokens(s string) []token {
 		if end < 0 {
 			end = len(s)
 		}
+		out = appendGraphemes(out, s[:end])
+		s = s[end:]
+	}
+	return out
+}
+
+// appendGraphemes splits text without escapes into grapheme tokens. A
+// printable ASCII byte followed by another ASCII byte is always one cell and
+// one grapheme, so only the stretches around other characters, where a
+// combining mark or joiner may attach, pay for full segmentation.
+func appendGraphemes(out []token, s string) []token {
+	for len(s) > 0 {
+		n := 0
+		for n < len(s) && s[n] >= 0x20 && s[n] < 0x7f && (n+1 == len(s) || s[n+1] < 0x80) {
+			n++
+		}
+		for i := 0; i < n; i++ {
+			out = append(out, token{s[i : i+1], 1, false})
+		}
+		s = s[n:]
+		if len(s) == 0 {
+			break
+		}
+		// Segment up to the next two adjacent printable ASCII bytes that
+		// follow an ASCII byte: the first of them is certain to start a
+		// grapheme, and the fast path can take it.
+		end := len(s)
+		for i := 1; i+1 < len(s); i++ {
+			if plainASCII(s[i]) && plainASCII(s[i+1]) && s[i-1] < 0x80 {
+				end = i
+				break
+			}
+		}
 		g := uniseg.NewGraphemes(s[:end])
 		for g.Next() {
 			out = append(out, token{g.Str(), g.Width(), false})
@@ -63,6 +96,9 @@ func tokens(s string) []token {
 	}
 	return out
 }
+
+func plainASCII(b byte) bool { return b >= 0x20 && b < 0x7f }
+
 func Strip(s string) string {
 	var b strings.Builder
 	for _, t := range tokens(s) {
@@ -100,9 +136,13 @@ func Cut(s string, start, end int) string {
 	if end <= start {
 		return ""
 	}
+	return cutTokens(tokens(s), start, end)
+}
+
+func cutTokens(ts []token, start, end int) string {
 	var b strings.Builder
 	pos := 0
-	for _, t := range tokens(s) {
+	for _, t := range ts {
 		if t.escape {
 			if pos < end {
 				b.WriteString(t.s)
@@ -136,16 +176,23 @@ func Wrap(s string, width int) []string {
 	}
 	var out []string
 	for _, line := range strings.Split(Normalize(s), "\n") {
-		total := StringWidth(line)
+		// Tokenize once per line: a long line is cut several times, and
+		// grapheme segmentation is the expensive part.
+		ts := tokens(line)
+		total := 0
+		for _, t := range ts {
+			if !t.escape {
+				total += t.width
+			}
+		}
 		if total <= width {
 			out = append(out, line)
 			continue
 		}
-		ts := tokens(line)
 		start := 0
 		for start < total {
 			if total-start <= width {
-				out = append(out, Cut(line, start, total))
+				out = append(out, cutTokens(ts, start, total))
 				break
 			}
 			pos, lastFit, lastSpace := 0, start, -1
@@ -175,7 +222,7 @@ func Wrap(s string, width int) []string {
 				start++
 				continue
 			}
-			out = append(out, Cut(line, start, end))
+			out = append(out, cutTokens(ts, start, end))
 			start = end
 			pos = 0
 			for _, t := range ts {

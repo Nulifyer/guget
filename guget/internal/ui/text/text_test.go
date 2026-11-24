@@ -1,9 +1,67 @@
 package text
 
 import (
+	"math/rand"
 	"strings"
 	"testing"
+
+	"github.com/rivo/uniseg"
 )
+
+// The ASCII fast path must produce exactly the graphemes and widths full
+// segmentation does, including around combining marks, joiners, prepended
+// marks, controls, and CRLF.
+func TestTokensMatchFullSegmentation(t *testing.T) {
+	pieces := []string{"a", "Z", " ", "~", "#", "1", "\t", "\n", "\r", "\r\n", "\x7f", "\x00", "é", "e\u0301", "\u0301", "\u200d", "\u0600", "\ufe0f", "\u20e3", "你", "👩\u200d💻", "🇨🇦", "🇨", "–", "▲", "\u00a0", "\xff", "한", "\u1100", "\u1161"}
+	random := rand.New(rand.NewSource(1))
+	check := func(s string) {
+		t.Helper()
+		var want []token
+		g := uniseg.NewGraphemes(s)
+		for g.Next() {
+			want = append(want, token{g.Str(), g.Width(), false})
+		}
+		got := tokens(s)
+		if len(got) != len(want) {
+			t.Fatalf("%q: %d tokens, want %d\n got %+v\nwant %+v", s, len(got), len(want), got, want)
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Fatalf("%q: token %d is %q (%d cells), want %q (%d cells)", s, i, got[i].s, got[i].width, want[i].s, want[i].width)
+			}
+		}
+	}
+	for _, a := range pieces {
+		for _, b := range pieces {
+			for _, c := range pieces {
+				check(a + b + c)
+			}
+		}
+	}
+	for range 20000 {
+		var b strings.Builder
+		for range 1 + random.Intn(12) {
+			b.WriteString(pieces[random.Intn(len(pieces))])
+		}
+		check(b.String())
+	}
+}
+
+func BenchmarkStringWidthASCII(b *testing.B) {
+	line := "[INFO] GET https://api.nuget.org/v3/registration5-gz-semver2/newtonsoft.json/index.json 200 in 143ms"
+	b.ReportAllocs()
+	for b.Loop() {
+		StringWidth(line)
+	}
+}
+
+func BenchmarkStringWidthMixed(b *testing.B) {
+	line := "\x1b[33m▲ Not added: Contoso.Wörld 1.2.3 comes from source nuget.org – 日本語\x1b[0m"
+	b.ReportAllocs()
+	for b.Loop() {
+		StringWidth(line)
+	}
+}
 
 func TestTruncationPreservesGraphemesAndClosesLinks(t *testing.T) {
 	s := "\x1b[31mA你好é👩‍💻\x1b[0m"
