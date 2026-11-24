@@ -9,6 +9,7 @@ import (
 	"math/rand"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -972,6 +973,9 @@ func (s *NugetService) SearchExactContext(ctx context.Context, packageID string)
 	var versions []PackageVersion
 	var latestLeaf *registrationLeaf       // newest version overall (for fallback metadata)
 	var latestStableLeaf *registrationLeaf // newest stable version (preferred for metadata)
+	newer := func(current *registrationLeaf, v SemVer) bool {
+		return current == nil || v.IsNewerThan(ParseSemVer(current.Version))
+	}
 
 	for pi, page := range regIdx.Items {
 		items := page.Items
@@ -987,26 +991,28 @@ func (s *NugetService) SearchExactContext(ctx context.Context, packageID string)
 
 		for i := range items {
 			ce := &items[i].CatalogEntry
+			sv := ParseSemVer(ce.Version)
+			if !sv.IsValid() {
+				logDebug("[%s] %q: skipping version %q that NuGet cannot parse", s.sourceName, packageID, ce.Version)
+				continue
+			}
 			// "listed: false" means hidden from search results, but the package
 			// still exists on NuGet. Developers who already have it in their
 			// project need to see its metadata and deprecation notice, so we
 			// include unlisted versions rather than pretending they don't exist.
-			sv := ParseSemVer(ce.Version)
-			if latestLeaf == nil || sv.IsNewerThan(ParseSemVer(latestLeaf.Version)) {
+			if newer(latestLeaf, sv) {
 				latestLeaf = ce
 			}
-			if !sv.IsPreRelease() {
-				if latestStableLeaf == nil || sv.IsNewerThan(ParseSemVer(latestStableLeaf.Version)) {
-					latestStableLeaf = ce
-				}
+			if !sv.IsPreRelease() && newer(latestStableLeaf, sv) {
+				latestStableLeaf = ce
 			}
-			seen := NewSet[string]()
+			seen := NewSet[frameworkKey]()
 			var frameworks []TargetFramework
 			for _, dg := range ce.DependencyGroups {
-				raw := normFramework(dg.TargetFramework)
-				if raw != "" && !seen.Contains(raw) {
-					seen.Add(raw)
-					frameworks = append(frameworks, ParseTargetFramework(raw))
+				framework := parsePackageFramework(dg.TargetFramework)
+				if !seen.Contains(framework.key()) {
+					seen.Add(framework.key())
+					frameworks = append(frameworks, framework)
 				}
 			}
 			published, _ := time.Parse(time.RFC3339, ce.Published)
@@ -1099,9 +1105,10 @@ func (p *PackageInfo) LatestStable() *PackageVersion {
 	return nil
 }
 
-// LatestStableForFramework returns the newest stable version whose declared
-// target frameworks are compatible with all of the project's targets.
-// Returns nil if no compatible stable version exists (callers fall back to
+// LatestStableForFramework returns the newest stable version usable by
+// all of the project's targets (see PackageVersion.compatibilityFor). A
+// version usable only through AssetTargetFallback counts, as it does for
+// restore. Returns nil if no such version exists (callers fall back to
 // LatestStable themselves for display purposes).
 func (p *PackageInfo) LatestStableForFramework(targets Set[TargetFramework]) *PackageVersion {
 	for i := range p.Versions {
@@ -1109,35 +1116,7 @@ func (p *PackageInfo) LatestStableForFramework(targets Set[TargetFramework]) *Pa
 		if v.SemVer.IsPreRelease() {
 			continue
 		}
-
-		// No frameworks declared means the package supports everything
-		if len(v.Frameworks) == 0 {
-			return v
-		}
-
-		// Check if this version is compatible with all project frameworks.
-		// Skip FamilyUnknown targets — these arise from unresolved MSBuild
-		// property references (e.g. $(TargetFrameworksForLibraries)) that we
-		// cannot evaluate without running MSBuild. Since we have no information
-		// about what they resolve to, we cannot conclude incompatibility.
-		allCompatible := true
-		for target := range targets {
-			if target.Family == FamilyUnknown {
-				continue // can't determine compatibility; don't block
-			}
-			compatibleWithProj := false
-			for _, versionFw := range v.Frameworks {
-				if target.IsCompatibleWith(versionFw) {
-					compatibleWithProj = true
-					break
-				}
-			}
-			if !compatibleWithProj {
-				allCompatible = false
-				break
-			}
-		}
-		if allCompatible {
+		if v.compatibilityFor(targets) != FrameworkIncompatible {
 			return v
 		}
 	}
@@ -1246,11 +1225,9 @@ func (s *NugetService) getJSONContext(ctx context.Context, u string, dst any) er
 	return err
 }
 
-// normFramework normalises a raw targetFramework string from the NuGet
-// registration API into the short form expected by ParseTargetFramework
+// normFramework shortens a registration targetFramework string for display
 // (e.g. ".NETFramework4.6.2" → "net462", ".NETStandard2.0" → "netstandard2.0").
-// An empty string returns "any", which ParseTargetFramework maps to FamilyUnknown
-// with Raw=="any" — IsCompatibleWith treats that as compatible with everything.
+// An empty string returns "any". Compatibility parses the original string.
 func normFramework(raw string) string {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -1286,11 +1263,7 @@ func resourceTypeVersion(resourceType string) SemVer {
 }
 
 func sortVersionsDesc(vs []PackageVersion) {
-	for i := 1; i < len(vs); i++ {
-		for j := i; j > 0 && vs[j].SemVer.IsNewerThan(vs[j-1].SemVer); j-- {
-			vs[j], vs[j-1] = vs[j-1], vs[j]
-		}
-	}
+	slices.SortStableFunc(vs, func(a, b PackageVersion) int { return b.SemVer.Compare(a.SemVer) })
 }
 
 // --- Release Notes ---

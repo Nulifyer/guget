@@ -279,24 +279,11 @@ func (p *packagePanel) Draw(r ui.Rect) string {
 }
 
 // versionCompatible returns true when v is usable by all of the project's
-// target frameworks. Empty Frameworks on the version means "any framework".
+// target frameworks, directly or through AssetTargetFallback. It uses the same
+// decision as LatestStableForFramework, so the picker, its default cursor and
+// the Available column agree.
 func versionCompatible(v PackageVersion, targets Set[TargetFramework]) bool {
-	if targets.Len() == 0 || len(v.Frameworks) == 0 {
-		return true
-	}
-	for target := range targets {
-		ok := false
-		for _, fw := range v.Frameworks {
-			if target.IsCompatibleWith(fw) {
-				ok = true
-				break
-			}
-		}
-		if !ok {
-			return false
-		}
-	}
-	return true
+	return v.compatibilityFor(targets) != FrameworkIncompatible
 }
 
 // defaultVersionCursor returns the index of the first stable, compatible

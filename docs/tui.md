@@ -37,6 +37,12 @@ The picker marks framework compatibility, prereleases, and known vulnerabilities
 when the source supplies that metadata. Compatibility indicators are guidance;
 restore and your project tests validate the result.
 
+Compatibility follows NuGet's framework rules, judged from the frameworks the
+source lists for each version. A .NET Framework-only package counts as
+compatible with .NET, .NET Core 2.0+, and .NET Standard 2.0+ projects because
+restore accepts it through AssetTargetFallback, with warning NU1701. Target
+frameworks that come from MSBuild properties guget cannot evaluate are skipped.
+
 For quick updates from the package panel:
 
 | Key | Scope and version |

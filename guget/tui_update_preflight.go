@@ -157,34 +157,40 @@ func (m *App) indexedUpdateDependencyRequirements(packageID string, candidate *P
 }
 
 // Exact framework groups take precedence. Without one, require the conflict in
-// every compatible group rather than guessing NuGet's nearest-framework choice.
+// every compatible group rather than guessing NuGet's nearest-framework choice;
+// groups usable only through AssetTargetFallback count when no group is
+// directly compatible, as in restore.
 func preflightDependencyGroups(groups []dependencyGroup, target TargetFramework) []dependencyGroup {
-	if target.Family == FamilyUnknown {
+	if target.IsUnsupported() {
 		return nil
 	}
-	var exact, compatible []dependencyGroup
+	var exact, compatible, fallback []dependencyGroup
 	unknown := false
 	for _, group := range groups {
-		normalized := normFramework(group.TargetFramework)
-		framework := ParseTargetFramework(normalized)
-		if normalized == normFramework(target.Raw) {
+		framework := parsePackageFramework(group.TargetFramework)
+		if sameFramework(framework, target) {
 			exact = append(exact, group)
 		}
-		if framework.Family == FamilyUnknown && normalized != "any" {
+		if framework.IsUnsupported() {
 			unknown = true
 			continue
 		}
-		if target.IsCompatibleWith(framework) {
+		switch target.CompatibilityWith([]TargetFramework{framework}) {
+		case FrameworkCompatible:
 			compatible = append(compatible, group)
+		case FrameworkFallback:
+			fallback = append(fallback, group)
 		}
 	}
-	if len(exact) > 0 {
+	switch {
+	case len(exact) > 0:
 		return exact
-	}
-	if unknown {
+	case unknown:
 		return nil
+	case len(compatible) > 0:
+		return compatible
 	}
-	return compatible
+	return fallback
 }
 
 func literalDependencyRequest(requested string) (SemVer, bool) {
