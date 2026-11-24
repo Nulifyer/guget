@@ -298,6 +298,30 @@ func defaultVersionCursor(versions []PackageVersion, targets Set[TargetFramework
 	return 0
 }
 
+// rowVersion is the version a row treats as current: the reference's known
+// version or, for floating and open-ended requests such as "1.*" or
+// "(1.0,)", the version restore selects from the package's versions. It stays
+// unknown (invalid) when nothing on the feed satisfies the request.
+func rowVersion(ref PackageReference, pkg *PackageInfo) SemVer {
+	if ref.Version.IsValid() || pkg == nil {
+		return ref.Version
+	}
+	expression := ref.Requested
+	if expression == "" {
+		expression = ref.Version.Raw
+	}
+	if resolved, ok := resolveRequestedVersion(expression, pkg.Versions); ok {
+		return resolved
+	}
+	return ref.Version
+}
+
+// sameCurrentVersion compares row versions: NuGet equality for known
+// versions, identical expressions for unknown ones.
+func sameCurrentVersion(a, b SemVer) bool {
+	return a.Equal(b) || (!a.IsValid() && !b.IsValid() && a.Raw == b.Raw)
+}
+
 func (m *App) rebuildPackageRows() {
 	if m.ctx.Results == nil {
 		return
@@ -329,20 +353,25 @@ func (m *App) rebuildPackageRows() {
 		for name, g := range grouped {
 			res := m.ctx.Results[name]
 
-			newest := g.refs[0].Version
-			oldest := g.refs[0].Version
-			for _, ref := range g.refs[1:] {
-				if ref.Version.IsNewerThan(newest) {
-					newest = ref.Version
+			versions := make([]SemVer, len(g.refs))
+			for i, ref := range g.refs {
+				versions[i] = rowVersion(ref, res.pkg)
+			}
+			newest, oldest := versions[0], versions[0]
+			diverged := false
+			for _, version := range versions[1:] {
+				if version.IsNewerThan(newest) || (!newest.IsValid() && version.IsValid()) {
+					newest = version
 				}
-				if oldest.IsNewerThan(ref.Version) {
-					oldest = ref.Version
+				if oldest.IsNewerThan(version) || (!oldest.IsValid() && version.IsValid()) {
+					oldest = version
 				}
+				diverged = diverged || !sameCurrentVersion(version, versions[0])
 			}
 
 			installed := NewSet[string]()
-			for _, ref := range g.refs {
-				installed.Add(ref.Version.String())
+			for _, version := range versions {
+				installed.Add(version.versionKey())
 			}
 			row := packageRow{
 				installedVersions: installed,
@@ -352,7 +381,7 @@ func (m *App) rebuildPackageRows() {
 				source:            res.source,
 				err:               res.err,
 				loading:           m.ctx.PendingPackages.Contains(name),
-				diverged:          oldest != newest,
+				diverged:          diverged,
 				oldest:            oldest,
 			}
 			if res.pkg != nil {
@@ -360,8 +389,7 @@ func (m *App) rebuildPackageRows() {
 				row.latestStable = res.pkg.LatestStable()
 				row.deprecated = res.pkg.Deprecated
 				for _, v := range res.pkg.Versions {
-					vs := v.SemVer.String()
-					if installed.Contains(vs) {
+					if installed.Contains(v.SemVer.versionKey()) {
 						if len(v.Vulnerabilities) > 0 {
 							row.vulnerable = true
 							break
@@ -382,12 +410,13 @@ func (m *App) rebuildPackageRows() {
 				err:     res.err,
 				loading: m.ctx.PendingPackages.Contains(ref.Name),
 			}
+			row.ref.Version = rowVersion(ref, res.pkg)
 			if res.pkg != nil {
 				row.latestCompatible = res.pkg.LatestStableForFramework(frameworks[strings.ToLower(ref.Name)])
 				row.latestStable = res.pkg.LatestStable()
 				row.deprecated = res.pkg.Deprecated
 				for _, v := range res.pkg.Versions {
-					if v.SemVer.String() == ref.Version.String() {
+					if v.SemVer.Equal(row.ref.Version) {
 						row.vulnerable = len(v.Vulnerabilities) > 0
 						break
 					}
@@ -485,14 +514,14 @@ func sortPackageRowsByCurrent(rows []packageRow) {
 	}
 	dates := make(map[versionKey]time.Time, len(rows))
 	for _, r := range rows {
-		key := versionKey{r.info, r.effectiveVersion().Raw}
+		key := versionKey{r.info, r.effectiveVersion().versionKey()}
 		if _, ok := dates[key]; ok {
 			continue
 		}
 		dates[key] = time.Time{}
 		if r.info != nil {
 			for _, v := range r.info.Versions {
-				if v.SemVer.Raw == key.version {
+				if v.SemVer.versionKey() == key.version {
 					dates[key] = v.Published
 					break
 				}
@@ -500,7 +529,7 @@ func sortPackageRowsByCurrent(rows []packageRow) {
 		}
 	}
 	published := func(r packageRow) time.Time {
-		return dates[versionKey{r.info, r.effectiveVersion().Raw}]
+		return dates[versionKey{r.info, r.effectiveVersion().versionKey()}]
 	}
 	slices.SortStableFunc(rows, func(a, b packageRow) int {
 		return published(a).Compare(published(b))

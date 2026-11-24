@@ -141,7 +141,7 @@ func (m *App) renderDetailVulnerabilities(row packageRow) string {
 	}
 	var vulns []installedAdvisory
 	for _, v := range row.info.Versions {
-		if row.installedVersions.Contains(v.SemVer.String()) || v.SemVer.String() == row.ref.Version.String() {
+		if row.installedVersions.Contains(v.SemVer.versionKey()) || v.SemVer.Equal(row.ref.Version) {
 			for _, advisory := range v.Vulnerabilities {
 				vulns = append(vulns, installedAdvisory{advisory, v.SemVer.String()})
 			}
@@ -283,17 +283,18 @@ func (m *App) renderDetailVersionList(row packageRow, w int) string {
 	s.WriteString(styleMuted.Render("Versions") + "\n")
 	const limit = 12
 
-	installedStr := row.ref.Version.String()
-	oldestStr := ""
-	if row.diverged {
-		oldestStr = row.oldest.String()
+	installed := row.ref.Version
+	isInstalled := func(v SemVer) bool {
+		return v.Equal(installed) || (row.diverged && v.Equal(row.oldest))
 	}
-	curMajor, curMinor := row.ref.Version.Major, row.ref.Version.Minor
-	latestPatchStr := ""
-	for _, v := range displayVersions {
-		if v.SemVer.Major == curMajor && v.SemVer.Minor == curMinor && !v.SemVer.IsPreRelease() && !v.Unlisted {
-			latestPatchStr = v.SemVer.String()
-			break
+	var latestPatch SemVer
+	hasLatestPatch := false
+	if installed.IsValid() {
+		for _, v := range displayVersions {
+			if v.SemVer.Major == installed.Major && v.SemVer.Minor == installed.Minor && !v.SemVer.IsPreRelease() && !v.Unlisted {
+				latestPatch, hasLatestPatch = v.SemVer, true
+				break
+			}
 		}
 	}
 
@@ -303,8 +304,8 @@ func (m *App) renderDetailVersionList(row packageRow, w int) string {
 		if i < limit {
 			continue
 		}
-		vs := v.SemVer.String()
-		isPinned := vs == installedStr || (oldestStr != "" && vs == oldestStr) || (latestPatchStr != "" && vs == latestPatchStr)
+		vs := v.SemVer.versionKey()
+		isPinned := isInstalled(v.SemVer) || (hasLatestPatch && v.SemVer.Equal(latestPatch))
 		if isPinned && !pinnedSeen.Contains(vs) {
 			pinnedSeen.Add(vs)
 			pinnedAfter = append(pinnedAfter, v)
@@ -315,9 +316,9 @@ func (m *App) renderDetailVersionList(row packageRow, w int) string {
 		marker := "  "
 		vStyle := styleMuted
 
-		isCurrent := v.SemVer.String() == installedStr || (oldestStr != "" && v.SemVer.String() == oldestStr)
-		isCompat := row.latestCompatible != nil && v.SemVer.String() == row.latestCompatible.SemVer.String()
-		isLatest := row.latestStable != nil && v.SemVer.String() == row.latestStable.SemVer.String()
+		isCurrent := isInstalled(v.SemVer)
+		isCompat := row.latestCompatible != nil && v.SemVer.Equal(row.latestCompatible.SemVer)
+		isLatest := row.latestStable != nil && v.SemVer.Equal(row.latestStable.SemVer)
 		isHighlighted := isCurrent || isCompat || isLatest
 
 		switch {

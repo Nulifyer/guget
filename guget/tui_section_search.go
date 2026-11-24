@@ -316,9 +316,13 @@ func (s *packageSearch) Render() string {
 
 	default:
 		installedVer := make(map[string]SemVer)
+		installedRange := make(map[string]VersionRange)
 		if proj != nil {
 			for ref := range proj.Packages {
 				installedVer[strings.ToLower(ref.Name)] = ref.Version
+				if r, ok := ref.RequestedRange(); ok {
+					installedRange[strings.ToLower(ref.Name)] = r
+				}
 			}
 		}
 
@@ -348,7 +352,18 @@ func (s *packageSearch) Render() string {
 			icon := " "
 			if iv, ok := installedVer[strings.ToLower(r.ID)]; ok {
 				searchVer := ParseSemVer(r.Version)
-				if searchVer.IsNewerThan(iv) {
+				if !iv.IsValid() {
+					// The resolved version of an open-ended request is unknown
+					// here. A float resolves to its newest match, so it is
+					// current when the latest release is inside the float.
+					if requested, parsed := installedRange[strings.ToLower(r.ID)]; parsed && requested.IsFloating() {
+						if requested.Satisfies(searchVer) && requested.Float.Satisfies(searchVer) {
+							icon = styleGreen.Render("✓")
+						} else if searchVer.IsNewerThan(requested.Float.Min) {
+							icon = styleYellow.Render("↑")
+						}
+					}
+				} else if searchVer.IsNewerThan(iv) {
 					icon = styleYellow.Render("↑")
 				} else if iv.IsNewerThan(searchVer) {
 					icon = styleMuted.Render("↓")

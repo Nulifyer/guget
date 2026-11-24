@@ -62,7 +62,7 @@ func (m *App) openDepTree() ui.Effect {
 	// Find the installed version's dependency groups.
 	var installedVer *PackageVersion
 	for i := range row.info.Versions {
-		if row.info.Versions[i].SemVer.String() == row.ref.Version.String() {
+		if row.info.Versions[i].SemVer.Equal(row.ref.Version) {
 			installedVer = &row.info.Versions[i]
 			break
 		}

@@ -67,7 +67,7 @@ func (m *App) updatePackage(useStable bool, scope actionScope) ui.Effect {
 				skippedLocked++
 				continue
 			}
-			if requested != version && requested != "["+version+"]" {
+			if !requestNamesVersion(requested, target.SemVer) {
 				needsUpdate = true
 			}
 		}

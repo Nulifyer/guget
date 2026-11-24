@@ -91,7 +91,7 @@ func (m *App) indexedUpdateDependencyRequirements(packageID string, candidate *P
 			if requested == "" {
 				requested = ref.Version.String()
 			}
-			if requested != candidate.SemVer.String() && requested != "["+candidate.SemVer.String()+"]" {
+			if !requestNamesVersion(requested, candidate.SemVer) {
 				changing = append(changing, p)
 			}
 			break

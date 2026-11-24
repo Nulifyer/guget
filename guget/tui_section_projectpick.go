@@ -17,7 +17,7 @@ func (m *App) openProjectPicker(pkgName, version string) {
 	var pkgVer *PackageVersion
 	if m.search.fetchedInfo != nil {
 		for i := range m.search.fetchedInfo.Versions {
-			if m.search.fetchedInfo.Versions[i].SemVer.String() == version {
+			if m.search.fetchedInfo.Versions[i].SemVer.Equal(targetVer) {
 				pkgVer = &m.search.fetchedInfo.Versions[i]
 				break
 			}
@@ -30,7 +30,7 @@ func (m *App) openProjectPicker(pkgName, version string) {
 		item := projectPickItem{project: p}
 		for ref := range p.Packages {
 			if strings.EqualFold(ref.Name, pkgName) {
-				if ref.Version.String() == targetVer.String() {
+				if ref.Version.Equal(targetVer) {
 					item.installed = true
 				} else {
 					item.currentVersion = ref.Version.String()

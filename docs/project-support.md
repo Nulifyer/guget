@@ -108,6 +108,10 @@ floating expression such as `1.*`. Keep it distinct from the restored version
 shown in CLI results. Updating to an explicit version replaces the supported
 reference's existing expression; inspect that change before applying it.
 
+guget compares versions the way NuGet does, so `1.0` and `1.0.0` are the same
+version. For a floating or open-ended expression such as `1.*` or `(1.0,)`, the
+TUI compares the version restore would pick from the package source.
+
 The TUI treats `[1.0.0]` as an exact pin and requires confirmation for selected
 project updates. Bulk updates, including version-picker changes from All
 Projects, skip pinned references.

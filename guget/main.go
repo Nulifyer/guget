@@ -311,14 +311,14 @@ func enrichFromNugetOrg(info, nugetInfo *PackageInfo) {
 	nugetVersions := make(map[string]PackageVersion, len(nugetInfo.Versions))
 	nugetVulns := make(map[string][]PackageVulnerability, len(nugetInfo.Versions))
 	for _, v := range nugetInfo.Versions {
-		nugetVersions[v.SemVer.String()] = v
+		nugetVersions[v.SemVer.versionKey()] = v
 		if len(v.Vulnerabilities) > 0 {
-			nugetVulns[v.SemVer.String()] = v.Vulnerabilities
+			nugetVulns[v.SemVer.versionKey()] = v.Vulnerabilities
 		}
 	}
 
 	for i := range info.Versions {
-		key := info.Versions[i].SemVer.String()
+		key := info.Versions[i].SemVer.versionKey()
 		if public, ok := nugetVersions[key]; ok {
 			info.Versions[i].NugetOrgPublished = public.Published
 		}
