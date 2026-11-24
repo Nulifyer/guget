@@ -98,7 +98,7 @@ func (m *App) sharedOwnerProblem(packageID, version string, targets []mutationTa
 		name := filepath.Base(owner.path)
 		switch {
 		case result.pkg == nil:
-			return fmt.Sprintf("%s's metadata is not loaded, so %s %s cannot be checked against the NuGet sources of every project sharing %s (%s)", packageID, packageID, version, name, owner.consumerNames())
+			return fmt.Sprintf("%s %s cannot be checked: its metadata is not loaded for the projects sharing %s (%s)", packageID, version, name, owner.consumerNames())
 		case !versionListed(result.pkg, version):
 			return fmt.Sprintf("%s %s is not available from the NuGet sources of every project sharing %s (%s)", packageID, version, name, owner.consumerNames())
 		}
