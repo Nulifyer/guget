@@ -23,6 +23,31 @@ guget list --project ./src --format json
 Inspection and editing have different limits. A displayed package can be
 read-only, and its requested expression may differ from the version restored.
 
+## How Guget reads package declarations
+
+Guget reads project files the way MSBuild evaluates them, without starting
+MSBuild:
+
+- `Directory.Build.props`, then `Directory.Packages.props`, then the project,
+  then `Directory.Build.targets`. Only the nearest file of each name is
+  imported automatically; a nested file must import its parent itself.
+- The import switches and path overrides `ImportDirectoryBuildProps`,
+  `DirectoryBuildPropsPath`, `CustomBeforeDirectoryBuildProps`,
+  `CustomAfterDirectoryBuildProps`, `ImportDirectoryPackagesProps`,
+  `DirectoryPackagesPropsPath`, `ImportDirectoryBuildTargets`, and
+  `DirectoryBuildTargetsPath`, when they are set in `Directory.Build.props`
+  or the environment.
+- Properties in order, so a later value replaces an earlier one, and
+  `$([MSBuild]::GetPathOfFileAbove(...))` imports with or without quotes. The
+  one-argument form starts in the directory of the file that contains it.
+- `PackageReference Update` changes an earlier reference only; on its own it
+  declares nothing. `Remove` removes earlier items.
+- When an ID is declared twice, restore uses the first declaration (NU1504,
+  NU1506), and so does Guget.
+
+When a condition, import, or switch depends on something Guget cannot see,
+such as `$(Configuration)`, edits are checked with MSBuild evaluation first.
+
 ## Change a project-owned version
 
 A straightforward project reference looks like this:
@@ -70,9 +95,12 @@ A consuming project declares the reference without a version:
 </ItemGroup>
 ```
 
-Guget supports CPM enabled through a literal, unconditional
-`ManagePackageVersionsCentrally=true` setting. Use `show` to inspect the
-reference and version locations:
+CPM is on when `ManagePackageVersionsCentrally` is `true` after the project
+file is evaluated and a central file was imported. A value set in
+`Directory.Packages.props` replaces one from `Directory.Build.props`, and the
+project replaces both. A value set only in `Directory.Build.targets` comes too
+late and does not turn CPM on. Use `show` to inspect the reference and version
+locations:
 
 ```bash
 guget show Newtonsoft.Json --project ./src --format json
@@ -86,9 +114,79 @@ that central version, including projects outside your opened workspace. Review
 the preview's paths and restore all affected projects. A single `--file` value
 selects a project reference; it does not make its central version project-local.
 
-When adding an already-defined central package, request the existing central
-version and verify the result afterward. Removing a project reference leaves
-the central `PackageVersion` in place.
+### Nested central files
+
+A nested `Directory.Packages.props` usually imports its parent:
+
+```xml
+<Project>
+  <Import Project="$([MSBuild]::GetPathOfFileAbove(Directory.Packages.props, $(MSBuildThisFileDirectory)..))" />
+  <ItemGroup>
+    <PackageVersion Update="Newtonsoft.Json" Version="13.0.4" />
+  </ItemGroup>
+</Project>
+```
+
+Guget edits a version in the file that sets it: here the nested file, while
+other packages keep their versions in the parent.
+
+### Add a package under CPM
+
+`guget add` writes a versionless `PackageReference` to the project. A new
+`PackageVersion` goes to the central file the project imports
+(`DirectoryPackagesPropsPath`).
+
+When the package already has a central version, Guget never writes a second
+`PackageVersion`; restore would ignore it. If you request that same version,
+Guget adds only the reference. If you request a different version, Guget
+refuses and shows the command that changes the shared version for every
+consumer:
+
+```bash
+guget update Newtonsoft.Json --version 13.0.4 --file App/App.csproj
+```
+
+This differs from `dotnet add package`. It refuses outright when the central
+version comes from an imported file, and it otherwise changes the shared
+version without asking.
+
+A floating central version such as `13.*` needs
+`CentralPackageFloatingVersionsEnabled=true`; otherwise restore fails with
+NU1011, and Guget refuses the edit.
+
+### Version on a centrally managed reference
+
+Under CPM, a `PackageReference` with `Version` fails restore with NU1008.
+Guget marks it and refuses to update it. Replace `Version` with
+`VersionOverride` for a project-specific version, or remove it to use the
+central `PackageVersion`.
+
+Guget also refuses updates that keep other restore errors: a reference
+without a central version (NU1010), and a `VersionOverride` while
+`CentralPackageVersionOverrideEnabled` is `false` (NU1013).
+
+### Global package references
+
+A `GlobalPackageReference` in `Directory.Packages.props` adds the package to
+every project that imports that file, with `PrivateAssets="All"`. Restore
+reads it only under CPM, and only when it is declared before NuGet's targets:
+one in `Directory.Build.targets` has no effect.
+
+Guget lists global packages with `global: true` and `privateAssets: "All"`.
+Updating one edits its `Version` in that file. Removing one is a shared-file
+edit: `guget remove` with `--file` refuses it, and the TUI removes it from All
+Projects. Guget never adds a `PackageReference` or `PackageVersion` for an ID
+that is already global.
+
+### Removal compared with dotnet
+
+`guget remove` deletes the `PackageReference` where it is declared and leaves
+the central `PackageVersion` in place, as `dotnet remove package` does. Both
+refuse a reference that the project inherits from an imported file. Guget
+also refuses a conditional reference, or an ID with more than one
+`PackageReference` in the same file, which `dotnet remove package` deletes
+together. In the TUI, removal from All Projects can also edit an inherited
+`.props` file.
 
 ## Imported props and inherited references
 
@@ -98,6 +196,10 @@ These shared files are distinct from the CPM version file.
 Use `show` and an update dry run to inspect the shared file that would change.
 If a reference is inherited, project-local removal may be refused. Use the
 shared-file location in the TUI only when you intend to change its consumers.
+
+Declarations in `Directory.Build.targets` are listed, including
+`PackageReference Update` items that change a project's version. They are
+read-only: Guget edits project and `.props` files only.
 
 After editing shared files outside the opened directory, press `Ctrl+R` to
 reload the TUI. Prefer a workspace containing the full shared scope when making
@@ -121,6 +223,22 @@ Projects, skip pinned references.
 For projects targeting different frameworks, inspect each framework's result
 and restore each affected project after changing versions.
 
+## Restore after an edit
+
+`guget update --restore`, `add --restore`, and `remove --restore` restore more
+than the projects you name. They also restore every project in the workspace
+that reads a changed file, such as a shared `Directory.Packages.props`, and
+every project that references one of those through `ProjectReference`.
+Guget prints each added project and the reason. In the TUI, `r` and `R`
+include those projects until a restore succeeds.
+
+Restore with a `packages.lock.json` in locked mode (`RestoreLockedMode`) fails
+with NU1004 once an edit changes a dependency. For such a project, Guget runs
+`dotnet restore --force-evaluate`, which regenerates the lock file. It also
+does so when locked mode depends on a condition it cannot evaluate, such as
+`$(ContinuousIntegrationBuild)`. Commit the regenerated lock files with the
+edit. A restore without edits never adds `--force-evaluate`.
+
 ## Editing limits
 
 | Package or project form | What to expect |
@@ -130,8 +248,11 @@ and restore each affected project after changing versions.
 | Imported props, conditions, properties, or duplicate declarations | Editing is limited and may be refused. Use explicit scope and review the preview. |
 | Transitive package | Inspect a restored graph with `--include-transitive`; change the relevant direct dependency. |
 | SDK-controlled implicit package | Treat it as SDK-controlled; avoid applying direct package edits to it. |
-| `packages.lock.json` | Let restore manage it; Guget has no direct lock-file editor. |
-| `packages.config` | Detected as unsupported; Guget does not edit it. |
+| `GlobalPackageReference` | Version edits go to its file; removal is a shared-file edit. |
+| `PackageDownload` | Listed as read-only (`download: true`); it is restore-only and not a dependency. |
+| `Directory.Build.targets` declarations | Listed; read-only. |
+| `packages.lock.json` | Restore regenerates it after an edit, with `--force-evaluate` in locked mode; Guget has no direct lock-file editor. |
+| `packages.config`, `packages.<ProjectName>.config` | Detected as unsupported; Guget does not edit them. |
 | .NET tools | Manage through .NET tool commands; Guget's package commands target project references. |
 
 If ownership cannot be established or a write is refused, inspect the message and
