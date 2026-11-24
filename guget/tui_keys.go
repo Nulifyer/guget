@@ -32,7 +32,7 @@ var mainKeyBindings = []mainKeyBinding{
 	{"o", nil, "o", "cycle sort order", "Package actions  (packages panel)"},
 	{"O", nil, "O", "change sort direction", "Package actions  (packages panel)"},
 	{"ctrl+r", nil, "ctrl+r", "reload projects from disk", "Project actions"},
-	{"r", nil, "r", "run dotnet restore (selected project)", "Project actions"},
+	{"r", nil, "r", "run dotnet restore (selected project, plus projects its unrestored edits affect)", "Project actions"},
 	{"R", nil, "R", "run dotnet restore (all projects)", "Project actions"},
 	{"T", nil, "T", "show full transitive dependency tree", "Project actions"},
 	{"/", nil, "/", "search NuGet and add a package", "Project actions"},

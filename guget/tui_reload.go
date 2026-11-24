@@ -266,7 +266,7 @@ func (m *App) keepWriteNotice(req reloadRequestedMsg) bool {
 func (m *App) finishReloadSuccess() {
 	m.ctx.Reloading = false
 	if m.activeReload.saveError != nil {
-		m.setStatus("▲ Save failed: "+m.activeReload.saveError.Error(), true)
+		m.setStatus(m.saveFailureText(m.activeReload.saveError), true)
 		if m.hasPendingReload && m.pendingReload.automatic {
 			m.pendingReload.saveError = m.activeReload.saveError
 		}

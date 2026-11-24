@@ -186,8 +186,12 @@ func (m *App) relayout() {
 	}
 	if m.ctx.ShowLogs {
 		follow := m.log.vp.AtBottom()
+		oldLogWidth := m.log.vp.Width()
 		m.log.vp.SetWidth(m.layoutWidth() - 4) // stylePanel: hBorder(2) + hPadding(2) = 4
 		m.log.vp.SetHeight(m.logContentHeight())
+		if m.log.vp.Width() != oldLogWidth {
+			m.updateLogView() // long entries wrap to the panel width
+		}
 		if follow {
 			m.log.vp.GotoBottom()
 		}
@@ -276,7 +280,7 @@ func (m *App) renderFooter() string {
 	// Status line — always reserve the row so height is stable.
 	statusStr := ""
 	if m.ctx.Restoring {
-		statusStr = m.ctx.Spinner.View() + styleAccent.Render(" restoring...")
+		statusStr = m.ctx.Spinner.View() + styleAccent.Render(restoringStatus(m.restoringProjects))
 	} else if m.ctx.Saving {
 		statusStr = m.ctx.Spinner.View() + styleAccent.Render(" saving...")
 	} else if m.ctx.Reloading {

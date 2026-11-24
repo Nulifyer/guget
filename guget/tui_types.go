@@ -135,6 +135,11 @@ type restoreResultMsg struct {
 	// covered lists the pending package edits this restore planned for; they
 	// stop affecting later restores once it succeeds.
 	covered []string
+	// projects counts the restores run; affected, those the planner added
+	// for a package edit; regenerated, those run with --force-evaluate;
+	// failed, those that failed. only names the project of a single restore.
+	projects, affected, regenerated, failed int
+	only                                    string
 }
 
 type resizeDebounceMsg struct {

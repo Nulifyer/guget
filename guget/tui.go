@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -85,6 +86,8 @@ type App struct {
 	// successful restore has covered yet. The restore planner uses them to
 	// restore affected consumers and regenerate locked lock files.
 	pendingRestoreChanges []string
+	// restoringProjects is how many projects the running restore covers.
+	restoringProjects int
 }
 
 func (m *App) nextRequestID() int {
@@ -289,7 +292,7 @@ func (m *App) HandleEvent(msg ui.Event) ui.Effect {
 		if msg.err != nil {
 			m.queuedRestore = nil
 			msg.selection = nil
-			cmds = append(cmds, m.setStatus("▲ Save failed: "+msg.err.Error(), true))
+			cmds = append(cmds, m.setStatus(m.saveFailureStatus(msg.err), true))
 		} else {
 			m.pendingRestoreChanges = append(m.pendingRestoreChanges, msg.changed...)
 			status := "✓ Saved"
@@ -316,11 +319,8 @@ func (m *App) HandleEvent(msg ui.Event) ui.Effect {
 		if msg.err == nil {
 			m.pendingRestoreChanges = slices.DeleteFunc(m.pendingRestoreChanges, func(path string) bool { return slices.Contains(msg.covered, path) })
 		}
-		if msg.err != nil {
-			cmds = append(cmds, m.setStatus("✗ Restore failed (see logs)", true))
-		} else {
-			cmds = append(cmds, m.setStatus("✓ Restore complete", false))
-		}
+		m.restoringProjects = 0
+		cmds = append(cmds, m.setStatus(restoreSummary(msg)))
 
 	case searchDebounceMsg:
 		if m.search.active && msg.requestID == m.search.requestID && msg.id == m.search.debounceID && msg.query == m.search.lastQuery && msg.query != "" {
@@ -524,6 +524,30 @@ func (m *App) setStatus(text string, isErr bool) ui.Effect {
 	m.ctx.StatusLine = text
 	m.ctx.StatusIsErr = isErr
 	return nil
+}
+
+// saveFailureStatus logs a failed or refused save in full and returns its
+// status line. A refusal explains what to do instead, and that part must not
+// be lost when the status row cuts the sentence short.
+func (m *App) saveFailureStatus(err error) string {
+	logWarn("Save failed: %v", err)
+	return m.saveFailureText(err)
+}
+
+// saveFailureText shortens workspace paths in a save error and points at the
+// log panel when the status row cannot hold the whole message.
+func (m *App) saveFailureText(err error) string {
+	message := err.Error()
+	if i := strings.IndexByte(message, '\n'); i >= 0 {
+		message = message[:i]
+	}
+	if m.projectDir != "" && m.projectDir != "." {
+		message = strings.ReplaceAll(message, strings.TrimRight(m.projectDir, `/\`)+string(filepath.Separator), "")
+	}
+	if text := "▲ Save failed: " + message; style.Width(text) <= m.layoutWidth()-6 {
+		return text
+	}
+	return "▲ Save failed (l for logs): " + message
 }
 
 func (m *App) handleKey(msg ui.KeyEvent) ui.Effect {

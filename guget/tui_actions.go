@@ -206,7 +206,55 @@ func (m *App) startRestore(projects []*ParsedProject) ui.Effect {
 	covered := append([]string(nil), m.pendingRestoreChanges...)
 	steps := planRestore(m.ctx.ParsedProjects, projects, covered)
 	m.ctx.Restoring = true
+	m.restoringProjects = len(steps)
 	return runDotnetRestore(m.lifecycle, steps, covered)
+}
+
+// restoreSummary is the status line for a finished restore. The planner can
+// restore more projects than the user selected, so the line says how many ran
+// and why, and names the project when there was only one.
+func restoreSummary(msg restoreResultMsg) (string, bool) {
+	if msg.err != nil {
+		if msg.projects <= 1 {
+			return "✗ Restore failed" + restoreProjectSuffix(msg.only) + "; l for logs", true
+		}
+		return fmt.Sprintf("✗ Restore failed for %d of %d projects; l for logs", msg.failed, msg.projects), true
+	}
+	if msg.projects == 0 {
+		return "✓ Restore complete", false
+	}
+	summary := fmt.Sprintf("✓ Restored %d projects", msg.projects)
+	if msg.projects == 1 {
+		summary = "✓ Restored " + msg.only
+	}
+	var notes []string
+	if msg.affected > 0 {
+		notes = append(notes, fmt.Sprintf("%d affected by package edits", msg.affected))
+	}
+	if msg.regenerated == 1 {
+		notes = append(notes, "1 lock file regenerated")
+	} else if msg.regenerated > 1 {
+		notes = append(notes, fmt.Sprintf("%d lock files regenerated", msg.regenerated))
+	}
+	if len(notes) > 0 {
+		summary += " (" + strings.Join(notes, ", ") + ")"
+	}
+	return summary, false
+}
+
+// restoringStatus is the footer text while a restore of count projects runs.
+func restoringStatus(count int) string {
+	if count > 1 {
+		return fmt.Sprintf(" restoring %d projects...", count)
+	}
+	return " restoring..."
+}
+
+func restoreProjectSuffix(name string) string {
+	if name == "" {
+		return ""
+	}
+	return " for " + name
 }
 
 // runDotnetRestore runs every step off the event loop and continues past
@@ -214,10 +262,19 @@ func (m *App) startRestore(projects []*ParsedProject) ui.Effect {
 func runDotnetRestore(ctx context.Context, steps []restoreStep, covered []string) ui.Effect {
 	return func() ui.Event {
 		var lastErr error
+		result := restoreResultMsg{covered: covered}
 		for _, step := range steps {
 			p := step.Project
 			if p.FilePath == "" {
 				continue
+			}
+			result.projects++
+			result.only = p.FileName
+			if !step.Requested {
+				result.affected++
+			}
+			if step.ForceEvaluate {
+				result.regenerated++
 			}
 			if !step.Requested && step.Reason != "" {
 				logInfo("restoring %s: %s", p.FileName, step.Reason)
@@ -231,11 +288,13 @@ func runDotnetRestore(ctx context.Context, steps []restoreStep, covered []string
 			if err != nil {
 				logWarn("restore failed for %s: %v\n%s", p.FilePath, err, strings.TrimSpace(string(out)))
 				lastErr = fmt.Errorf("%w\n%s", err, strings.TrimSpace(string(out)))
+				result.failed++
 			} else {
 				logInfo("restore succeeded for %s", p.FileName)
 			}
 		}
-		return restoreResultMsg{err: lastErr, covered: covered}
+		result.err = lastErr
+		return result
 	}
 }
 
