@@ -390,7 +390,7 @@ func TestBulkUpdateSkipsLockedProjects(t *testing.T) {
 	}
 	m.HandleEvent(msg)
 	finishActionReload(t, m, messages)
-	for _, detail := range []string{"Updated A to 2.0.0", "1 file", "1 locked"} {
+	for _, detail := range []string{"Updated A to 2.0.0", "1 file", "1 pinned skipped"} {
 		if !strings.Contains(m.ctx.StatusLine, detail) {
 			t.Fatalf("bulk result omits %q: %q", detail, m.ctx.StatusLine)
 		}
@@ -433,7 +433,7 @@ func TestQuickUpdateScopesAndAllLockedWarning(t *testing.T) {
 	})
 	t.Run("all locked", func(t *testing.T) {
 		m, _, _ := newActionTestApp(t, `<Project><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup><ItemGroup><PackageReference Include="A" Version="[1.0.0]"/></ItemGroup></Project>`)
-		if cmd := m.handleKey(ui.KeyPress(ui.Key{Code: 'U'})); cmd != nil || m.ctx.Saving || !strings.Contains(m.ctx.StatusLine, "1 skipped") {
+		if cmd := m.handleKey(ui.KeyPress(ui.Key{Code: 'U'})); cmd != nil || m.ctx.Saving || !strings.Contains(m.ctx.StatusLine, "1 skipped (pinned)") {
 			t.Fatalf("status=%q saving=%v", m.ctx.StatusLine, m.ctx.Saving)
 		}
 	})

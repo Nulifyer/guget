@@ -101,7 +101,7 @@ func (m *App) updatePackage(useStable bool, scope actionScope) ui.Effect {
 	}
 	if !needsUpdate {
 		if skippedLocked > 0 {
-			return m.setStatus(fmt.Sprintf("%d skipped (version locked)", skippedLocked), false)
+			return m.setStatus(fmt.Sprintf("%d skipped (pinned)", skippedLocked), false)
 		}
 		return m.setStatus(row.ref.Name+" is already at "+version, false)
 	}

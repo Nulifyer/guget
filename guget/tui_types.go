@@ -42,7 +42,7 @@ func (s packageSortMode) label() string {
 	case sortByName:
 		return "name"
 	case sortByCurrent:
-		return "current"
+		return "requested"
 	case sortByAvailable:
 		return "available"
 	case sortBySource:
@@ -82,7 +82,7 @@ func parseSortMode(name string) packageSortMode {
 	switch strings.ToLower(name) {
 	case "name":
 		return sortByName
-	case "current":
+	case "requested", "current":
 		return sortByCurrent
 	case "available":
 		return sortByAvailable
@@ -125,7 +125,7 @@ type writeResultMsg struct {
 	summary   string
 	changed   []string // files the transaction changed
 	written   int      // number of changed files in the completed transaction
-	skipped   int      // number of locked refs skipped during scope=all update
+	skipped   int      // number of pinned refs skipped during scope=all update
 	reload    bool
 	selection *reloadSelection
 }

@@ -243,7 +243,8 @@ the pointer. Double-clicking is not a separate action.
 Click Requested, Available, or Source in the package header to sort. Click the
 bracketed sort mode to cycle modes, or its arrow to reverse direction. The
 Requested and Available sorts use publication dates. In `--sort-by` and the
-`sort` setting, these modes are named `current` and `available`.
+`sort` setting, these modes are named `requested` and `available`; `current` is
+still accepted for `requested`.
 
 To leave mouse input to the terminal for text selection and native link handling:
 

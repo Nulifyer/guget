@@ -46,7 +46,7 @@ func settingKeys() []userconfig.Key {
 		},
 		{
 			Name: settingSort, Default: "status:asc", Validate: parseSortBy,
-			Description: "initial TUI package sort: status, name, source, current, or available, with optional :asc or :desc (--sort-by)",
+			Description: "initial TUI package sort: status, name, source, requested, or available, with optional :asc or :desc (--sort-by)",
 		},
 		{
 			Name: settingMouse, Kind: userconfig.Bool, Default: "true",

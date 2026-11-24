@@ -297,9 +297,9 @@ func (m *App) HandleEvent(msg ui.Event) ui.Effect {
 			m.pendingRestoreChanges = append(m.pendingRestoreChanges, msg.changed...)
 			status := "✓ Saved"
 			if msg.written > 0 && msg.skipped > 0 {
-				status = fmt.Sprintf("✓ Saved %d, %d locked", msg.written, msg.skipped)
+				status = fmt.Sprintf("✓ Saved %d, %d pinned skipped", msg.written, msg.skipped)
 			} else if msg.skipped > 0 {
-				status = fmt.Sprintf("%d skipped (version locked)", msg.skipped)
+				status = fmt.Sprintf("%d skipped (pinned)", msg.skipped)
 			}
 			if msg.summary != "" {
 				status = msg.summary

@@ -169,6 +169,7 @@ func TestCLIParseSortByCustomParser(t *testing.T) {
 		"status",
 		"name:desc",
 		"source:asc",
+		"requested:asc",
 		"current:desc",
 		"available",
 		":desc",

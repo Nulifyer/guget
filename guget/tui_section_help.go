@@ -62,7 +62,7 @@ func (s *helpOverlay) refreshView() {
 		title: "Mouse", rows: [][2]string{
 			{"left click", "select rows, tabs, links, and buttons"},
 			{"wheel", "navigate or scroll under the pointer"},
-			{"Shift + mouse", "native terminal selection"},
+			{"Shift + mouse", "native terminal selection, where the terminal supports it"},
 		},
 	})
 	sections = append(sections, []keyHelpSection{
@@ -70,7 +70,7 @@ func (s *helpOverlay) refreshView() {
 			title: "Version picker  (v)",
 			rows: [][2]string{
 				{"↑ / ↓  or  j / k", "move cursor"},
-				{"u", "apply version (this project)"},
+				{"u", "apply version (selected project, or all from All Projects)"},
 				{"U", "apply version (all projects)"},
 				{"enter", "apply version"},
 				{"esc / q", "close picker"},

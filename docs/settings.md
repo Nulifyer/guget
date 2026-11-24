@@ -51,7 +51,7 @@ next source instead. When a key appears twice, the later line wins.
 | Key | Default | Values | Flag |
 | --- | --- | --- | --- |
 | `theme` | `"auto"` | `auto`, `auto-light`, `auto-dark`, `dracula`, `catppuccin-mocha`, `catppuccin-macchiato`, `catppuccin-frappe`, `catppuccin-latte`, `nord`, `tokyo-night`, `everforest`, `gruvbox` | `--theme` |
-| `sort` | `"status:asc"` | `status`, `name`, `source`, `current`, or `available`, optionally followed by `:asc` or `:desc` | `--sort-by` |
+| `sort` | `"status:asc"` | `status`, `name`, `source`, `requested`, or `available`, optionally followed by `:asc` or `:desc`. `current` is accepted as an older name for `requested` | `--sort-by` |
 | `mouse` | `true` | `true` or `false` | `--no-mouse` sets `false` |
 | `update-check` | `true` | `true` or `false` | `--no-update-check` sets `false` |
 | `verbosity` | `"warn"` | `none`, `error`, `warn`, `info`, `debug`, `trace` | `--verbose` |

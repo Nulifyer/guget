@@ -201,7 +201,7 @@ func (m *App) startMutation(verb, packageID, version string, targets []mutationT
 func mutationSummary(verb, packageID, version string, written, skipped int) string {
 	if written == 0 {
 		if skipped > 0 {
-			return fmt.Sprintf("%s unchanged (%d locked)", packageID, skipped)
+			return fmt.Sprintf("%s unchanged (%d pinned skipped)", packageID, skipped)
 		}
 		return packageID + " unchanged"
 	}
@@ -220,7 +220,7 @@ func mutationSummary(verb, packageID, version string, written, skipped int) stri
 	}
 	summary = fmt.Sprintf("✓ %s (%d %s", summary, written, files)
 	if skipped > 0 {
-		summary += fmt.Sprintf(", %d locked", skipped)
+		summary += fmt.Sprintf(", %d pinned skipped", skipped)
 	}
 	return summary + ")"
 }

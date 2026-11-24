@@ -138,7 +138,7 @@ func (m *App) renderDetailUpdateRequirements(row packageRow) string {
 			}
 			installs = append(installs, install.version+" does not support every target framework of "+scope+".")
 		}
-		s.WriteString(styleSubtle.Render(strings.Join(installs, " ")+" v lists the versions that do.") + "\n\n")
+		s.WriteString(styleSubtle.Render(strings.Join(installs, " ")+" v marks the versions that do.") + "\n\n")
 	}
 	if skipped := row.skippedStable(); skipped != nil {
 		// The status icon and u ignore this version; say why it is in the

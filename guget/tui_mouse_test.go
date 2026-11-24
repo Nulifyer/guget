@@ -298,6 +298,17 @@ func TestPackageModeHeaderCyclesAndArrowReverses(t *testing.T) {
 	}
 }
 
+func TestRequestedSortNameAndCurrentAlias(t *testing.T) {
+	for _, name := range []string{"requested", "current", "Requested"} {
+		if mode, asc := parseSortFlag(name + ":asc"); mode != sortByCurrent || !asc {
+			t.Fatalf("parseSortFlag(%q) = (%v, %v)", name, mode, asc)
+		}
+	}
+	if got := sortByCurrent.label(); got != "requested" {
+		t.Fatalf("label = %q", got)
+	}
+}
+
 func TestNamedPackageHeadersSortDirectlyAndReverse(t *testing.T) {
 	app := newMouseTestApp()
 	layout := app.mainMouseLayout(30, 60, 30)

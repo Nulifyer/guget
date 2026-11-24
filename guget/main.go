@@ -188,7 +188,7 @@ func registerCLIFlags(settings Settings) {
 		Name:        Flag_SortBy,
 		Aliases:     []string{"-o", "--sort-by"},
 		Default:     Optional(settings.Sort),
-		Description: "Initial sort order (status, name, source, current, available) with optional :asc or :desc",
+		Description: "Initial sort order (status, name, source, requested, available) with optional :asc or :desc",
 		Parser:      parseSortBy,
 	})
 }
@@ -197,7 +197,7 @@ func registerCLIFlags(settings Settings) {
 func parseSortBy(s string) (string, error) {
 	name, dir, _ := strings.Cut(s, ":")
 	switch strings.ToLower(name) {
-	case "", "status", "name", "source", "current", "available":
+	case "", "status", "name", "source", "requested", "current", "available":
 		switch dir {
 		case "", "asc", "desc":
 			return s, nil

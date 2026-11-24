@@ -36,7 +36,7 @@ func TestInstalledVersionTheFrameworksCannotUseIsFlagged(t *testing.T) {
 		t.Fatalf("C, on a version the feed does not list: unusable=%+v", c.unusable)
 	}
 	detail := strings.Join(strings.Fields(text.Strip(m.renderDetail(a))), " ")
-	if !strings.Contains(detail, "Installed version not usable 3.0.0 does not support every target framework of the affected projects. v lists the versions that do.") {
+	if !strings.Contains(detail, "Installed version not usable 3.0.0 does not support every target framework of the affected projects. v marks the versions that do.") {
 		t.Fatalf("selected project detail: %s", detail)
 	}
 	if detail := text.Strip(m.renderDetail(selected["B"])); strings.Contains(detail, "Installed version not usable") {
@@ -51,7 +51,7 @@ func TestInstalledVersionTheFrameworksCannotUseIsFlagged(t *testing.T) {
 		t.Fatalf("All Projects A: icon=%q", a.statusIcon())
 	}
 	detail = strings.Join(strings.Fields(text.Strip(m.renderDetail(a))), " ")
-	if !strings.Contains(detail, "3.0.0 does not support every target framework of App.csproj. v lists the versions that do.") {
+	if !strings.Contains(detail, "3.0.0 does not support every target framework of App.csproj. v marks the versions that do.") {
 		t.Fatalf("All Projects detail: %s", detail)
 	}
 
