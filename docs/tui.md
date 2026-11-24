@@ -49,19 +49,41 @@ For quick updates from the package panel:
 
 | Key | Scope and version |
 | --- | --- |
-| `u` | Latest compatible version for the selected project. |
-| `U` | Apply the selected package's compatible update across projects. |
-| `a` | Latest stable version for the selected project. |
+| `u` | The update target for the selected project. |
+| `U` | Apply the selected package's update target across projects. |
+| `a` | Latest stable version for the selected project, whatever its frameworks. |
 | `A` | Apply the selected package's latest stable version across projects. |
+
+The update target follows the [`update-target` setting](settings.md#update-target).
+The default, `compatible-stable`, is the newest stable version every affected
+framework can use. `a` and `A` always choose what `dotnet package update`
+would, the `stable` setting. Under every setting, a reference whose requested
+version is a prerelease, such as `11.0.0-preview.6`, is offered newer
+prereleases. No quick update lowers a version: when nothing newer qualifies,
+the status line says the package is already up to date.
 
 When All Projects is selected, lowercase quick-update keys also operate across
 projects. Bulk updates, including version-picker changes from All Projects,
 skip pinned references. A selected project's pinned reference can be changed
 after confirmation.
 
-Compatible quick updates consider every affected project's frameworks, including
+Update targets consider every affected project's frameworks, including
 projects that consume the same shared version. Latest stable and explicit picker
 choices can require newer frameworks; restore and test each affected project.
+The version picker opens on the update target.
+
+The Available column shows the update target first. When the latest stable
+version (the `a` choice) differs, it follows in parentheses:
+
+| Setting | Available shows |
+| --- | --- |
+| `compatible-stable` | Newest compatible stable version, then the newest stable one if a framework cannot use it. |
+| `compatible` | Newest compatible version, prereleases included, then the newest stable one if different. |
+| `stable` | Newest stable version only. |
+
+With All Projects selected, the update target never lowers any project's
+version, and prereleases count when the most recent version in use was
+requested as a prerelease.
 
 An available version marked `[deps]` needs a dependency changed first. The
 detail panel's **Update requirements** lists the affected projects, required
@@ -189,10 +211,10 @@ it in your [settings file](settings.md), for example with
 | `.` | Metadata is loading. |
 | `✗` | Metadata lookup failed. |
 | `▲` | A known vulnerability is reported for an installed version. |
-| `~` | The feed marks the package deprecated. |
-| `↑` | A compatible update is available. |
-| `⇑` | A newer stable version is available beyond the compatible choice. |
-| `✓` | No newer version is indicated by the available metadata. |
+| `~` | The feed marks an installed version deprecated. |
+| `↑` | An update to the update target is available. |
+| `⇑` | An update is available, and a newer stable version exists beyond it that some framework cannot use. |
+| `✓` | No update is available under the update target. A newer version that a framework cannot use does not count. |
 
 Missing vulnerability metadata does not establish that a package is safe.
 Review the package detail and your restore/audit results when assessing an update.

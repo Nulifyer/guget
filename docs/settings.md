@@ -56,12 +56,56 @@ next source instead. When a key appears twice, the later line wins.
 | `update-check` | `true` | `true` or `false` | `--no-update-check` sets `false` |
 | `verbosity` | `"warn"` | `none`, `error`, `warn`, `info`, `debug`, `trace` | `--verbose` |
 | `color` | `true` | `true` or `false` | `--no-color` sets `false` |
-| `update-target` | `"compatible-stable"` | `compatible-stable`, `compatible`, `stable` | none |
+| `update-target` | `"compatible-stable"` | `compatible-stable`, `compatible`, `stable` | `--update-target` on `list` and `update` |
 
 `theme`, `sort`, `mouse`, `update-check`, `verbosity`, and `color` apply to the
 TUI. The CLI commands such as `list` and `update` ignore them. `update-target`
-records which versions package updates should aim for. Guget stores and reports
-it, but no command acts on it yet.
+applies to both; see [update target](#update-target).
+
+## Update target
+
+`update-target` decides which version Guget offers as a package's update: the
+TUI's Available column, status marker, `u` and `U` keys, and version-picker
+default, and the CLI's `list --outdated` and `update --latest`.
+
+| Value | Update target |
+| --- | --- |
+| `compatible-stable` | The newest stable version that every target framework of the affected projects can use. |
+| `compatible` | The newest version, prereleases included, that every target framework of the affected projects can use. |
+| `stable` | The newest stable version, whatever frameworks it supports. This is what `dotnet package update` writes. |
+
+Prereleases also count, under every value, when the reference's requested
+version, or the lower bound of its range, is itself a prerelease. This is the
+rule `dotnet package update` follows. A floating range such as `1.0.0-*` or
+`*-*` has a prerelease lower bound too.
+
+For example, with `10.6.0`, `10.7.0`, `11.0.0-preview.6`, and
+`11.0.0-preview.7` on the feed:
+
+| Requested | `compatible-stable` | `compatible` | `stable` |
+| --- | --- | --- | --- |
+| `11.0.0-preview.6` | `11.0.0-preview.7` | `11.0.0-preview.7` | `11.0.0-preview.7` |
+| `10.6.0` | `10.7.0` | `11.0.0-preview.7` | `10.7.0` |
+
+A version counts as compatible when restore can use it for each framework,
+directly or through AssetTargetFallback, which restores with warning NU1701.
+Guget judges this from the frameworks the source lists for each version; restore
+remains the final check. Target frameworks Guget cannot evaluate, such as
+`$(MyFrameworks)`, are skipped. "Affected projects" are all the projects whose
+version one edit changes, for example every project using a shared
+`Directory.Packages.props` entry.
+
+Every value uses only listed versions, merged from every source that package
+source mapping allows. An update never lowers a version: when nothing newer
+qualifies, the package is up to date. Under `compatible-stable` and
+`compatible`, a newer version that some framework cannot use is not an update.
+
+Set it for good, or for one command:
+
+```bash
+guget config set update-target compatible
+guget list --project ./src --outdated --update-target stable
+```
 
 ## Environment variables
 

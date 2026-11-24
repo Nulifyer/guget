@@ -50,9 +50,58 @@ guget list --project ./src --direct --format json
 guget list --project ./src --include-transitive --format json
 ```
 
-The `--outdated`, `--vulnerable`, and `--deprecated` filters are accepted but
-not implemented yet. They exit 7 without a listing. Use the TUI to browse
-package metadata and notices.
+### Find outdated, vulnerable, and deprecated packages
+
+```bash
+guget list --project ./src --outdated --format json
+guget list --project ./src --vulnerable --format json
+guget list --project ./src --deprecated --vulnerable --format json
+guget list --project ./src --metadata --format json
+```
+
+A plain `list` reads only the workspace. These flags also fetch package
+metadata from the configured HTTP sources and fill the update, vulnerability,
+and deprecation fields of each row:
+
+| Flag | Rows kept |
+| --- | --- |
+| `--outdated` | Rows with an `updateTarget`: a newer version under the update target. |
+| `--vulnerable` | Rows whose version has a known vulnerability. |
+| `--deprecated` | Rows whose version is deprecated. |
+| `--metadata` | Every row; only fills the fields. |
+
+The filters combine as "any of": `--deprecated --vulnerable` keeps rows that
+are deprecated, vulnerable, or both. `dotnet list package` accepts only one of
+its matching options at a time; each guget filter on its own selects what that
+dotnet option selects for the same version.
+
+Rows compare the restored version, as `dotnet list package` does. When restore
+metadata is missing they use the requested version. A row's update target
+depends on the [update target](settings.md#update-target) setting; override it
+for one run with `--update-target`:
+
+```bash
+guget list --project ./src --outdated --update-target stable --format json
+```
+
+With `--update-target stable`, `updateTarget` is the `Latest` version that
+`dotnet list package --outdated` reports for a stable reference, and that
+`dotnet list package --outdated --include-prerelease` reports for a prerelease
+reference. The default, `compatible-stable`, also requires a version that every
+target framework of the projects sharing the version can use. Those are all the
+projects whose version comes from the same file, such as a shared
+`Directory.Packages.props`, because one update changes them together.
+
+Guget asks every source that package source mapping allows and merges their
+versions, as NuGet does. Unlisted versions never count. Vulnerabilities and
+deprecation apply to the exact version a row uses. A `PackageDownload` row is
+never assessed: its fields stay `null` and no filter keeps it.
+
+Fetching metadata stops after 30 seconds unless you pass `--timeout`, which
+then bounds the whole command. When the metadata of some packages is missing,
+for example because a package is on no source or one source failed, those rows
+keep `null` fields, filters drop them, a warning names them, and the command
+exits 7. When every source fails, it exits 3.
 
 Package rows have these fields:
 
@@ -76,6 +125,23 @@ Package rows have these fields:
 | `global` | `true` for a `GlobalPackageReference`, which applies to every project importing its file. |
 | `privateAssets` | The reference's `PrivateAssets`, such as `All` for a global package, or `null`. |
 | `download` | `true` for a read-only `PackageDownload` row. Downloads are restore-only and not dependencies. |
+
+These fields are `null`, or `[]` for arrays, until metadata is fetched:
+
+| Field | Meaning |
+| --- | --- |
+| `updateTarget` | Version an update would write under the update target, or `null` when the row is up to date. |
+| `updateTargetCompatibility` | `compatible`, `fallback` (usable through AssetTargetFallback, restore warns NU1701), or `incompatible` (only under `stable`), or `null` without an update target. |
+| `latestStable` | Newest listed stable version, ignoring frameworks. |
+| `latestVersion` | Newest listed version, including prereleases. |
+| `vulnerable` | `true` when the row's version has known vulnerabilities. |
+| `advisories` | Those vulnerabilities as objects with `severity` (`low`, `moderate`, `high`, or `critical`) and `url`. |
+| `deprecated` | `true` when the row's version is deprecated. |
+| `deprecationReasons` | Reasons the source gives, such as `Legacy` or `CriticalBugs`. |
+| `alternatePackage` | Package the source recommends instead, or `null`. |
+
+The document's `updateTarget` key names the update target the rows used, or
+is `null` when no metadata was fetched.
 
 ## Search configured sources
 
@@ -143,9 +209,43 @@ Verify the result:
 guget show Newtonsoft.Json --project ./src --format json
 ```
 
-Use an explicit `--version`. An invalid version string exits 1 before Guget
-reads the workspace. The `--latest-compatible` and `--latest-stable` selectors
-are accepted but refused with exit 4 until they are implemented.
+An invalid `--version` string exits 1 before Guget reads the workspace.
+
+### Update to the latest version
+
+Instead of `--version`, let Guget choose each project's version:
+
+```bash
+guget update Newtonsoft.Json --latest --project ./src --all --dry-run --format json
+guget update Newtonsoft.Json --latest --update-target stable --project ./src --all
+```
+
+`--latest` writes, for each project, the version that `list --outdated` shows
+as its `updateTarget`, under the [update target](settings.md#update-target)
+setting or `--update-target`. It compares with the requested lower bound, as
+`dotnet package update` does, and never lowers a version. A project with
+nothing newer keeps its version; the plan lists it with the operation
+`unchanged`, and the command still exits 0. `--update-target stable` chooses
+what `dotnet package update` chooses.
+
+Two shorter forms name the target themselves:
+
+| Flag | Same as |
+| --- | --- |
+| `--latest-compatible` | `--latest --update-target compatible-stable` |
+| `--latest-stable` | `--latest --update-target stable` |
+
+Give exactly one of `--version`, `--latest`, `--latest-compatible`, and
+`--latest-stable`. `--update-target` works only with `--latest`. Other
+combinations exit 1. Exact pins follow the same rules as an explicit version.
+The document's `updateTarget` key names the target used, or is `null` for
+`--version`.
+
+Fetching metadata stops after 30 seconds unless you pass `--timeout`. When no
+source supplies the package, the command exits 3. When a source fails but
+another answers, Guget chooses from the versions it has, warns, and exits 7
+after the edit. `add` still needs `--version`: its `--latest-compatible` and
+`--latest-stable` exit 4.
 
 ### Exact pins
 
@@ -203,9 +303,9 @@ Plan rows, in `changes`, have these fields:
 
 | Field | Meaning |
 | --- | --- |
-| `operation` | `add reference`, `add central version`, `update version`, `remove reference`, or `skip (pinned)`. |
+| `operation` | `add reference`, `add central version`, `update version`, `remove reference`, `skip (pinned)`, or `unchanged` (nothing newer for `--latest`). |
 | `package` | Package ID. |
-| `version` | Version written, the pinned version for a skip, or an empty string for a removal. |
+| `version` | Version written, the current version for a skip or `unchanged`, or an empty string for a removal. |
 | `path` | File the operation edits. |
 
 ## Restore projects
@@ -376,10 +476,10 @@ The rows sit under a key named for the command:
 
 | Command | Rows | Other keys |
 | --- | --- | --- |
-| `list`, `show` | `packages` | `workspace`, `warnings` |
+| `list`, `show` | `packages` | `workspace`, `updateTarget`, `warnings` |
 | `sources` | `sources` | `workspace`, `warnings` |
 | `search` | `results` | `workspace`, `query`, `warnings` |
-| `add`, `update`, `remove` | `changes` | `workspace`, `dryRun`, `skipped`, `changed`, `restore`, `rolledBack`, `conflicting`, `unrecovered`, `warnings` |
+| `add`, `update`, `remove` | `changes` | `workspace`, `dryRun`, `updateTarget`, `skipped`, `changed`, `restore`, `rolledBack`, `conflicting`, `unrecovered`, `warnings` |
 | `restore` | `projects` | `workspace`, `warnings` |
 | `config show` | `settings` | `path`, `warnings` |
 
@@ -430,6 +530,7 @@ guget update Example --project ./src --file App/App.csproj --version 2.0.0 --for
   "error": "edit refused: package \"Example\" is not installed in the selected scope",
   "workspace": "/path/to/src",
   "dryRun": false,
+  "updateTarget": null,
   "changes": [],
   "skipped": 0,
   "changed": [],
@@ -464,18 +565,42 @@ Codes each command can return besides 0, 1, 124, and 130:
 
 | Command | Other codes |
 | --- | --- |
-| `list` | 2, 5, 7 |
+| `list` | 2, 3, 5, 7 |
 | `show` | 2, 5, 7 |
 | `sources` | 2, 5 |
 | `search` | 2, 3, 5, 7 |
 | `add`, `remove` | 2, 4, 5, 6 |
-| `update` | 2, 4, 5, 6 |
+| `update` | 2, 3, 4, 5, 6, 7 |
 | `restore` | 2, 5, 6 |
 | `config` | 5 |
 | `self-update` | 3, 4, 5 |
 | `completion`, `version`, `help` | none |
 
 ## Use the CLI in CI and agents
+
+Fail a pipeline when a package has a known vulnerability. Exit 7 still
+produces a listing, so check the rows rather than only the exit code:
+
+```bash
+status=0
+guget list --project ./src --vulnerable --format json > vulnerable.json || status=$?
+if [ "$status" -ne 0 ] && [ "$status" -ne 7 ]; then
+  exit "$status"
+fi
+if jq -e '.packages | length > 0' vulnerable.json > /dev/null; then
+  jq -r '.packages[] | "\(.project) \(.package) \(.resolvedVersion): \([.advisories[].severity] | join(","))"' vulnerable.json
+  exit 1
+fi
+```
+
+List available updates, then apply them package by package:
+
+```bash
+guget list --project ./src --outdated --direct --format '{{.package}}' --no-headers | sort -u |
+  while read -r package; do
+    guget update "$package" --latest --project ./src --all --format json
+  done
+```
 
 Fail a pipeline when an edit is refused, and keep the refusal for the log:
 
