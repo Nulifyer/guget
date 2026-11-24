@@ -452,9 +452,10 @@ guget list --project ./src --format json > packages.json
 ```
 
 `--output` never overwrites a workspace input such as a project, a props file,
-or a NuGet.Config. Guget checks the destination before any evaluation, network
-request, or edit, and exits 5 if it is unusable. The file is replaced
-atomically after the result renders.
+a NuGet.Config, a solution file, a `global.json` in or above the workspace, or
+a project's `packages.lock.json`. Guget checks the destination before any
+evaluation, network request, or edit, and exits 5 if it is unusable. The file
+is replaced atomically after the result renders.
 
 Every format sends warnings to stderr; JSON also includes them in `warnings`.
 If writing the result fails after an edit, the command exits 5 and explains

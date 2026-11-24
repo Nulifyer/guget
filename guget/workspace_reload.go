@@ -24,6 +24,7 @@ type workspaceSnapshot struct {
 	SourceMapping  *PackageSourceMapping
 	NugetServices  []*NugetService
 	Unsupported    []unsupportedPackageArtifact
+	SolutionFiles  []string
 }
 
 type unsupportedPackageArtifact struct {
@@ -229,6 +230,7 @@ func scanWorkspaceOnce(fullProjectPath string, tree *workspaceTree, parse func(s
 		Sources:        sources,
 		SourceMapping:  sourceMapping,
 		Unsupported:    unsupported,
+		SolutionFiles:  tree.SolutionFiles,
 	}, nil
 }
 

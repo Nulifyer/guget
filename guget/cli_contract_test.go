@@ -515,6 +515,43 @@ func TestReadVerbOutputCannotOverwriteWorkspaceInputs(t *testing.T) {
 	}
 }
 
+func TestOutputCannotReplaceLockSolutionOrGlobalJSONFiles(t *testing.T) {
+	parent := t.TempDir()
+	root := filepath.Join(parent, "repo")
+	mustWriteFile(t, filepath.Join(root, "NuGet.Config"), `<configuration><packageSources><clear /></packageSources></configuration>`)
+	writeCLIProject(t, filepath.Join(root, "sub"), "App", `<Project><ItemGroup><PackageReference Include="Example" Version="1.0.0" /></ItemGroup></Project>`)
+	named := writeCLIProject(t, root, "My Lib", `<Project><PropertyGroup><NuGetLockFilePath>locks/custom.lock.json</NuGetLockFilePath></PropertyGroup></Project>`)
+	protected := []string{
+		filepath.Join(root, "sub", "App", "packages.lock.json"),     // exists
+		filepath.Join(root, "sub", "App", "packages.App.lock.json"), // may be created by restore
+		filepath.Join(root, "My Lib", "packages.My_Lib.lock.json"),
+		filepath.Join(filepath.Dir(named), "locks", "custom.lock.json"),
+		filepath.Join(root, "repo.sln"),
+		filepath.Join(root, "sub", "Filter.slnf"),
+		filepath.Join(root, "sub", "New.slnx"),
+		filepath.Join(root, "global.json"),
+		filepath.Join(parent, "global.json"),
+		filepath.Join(root, "sub", "App", "global.json"),
+	}
+	for _, path := range protected[:1] {
+		mustWriteFile(t, path, `{"version":1}`)
+	}
+	for _, path := range protected[4:] {
+		mustWriteFile(t, path, "keep")
+	}
+	if err := os.MkdirAll(filepath.Join(filepath.Dir(named), "locks"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range protected {
+		before, _ := os.ReadFile(path)
+		code, _, stderr := runHermetic(t, "list", "--project", root, "--format", "json", "--output", path)
+		after, _ := os.ReadFile(path)
+		if code != ExitWrite || !strings.Contains(stderr, "overwrite a workspace input") || !bytes.Equal(before, after) {
+			t.Errorf("--output %s: code=%d stderr=%s", path, code, stderr)
+		}
+	}
+}
+
 func TestCLINeverPrintsSourceCredentials(t *testing.T) {
 	root := t.TempDir()
 	writeCLIProject(t, root, "App", `<Project />`)

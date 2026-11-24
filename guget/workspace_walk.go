@@ -28,10 +28,21 @@ const includeIgnoredFlag = "include-ignored"
 type workspaceTree struct {
 	ProjectFiles []string
 	WatchedFiles []string
-	Unsupported  []unsupportedPackageArtifact
+	// SolutionFiles are the .sln, .slnx, and .slnf files found, which an
+	// --output file must not replace.
+	SolutionFiles []string
+	Unsupported   []unsupportedPackageArtifact
 	// GitIgnored counts directories and candidate files skipped because a
 	// .gitignore rule excludes them.
 	GitIgnored int
+}
+
+func isSolutionFile(name string) bool {
+	switch strings.ToLower(filepath.Ext(name)) {
+	case ".sln", ".slnx", ".slnf":
+		return true
+	}
+	return false
 }
 
 func isProjectFile(name string) bool {
@@ -131,6 +142,9 @@ func (w *workspaceWalker) walkDir(dir string, repo *gitRepo, rules []gitignore.R
 		project := isProjectFile(entry.Name())
 		watched := isWatchedWorkspaceFile(path)
 		reason := unsupportedArtifactReason(path)
+		if isSolutionFile(entry.Name()) {
+			w.tree.SolutionFiles = append(w.tree.SolutionFiles, path)
+		}
 		if !project && !watched && reason == "" {
 			continue
 		}

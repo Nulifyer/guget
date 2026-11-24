@@ -1454,10 +1454,36 @@ func (r *cliRuntime) restoreProjects(ctx context.Context, steps []restoreStep, i
 }
 
 // workspaceOutputInputs lists the files an --output path must never replace.
+// workspaceOutputInputs lists the files an --output file must not replace:
+// the workspace inputs, each project's lock file under any name NuGet may
+// use, the solution files found, and global.json in the workspace or project
+// directories or above them. Paths need not exist.
 func workspaceOutputInputs(snapshot *workspaceSnapshot) []string {
 	inputs := workspaceInputPaths(snapshot.ProjectDir, snapshot)
+	inputs = append(inputs, snapshot.SolutionFiles...)
+	dirs := []string{snapshot.ProjectDir}
 	for _, project := range snapshot.ParsedProjects {
 		inputs = append(inputs, project.FilePath)
+		dir := filepath.Dir(project.FilePath)
+		dirs = append(dirs, dir)
+		if project.LockFile.Path != "" {
+			inputs = append(inputs, project.LockFile.Path)
+		}
+		name := strings.TrimSuffix(filepath.Base(project.FilePath), filepath.Ext(project.FilePath))
+		inputs = append(inputs,
+			filepath.Join(dir, "packages.lock.json"),
+			filepath.Join(dir, "packages."+name+".lock.json"),
+			filepath.Join(dir, "packages."+strings.ReplaceAll(name, " ", "_")+".lock.json"))
+	}
+	seen := make(map[string]bool)
+	for _, start := range dirs {
+		for dir := start; dir != "" && !seen[dir]; dir = filepath.Dir(dir) {
+			seen[dir] = true
+			inputs = append(inputs, filepath.Join(dir, "global.json"))
+			if filepath.Dir(dir) == dir {
+				break
+			}
+		}
 	}
 	return inputs
 }
