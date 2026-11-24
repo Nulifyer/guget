@@ -114,6 +114,28 @@ func TestRestorePlanForceEvaluateFollowsLockedMode(t *testing.T) {
 	}
 }
 
+// The TUI plans restores on its event loop, so planning uses the lock-file
+// existence recorded when the project was read instead of asking the disk.
+func TestRestorePlanUsesLockFileExistenceFromTheScan(t *testing.T) {
+	root, projects := restoreWorkspace(t)
+	lib := projects["Lib"]
+	if !lib.LockFile.Exists || projects["Tool"].LockFile.Exists {
+		t.Fatalf("scan recorded Lib=%v Tool=%v", lib.LockFile.Exists, projects["Tool"].LockFile.Exists)
+	}
+	if err := os.Remove(filepath.Join(root, "Lib", "packages.lock.json")); err != nil {
+		t.Fatal(err)
+	}
+	m := NewApp(t.TempDir(), &workspaceSnapshot{ParsedProjects: []*ParsedProject{projects["App"], lib, projects["Tool"]}}, nil, BuiltFlags{})
+	m.pendingRestoreChanges = []string{lib.FilePath}
+	if effect := m.startRestore([]*ParsedProject{lib}); effect == nil || m.restoringProjects != 2 {
+		t.Fatalf("restore planned %d projects", m.restoringProjects)
+	}
+	steps := planRestore(m.ctx.ParsedProjects, []*ParsedProject{lib}, m.pendingRestoreChanges)
+	if len(steps) == 0 || steps[0].Project != lib || !steps[0].ForceEvaluate {
+		t.Fatalf("planning consulted the disk instead of the scan: %+v", steps)
+	}
+}
+
 func TestTUIRestoreKeepsUnrestoredEditsUntilARestoreSucceeds(t *testing.T) {
 	_, projects := restoreWorkspace(t)
 	m := NewApp(t.TempDir(), &workspaceSnapshot{ParsedProjects: []*ParsedProject{projects["App"], projects["Lib"], projects["Tool"]}}, nil, BuiltFlags{})

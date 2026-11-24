@@ -296,7 +296,7 @@ func TestParseCsprojReportsDownloadsReferencesAndLockFile(t *testing.T) {
 	if len(project.ProjectReferences) != 1 || project.ProjectReferences[0] != filepath.Join(root, "Lib", "Lib.csproj") {
 		t.Fatalf("project references = %v", project.ProjectReferences)
 	}
-	want := LockFileSettings{Path: filepath.Join(root, "App", "packages.App.lock.json"), WithLockFile: LockSettingTrue, LockedMode: LockSettingUnknown}
+	want := LockFileSettings{Path: filepath.Join(root, "App", "packages.App.lock.json"), WithLockFile: LockSettingTrue, LockedMode: LockSettingUnknown, Exists: true}
 	if project.LockFile != want {
 		t.Fatalf("lock file = %+v, want %+v", project.LockFile, want)
 	}

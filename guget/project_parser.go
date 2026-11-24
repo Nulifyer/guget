@@ -204,6 +204,10 @@ type LockFileSettings struct {
 	Path         string // the lock file NuGet would use
 	WithLockFile LockSetting
 	LockedMode   LockSetting
+	// Exists records that Path was a regular file when the project was read,
+	// so planning a restore needs no file system access. An edit to the
+	// project's packages rereads it.
+	Exists bool
 }
 
 // isExactLock reports whether a raw version string is a NuGet exact-version pin ([x.y.z]).
@@ -416,6 +420,7 @@ func lockFileSettings(evaluation *msbuildstatic.Evaluation) LockFileSettings {
 			path = filepath.Join(projectDir, path)
 		}
 		settings.Path = filepath.Clean(path)
+		settings.Exists = isRegularFile(settings.Path)
 		return settings
 	}
 	name := strings.TrimSuffix(filepath.Base(evaluation.ProjectPath), filepath.Ext(evaluation.ProjectPath))
@@ -425,7 +430,13 @@ func lockFileSettings(evaluation *msbuildstatic.Evaluation) LockFileSettings {
 	} else {
 		settings.Path = filepath.Join(projectDir, "packages.lock.json")
 	}
+	settings.Exists = isRegularFile(settings.Path)
 	return settings
+}
+
+func isRegularFile(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.Mode().IsRegular()
 }
 
 // restoreSourceProperties returns the final RestoreSources and

@@ -3,8 +3,6 @@ package main
 import (
 	"fmt"
 	"io"
-	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 )
@@ -150,16 +148,10 @@ func planRestore(workspace, requested []*ParsedProject, changed []string) []rest
 
 // lockedLockFile reports whether restore may be in locked mode with an
 // existing lock file, so an invalidated lock file would fail with NU1004.
+// Existence comes from when the project was read: the TUI plans restores on
+// its event loop, which must not touch the file system.
 func lockedLockFile(project *ParsedProject) bool {
-	if project.LockFile.LockedMode == LockSettingFalse {
-		return false
-	}
-	path := project.LockFile.Path
-	if path == "" {
-		path = filepath.Join(filepath.Dir(project.FilePath), "packages.lock.json")
-	}
-	info, err := os.Stat(path)
-	return err == nil && info.Mode().IsRegular()
+	return project.LockFile.LockedMode != LockSettingFalse && project.LockFile.Exists
 }
 
 // describeRestorePlan explains projects restored beyond the request and the
