@@ -61,6 +61,7 @@ func (m *App) renderDetail(row packageRow) string {
 	s.WriteString(m.renderDetailDeprecation(row, w))
 	s.WriteString(m.renderDetailSource(row))
 	s.WriteString(m.renderDetailDefinedIn(row))
+	s.WriteString(m.renderDetailReferenceKind(row))
 	s.WriteString(m.renderDetailProjectVersions(row))
 	s.WriteString(m.renderDetailVersionList(row, w))
 	s.WriteString(m.renderDetailFrameworks(row))
@@ -221,6 +222,26 @@ func (m *App) renderDetailDefinedIn(row packageRow) string {
 		styleCyan.Render(filepath.Base(sourceFile)) + "\n\n"
 }
 
+// renderDetailReferenceKind names what restore does differently with the
+// selected project's reference: a GlobalPackageReference, which every project
+// importing its file gets with PrivateAssets=All, or explicit PrivateAssets.
+func (m *App) renderDetailReferenceKind(row packageRow) string {
+	sel := m.selectedProject()
+	if sel == nil {
+		return ""
+	}
+	if row.ref.Global {
+		owner := filepath.Base(sel.SourceFileForPackage(row.ref.Name))
+		return styleMuted.Render("Global reference") + "\n" +
+			styleSubtle.Render("Every project importing "+owner+" gets it, with PrivateAssets=All.") + "\n\n"
+	}
+	if row.ref.PrivateAssets != "" {
+		return styleMuted.Render("Private assets") + "\n" +
+			styleSubtle.Render(row.ref.PrivateAssets) + "\n\n"
+	}
+	return ""
+}
+
 func (m *App) renderDetailProjectVersions(row packageRow) string {
 	if !row.diverged && m.selectedProject() != nil {
 		return ""
@@ -239,6 +260,9 @@ func (m *App) renderDetailProjectVersions(row packageRow) string {
 				versions := ver
 				if ref.Locked {
 					versions += styleYellow.Render(" pinned")
+				}
+				if ref.Global {
+					versions += styleMuted.Render(" global")
 				}
 				for _, requirement := range row.updateRequirements {
 					if requirement.project.FilePath == p.FilePath {
