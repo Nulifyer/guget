@@ -58,6 +58,9 @@ func (p *packagePanel) HandleKey(k ui.KeyEvent) ui.Effect {
 		m.reversePackageSort()
 	case "d":
 		if m.canMutate() && m.packages.cursor < len(m.packages.rows) {
+			if problem := m.removeProblem(m.packages.rows[m.packages.cursor]); problem != "" {
+				return m.refusalStatus("Not removed", problem)
+			}
 			m.confirmRemove = newConfirmRemove(m, m.packages.rows[m.packages.cursor].ref.Name)
 			m.ctx.StatusLine = ""
 		}

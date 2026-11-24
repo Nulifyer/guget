@@ -142,8 +142,14 @@ confirm Remove. Press `Esc` to cancel. Restore the project afterward.
 Removing a reference does not automatically remove its shared central version.
 For a reference inherited from props, Guget may refuse project-local removal.
 
+With a shared props file selected, `d` removes a `PackageReference` that file
+holds. It refuses, before asking, a row the file only versions (`▲ Not removed:
+Directory.Packages.props only sets Polly's version; remove its reference from
+a project`) and a `GlobalPackageReference`, which is removed from All Projects.
+
 When Guget refuses or fails to save a change, the status line starts with
-`▲ Save failed`, `▲ Not added`, or `▲ Not updated` and gives the reason. If the
+`▲ Save failed`, `▲ Not added`, `▲ Not updated`, or `▲ Not removed` and gives
+the reason. If the
 line is cut short, it says `(l for logs)`: press `l` to read the whole message,
 which wraps in the log panel.
 

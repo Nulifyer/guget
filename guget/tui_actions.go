@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	ui "github.com/nulifyer/guget/internal/ui"
@@ -306,6 +307,37 @@ func runDotnetRestore(ctx context.Context, steps []restoreStep, covered []string
 		result.err = lastErr
 		return result
 	}
+}
+
+// removeProblem explains, before the confirmation opens, why d cannot remove
+// the row of a selected shared props file: the file holds the package as a
+// global reference, which is removed from All Projects, or only as a version
+// that no project takes its reference from. Without it the removal would
+// find nothing to write and answer only "unchanged". It reads discovery
+// state alone and returns "" when the removal may proceed.
+func (m *App) removeProblem(row packageRow) string {
+	selected := m.selectedProject()
+	if selected == nil || !m.isPropsProject(selected) {
+		return ""
+	}
+	if row.ref.Global {
+		return row.ref.Name + " is a global reference; remove it from All Projects"
+	}
+	identity := func(project *ParsedProject, path string) string {
+		if resolved := project.PackageOwnerIdentities[path]; resolved != "" {
+			return snapshotOwnerKey(resolved)
+		}
+		return snapshotOwnerKey(filepath.Clean(path))
+	}
+	file := identity(selected, selected.FilePath)
+	for _, project := range m.ctx.ParsedProjects {
+		for ref := range project.Packages {
+			if strings.EqualFold(ref.Name, row.ref.Name) && identity(project, project.ReferenceFileForPackage(ref.Name)) == file {
+				return ""
+			}
+		}
+	}
+	return selected.FileName + " only sets " + row.ref.Name + "'s version; remove its reference from a project"
 }
 
 func (m *App) removePackage(pkgName string) ui.Effect {
