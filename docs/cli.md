@@ -231,6 +231,12 @@ nothing newer keeps its version; the plan lists it with the operation
 `unchanged`, and the command still exits 0. `--update-target stable` chooses
 what `dotnet package update` chooses.
 
+With `--all`, each project gets its own target, as with `dotnet package
+update`, so projects can end on different versions. The TUI's `U` works
+differently: it assesses every reference in scope together, chooses one
+target, and refuses the update when a project already uses a newer version
+than that target.
+
 Two shorter forms name the target themselves:
 
 | Flag | Same as |
