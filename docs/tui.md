@@ -42,6 +42,8 @@ source lists for each version. A .NET Framework-only package counts as
 compatible with .NET, .NET Core 2.0+, and .NET Standard 2.0+ projects because
 restore accepts it through AssetTargetFallback, with warning NU1701. Target
 frameworks that come from MSBuild properties guget cannot evaluate are skipped.
+Unlisted versions appear in the version list, but guget never chooses one as
+the latest or default version.
 
 For quick updates from the package panel:
 

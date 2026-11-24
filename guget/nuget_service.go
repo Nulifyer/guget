@@ -95,6 +95,9 @@ type PackageVersion struct {
 	Frameworks        []TargetFramework      // target frameworks this version supports
 	Vulnerabilities   []PackageVulnerability // CVE advisories for this specific version
 	DependencyGroups  []dependencyGroup      // declared dependencies, for dep tree overlay
+	// Unlisted versions stay visible (a project may already use one) but are
+	// never chosen as a latest or default version.
+	Unlisted bool
 }
 
 // PackageInfo is the full picture of a package.
@@ -971,8 +974,9 @@ func (s *NugetService) SearchExactContext(ctx context.Context, packageID string)
 	logTrace("[%s] registration index for %q has %d page(s)", s.sourceName, packageID, len(regIdx.Items))
 
 	var versions []PackageVersion
-	var latestLeaf *registrationLeaf       // newest version overall (for fallback metadata)
-	var latestStableLeaf *registrationLeaf // newest stable version (preferred for metadata)
+	// Metadata comes from the newest listed stable version, falling back to
+	// the newest listed, newest stable, then newest version.
+	var latestLeaf, latestStableLeaf, latestListedLeaf, latestListedStableLeaf *registrationLeaf
 	newer := func(current *registrationLeaf, v SemVer) bool {
 		return current == nil || v.IsNewerThan(ParseSemVer(current.Version))
 	}
@@ -996,15 +1000,22 @@ func (s *NugetService) SearchExactContext(ctx context.Context, packageID string)
 				logDebug("[%s] %q: skipping version %q that NuGet cannot parse", s.sourceName, packageID, ce.Version)
 				continue
 			}
-			// "listed: false" means hidden from search results, but the package
-			// still exists on NuGet. Developers who already have it in their
-			// project need to see its metadata and deprecation notice, so we
-			// include unlisted versions rather than pretending they don't exist.
+			// "listed: false" hides a version from search, but it still
+			// exists. Projects that already use it need its metadata and
+			// deprecation notice, so it stays in the list. A missing value
+			// means listed (NuGet PackageMetadataResourceV3).
+			unlisted := ce.Listed != nil && !*ce.Listed
 			if newer(latestLeaf, sv) {
 				latestLeaf = ce
 			}
 			if !sv.IsPreRelease() && newer(latestStableLeaf, sv) {
 				latestStableLeaf = ce
+			}
+			if !unlisted && newer(latestListedLeaf, sv) {
+				latestListedLeaf = ce
+			}
+			if !unlisted && !sv.IsPreRelease() && newer(latestListedStableLeaf, sv) {
+				latestListedStableLeaf = ce
 			}
 			seen := NewSet[frameworkKey]()
 			var frameworks []TargetFramework
@@ -1022,6 +1033,7 @@ func (s *NugetService) SearchExactContext(ctx context.Context, packageID string)
 				Frameworks:       frameworks,
 				Vulnerabilities:  ce.Vulnerabilities,
 				DependencyGroups: ce.DependencyGroups,
+				Unlisted:         unlisted,
 			})
 		}
 	}
@@ -1033,10 +1045,11 @@ func (s *NugetService) SearchExactContext(ctx context.Context, packageID string)
 
 	sortVersionsDesc(versions)
 
-	// Prefer stable-version metadata; fall back to the overall latest.
-	meta := latestStableLeaf
-	if meta == nil {
-		meta = latestLeaf
+	meta := latestListedStableLeaf
+	for _, fallback := range []*registrationLeaf{latestListedLeaf, latestStableLeaf, latestLeaf} {
+		if meta == nil {
+			meta = fallback
+		}
 	}
 
 	authors := NewSet[string]()
@@ -1095,17 +1108,17 @@ func (s *NugetService) SearchExactContext(ctx context.Context, packageID string)
 	return pkg, nil
 }
 
-// LatestStable returns the newest non-pre-release version.
+// LatestStable returns the newest listed non-pre-release version.
 func (p *PackageInfo) LatestStable() *PackageVersion {
 	for i := range p.Versions {
-		if !p.Versions[i].SemVer.IsPreRelease() {
-			return &p.Versions[i]
+		if v := &p.Versions[i]; !v.SemVer.IsPreRelease() && !v.Unlisted {
+			return v
 		}
 	}
 	return nil
 }
 
-// LatestStableForFramework returns the newest stable version usable by
+// LatestStableForFramework returns the newest listed stable version usable by
 // all of the project's targets (see PackageVersion.compatibilityFor). A
 // version usable only through AssetTargetFallback counts, as it does for
 // restore. Returns nil if no such version exists (callers fall back to
@@ -1113,7 +1126,7 @@ func (p *PackageInfo) LatestStable() *PackageVersion {
 func (p *PackageInfo) LatestStableForFramework(targets Set[TargetFramework]) *PackageVersion {
 	for i := range p.Versions {
 		v := &p.Versions[i]
-		if v.SemVer.IsPreRelease() {
+		if v.SemVer.IsPreRelease() || v.Unlisted {
 			continue
 		}
 		if v.compatibilityFor(targets) != FrameworkIncompatible {

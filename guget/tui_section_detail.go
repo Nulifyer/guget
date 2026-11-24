@@ -291,7 +291,7 @@ func (m *App) renderDetailVersionList(row packageRow, w int) string {
 	curMajor, curMinor := row.ref.Version.Major, row.ref.Version.Minor
 	latestPatchStr := ""
 	for _, v := range displayVersions {
-		if v.SemVer.Major == curMajor && v.SemVer.Minor == curMinor && !v.SemVer.IsPreRelease() {
+		if v.SemVer.Major == curMajor && v.SemVer.Minor == curMinor && !v.SemVer.IsPreRelease() && !v.Unlisted {
 			latestPatchStr = v.SemVer.String()
 			break
 		}

@@ -286,12 +286,12 @@ func versionCompatible(v PackageVersion, targets Set[TargetFramework]) bool {
 	return v.compatibilityFor(targets) != FrameworkIncompatible
 }
 
-// defaultVersionCursor returns the index of the first stable, compatible
-// version in a newest-first sorted slice — the natural default selection.
-// Falls back to 0 if nothing matches.
+// defaultVersionCursor returns the index of the first listed, stable,
+// compatible version in a newest-first sorted slice — the natural default
+// selection. Falls back to 0 if nothing matches.
 func defaultVersionCursor(versions []PackageVersion, targets Set[TargetFramework]) int {
 	for i, v := range versions {
-		if !v.SemVer.IsPreRelease() && versionCompatible(v, targets) {
+		if !v.SemVer.IsPreRelease() && !v.Unlisted && versionCompatible(v, targets) {
 			return i
 		}
 	}
