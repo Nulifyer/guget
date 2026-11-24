@@ -374,6 +374,24 @@ func (r packageRow) effectiveVersion() SemVer {
 	return r.ref.Version
 }
 
+// skippedStable returns the stable policy's choice when the update target
+// passes it over and no project already uses it: a newer version that some
+// target framework cannot use. Both policies share the prerelease rule, so
+// framework compatibility is the only reason for the two to differ this way.
+// It is nil under the stable policy.
+func (r packageRow) skippedStable() *PackageVersion {
+	if r.latestStable == nil {
+		return nil
+	}
+	if r.latestCompatible != nil && !r.latestStable.SemVer.IsNewerThan(r.latestCompatible.SemVer) {
+		return nil
+	}
+	if installed := r.effectiveVersion(); installed.IsValid() && !r.latestStable.SemVer.IsNewerThan(installed) {
+		return nil
+	}
+	return r.latestStable
+}
+
 func (r packageRow) statusIcon() string {
 	if r.loading {
 		return "."

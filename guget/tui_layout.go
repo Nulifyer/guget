@@ -39,7 +39,7 @@ func (m *App) footerKeys() []kv {
 		if isAllProjects {
 			return []kv{
 				{"tab/↑↓", "nav"},
-				{"u/U", "up compat"},
+				{"u/U", "up " + updateTargetFooterLabel(m.updateTarget)},
 				{"a/A", "up stable"},
 				{"v", "version"},
 				{"d", "del"},

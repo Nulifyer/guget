@@ -109,6 +109,12 @@ func (m *App) renderDetailUpdateRequirements(row packageRow) string {
 		s.WriteString(styleYellow.Render("Version pinned") + "\n")
 		s.WriteString(styleSubtle.Render("Updating this project asks for confirmation. Bulk updates skip it.") + "\n\n")
 	}
+	if skipped := row.skippedStable(); skipped != nil {
+		// The status icon and u ignore this version; say why it is in the
+		// Available column's parentheses and how to take it anyway.
+		s.WriteString(stylePurple.Render("Newer version not offered") + "\n")
+		s.WriteString(styleSubtle.Render(skipped.SemVer.String()+" is not usable by every target framework of the affected projects. a updates to it anyway.") + "\n\n")
+	}
 	if len(row.updateRequirements) == 0 {
 		return s.String()
 	}

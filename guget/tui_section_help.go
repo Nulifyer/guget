@@ -29,6 +29,31 @@ func (s *helpOverlay) HandleKey(msg ui.KeyEvent) ui.Effect {
 	return nil
 }
 
+// updateTargetSummary says in a few words what the update-target policy
+// chooses, for the help overlay.
+func updateTargetSummary(policy UpdateTarget) string {
+	switch policy {
+	case UpdateTargetCompatible:
+		return "newest version, prereleases included, that every target framework can use"
+	case UpdateTargetStable:
+		return "newest stable version, whatever the frameworks"
+	default:
+		return "newest stable version that every target framework can use"
+	}
+}
+
+// updateTargetFooterLabel is the short footer name of what u and U aim for.
+func updateTargetFooterLabel(policy UpdateTarget) string {
+	switch policy {
+	case UpdateTargetCompatible:
+		return "compat+pre"
+	case UpdateTargetStable:
+		return "stable"
+	default:
+		return "compat"
+	}
+}
+
 func (s *helpOverlay) refreshView() {
 	w := s.Width()
 	innerW := w - 6
@@ -64,6 +89,26 @@ func (s *helpOverlay) refreshView() {
 				{"tab", "switch focus between releases and notes"},
 				{"↑ / ↓  or  j / k", "navigate releases (left) or scroll notes (right)"},
 				{"esc", "close panel"},
+			},
+		},
+		{
+			title: "Package list",
+			rows: [][2]string{
+				{"↑", "update available; u applies it"},
+				{"⇑", "update available, and a newer stable version exists that a target framework cannot use"},
+				{"✓", "up to date under the update target"},
+				{"▲  ~", "an installed version is vulnerable / deprecated"},
+				{".  ✗", "metadata is loading / lookup failed"},
+				{"1.2.0 (2.0.0)", "Available: the update target (u), then the latest stable version (a) when it differs"},
+				{"[deps]  pin", "update needs a dependency changed first / exact-version pin"},
+			},
+		},
+		{
+			title: "Settings",
+			rows: [][2]string{
+				{"update-target", string(updateTargetOrDefault(string(s.app.updateTarget))) + ": u, U, and Available choose the " + updateTargetSummary(s.app.updateTarget)},
+				{"guget config", "show, set, or unset saved settings: theme, sort, mouse, update-target, and more"},
+				{"GUGET_<KEY>", "environment variable that overrides the saved setting"},
 			},
 		},
 	}...)

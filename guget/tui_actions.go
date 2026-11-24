@@ -50,10 +50,15 @@ func (m *App) updatePackage(useStable bool, scope actionScope) ui.Effect {
 	assessment := assessPackage(row.info, refs, m.packageTargets(row.ref.Name, scope), policy)
 	target := assessment.Candidate
 	if target == nil {
-		if useStable {
-			return m.setStatus("No stable version for "+row.ref.Name+"; v to choose a version", true)
+		// Name what the policy in effect looked for, not the default's.
+		kind := "compatible stable"
+		switch policy {
+		case UpdateTargetStable:
+			kind = "stable"
+		case UpdateTargetCompatible:
+			kind = "compatible"
 		}
-		return m.setStatus("No compatible stable version for "+row.ref.Name+"; v to choose a version", true)
+		return m.setStatus("No "+kind+" version for "+row.ref.Name+"; v to choose a version", true)
 	}
 	if assessment.Target == nil {
 		for _, installed := range assessment.Installed {
