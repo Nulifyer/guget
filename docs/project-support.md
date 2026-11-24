@@ -139,16 +139,16 @@ other packages keep their versions in the parent.
 When the package already has a central version, Guget never writes a second
 `PackageVersion`; restore would ignore it. If you request that same version,
 Guget adds only the reference. If you request a different version, Guget
-refuses and shows the command that changes the shared version for every
-consumer:
+refuses with exit 4. The message shows the command that changes the shared
+version for every consumer, with the project's full path:
 
 ```bash
-guget update Newtonsoft.Json --version 13.0.4 --file App/App.csproj
+guget update Newtonsoft.Json --version 13.0.4 --file /path/to/src/App/App.csproj
 ```
 
-This differs from `dotnet add package`. It refuses outright when the central
-version comes from an imported file, and it otherwise changes the shared
-version without asking.
+`dotnet add package` behaves differently. When the central version comes from
+an imported file, it refuses the add. Otherwise it changes the shared version
+for every consumer without asking.
 
 A floating central version such as `13.*` needs
 `CentralPackageFloatingVersionsEnabled=true`; otherwise restore fails with
@@ -174,7 +174,7 @@ one in `Directory.Build.targets` has no effect.
 
 Guget lists global packages with `global: true` and `privateAssets: "All"`.
 Updating one edits its `Version` in that file. Removing one is a shared-file
-edit: `guget remove` with `--file` refuses it, and the TUI removes it from All
+edit: `guget remove` refuses it with exit 4, and the TUI removes it from All
 Projects. Guget never adds a `PackageReference` or `PackageVersion` for an ID
 that is already global.
 
@@ -194,8 +194,9 @@ Packages may be declared in `Directory.Build.props` or imported `.props` files.
 These shared files are distinct from the CPM version file.
 
 Use `show` and an update dry run to inspect the shared file that would change.
-If a reference is inherited, project-local removal may be refused. Use the
-shared-file location in the TUI only when you intend to change its consumers.
+`guget remove` refuses an inherited reference with exit 4, and so does `d` in
+the TUI for a single project. Use the shared-file location in the TUI only when
+you intend to change its consumers.
 
 Declarations in `Directory.Build.targets` are listed, including
 `PackageReference Update` items that change a project's version. They are
@@ -212,13 +213,15 @@ floating expression such as `1.*`. Keep it distinct from the restored version
 shown in CLI results. Updating to an explicit version replaces the supported
 reference's existing expression; inspect that change before applying it.
 
-guget compares versions the way NuGet does, so `1.0` and `1.0.0` are the same
+Guget compares versions the way NuGet does, so `1.0` and `1.0.0` are the same
 version. For a floating or open-ended expression such as `1.*` or `(1.0,)`, the
 TUI compares the version restore would pick from the package source.
 
-The TUI treats `[1.0.0]` as an exact pin and requires confirmation for selected
-project updates. Bulk updates, including version-picker changes from All
-Projects, skip pinned references.
+Guget treats `[1.0.0]` as an exact pin. The TUI requires confirmation to update
+a pin in a selected project. Bulk updates, including version-picker changes
+from All Projects, skip pinned references. In the CLI, `update --all` skips
+pins, and `update --file` refuses them with exit 4. Pass `--include-pinned` to
+update them. The edit keeps the brackets. See [exact pins](cli.md#exact-pins).
 
 For projects targeting different frameworks, inspect each framework's result
 and restore each affected project after changing versions.
@@ -228,7 +231,8 @@ and restore each affected project after changing versions.
 `guget update --restore`, `add --restore`, and `remove --restore` restore more
 than the projects you name. They also restore every project in the workspace
 that reads a changed file, such as a shared `Directory.Packages.props`, and
-every project that references one of those through `ProjectReference`.
+every project that references one of those through `ProjectReference`,
+directly or through other projects.
 Guget prints each added project and the reason. In the TUI, `r` and `R`
 include those projects until a restore succeeds.
 
