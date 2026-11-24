@@ -66,6 +66,7 @@ func (m *App) renderDetail(row packageRow) string {
 	s.WriteString(m.renderDetailSource(row))
 	s.WriteString(m.renderDetailDefinedIn(row))
 	s.WriteString(m.renderDetailReferenceKind(row))
+	s.WriteString(m.renderDetailRequested(row))
 	s.WriteString(m.renderDetailProjectVersions(row))
 	s.WriteString(m.renderDetailVersionList(row, w))
 	s.WriteString(m.renderDetailFrameworks(row))
@@ -265,6 +266,16 @@ func (m *App) renderDetailReferenceKind(row packageRow) string {
 	return ""
 }
 
+// renderDetailRequested shows the selected project's request in full when
+// it is a range, a floating version, or a pin: the Requested column cuts a
+// long one short. All Projects lists requests under Project versions.
+func (m *App) renderDetailRequested(row packageRow) string {
+	if m.selectedProject() == nil || row.ref.Requested == "" || row.ref.Requested == row.ref.Version.String() {
+		return ""
+	}
+	return styleMuted.Render("Requested") + "\n" + styleText.Render(row.ref.Requested) + "\n\n"
+}
+
 func (m *App) renderDetailProjectVersions(row packageRow) string {
 	// A row with no version every project can use always names the projects.
 	if !row.diverged && m.selectedProject() != nil && !errors.Is(row.err, errNoCommonVersion) {
@@ -294,16 +305,22 @@ func (m *App) renderDetailProjectVersions(row packageRow) string {
 						break
 					}
 				}
-				nameWidth := min(20, m.detail.vp.Width()-style.Width(versions)-3)
+				if sourceFile := p.SourceFileForPackage(ref.Name); sourceFile != p.FilePath {
+					versions += " " + styleCyan.Render("("+filepath.Base(sourceFile)+")")
+				}
+				panelW := m.detail.vp.Width()
+				nameWidth := min(20, panelW-style.Width(versions)-3)
 				line := ""
 				if nameWidth >= 8 {
 					line = "  " + styleSubtle.Render(padRight(truncate(p.FileName, nameWidth), nameWidth)) + " " + versions
 				} else {
-					line = styleSubtle.Render(p.FileName) + "\n  " + versions
-				}
-				sourceFile := p.SourceFileForPackage(ref.Name)
-				if sourceFile != p.FilePath {
-					line += " " + styleCyan.Render("("+filepath.Base(sourceFile)+")")
+					// Too narrow for one row: the file name on its own row and
+					// the version under it, both kept inside the panel so the
+					// final wrap cannot push a remainder to column 0.
+					line = styleSubtle.Render(truncate(p.FileName, max(1, panelW)))
+					for _, piece := range text.Wrap(versions, max(1, panelW-2)) {
+						line += "\n  " + piece
+					}
 				}
 				s.WriteString(line + "\n")
 			}

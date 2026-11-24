@@ -96,6 +96,11 @@ package is already at 11.12.0, its marker is `✓` and the detail panel adds
 column the parenthesized version shortens to `(...)`; select the row to read
 it in the detail panel.
 
+A long request, such as a version range or a prerelease, is cut with `...` in
+the Requested column when the panel cannot fit it beside Available. Select a
+project and the row: the detail panel shows it in full under **Requested**.
+With All Projects selected, **Project versions** lists every project's request.
+
 With All Projects selected, the update target never lowers any project's
 version, and prereleases count when the most recent version in use was
 requested as a prerelease.

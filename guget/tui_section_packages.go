@@ -164,11 +164,21 @@ func (m *App) packageColumns(w int) packageColumnLayout {
 		}
 	}
 	currentW += versionColPad
+	availableW += versionColPad
+	// A long range or prerelease request must not push the Available column
+	// off the panel for every row. When both columns can have at least their
+	// header's width, Requested gives way first and its cells show an
+	// ellipsis; the detail panel has the request in full.
+	requestedFloor := len("Requested") + versionColPad
+	if innerW-colPrefix-minNameW-(len("Available")+versionColPad) >= requestedFloor {
+		if room := innerW - colPrefix - minNameW - availableW; currentW > room {
+			currentW = max(room, min(currentW, requestedFloor))
+		}
+	}
 	// Reserve the package column before expanding requested versions. A long
 	// range or preview version must show an ellipsis, never disappear at the
 	// right panel edge after the entire row is clipped.
 	currentW = min(currentW, max(1, innerW-colPrefix-minNameW))
-	availableW += versionColPad
 	sourceW += sourceColPad
 
 	budget := innerW - colPrefix - currentW
