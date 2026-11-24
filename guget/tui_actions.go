@@ -163,19 +163,36 @@ func (m *App) restore(scope actionScope) ui.Effect {
 		m.queuedRestore = append([]*ParsedProject(nil), projects...)
 		return m.setStatus("Restore queued after saving package changes", false)
 	}
-	m.ctx.Restoring = true
-	return runDotnetRestore(m.lifecycle, projects)
+	return m.startRestore(projects)
 }
 
-func runDotnetRestore(ctx context.Context, projects []*ParsedProject) ui.Effect {
+// startRestore restores the requested projects through the shared restore
+// planner, which adds projects affected by unrestored package edits.
+func (m *App) startRestore(projects []*ParsedProject) ui.Effect {
+	covered := append([]string(nil), m.pendingRestoreChanges...)
+	steps := planRestore(m.ctx.ParsedProjects, projects, covered)
+	m.ctx.Restoring = true
+	return runDotnetRestore(m.lifecycle, steps, covered)
+}
+
+// runDotnetRestore runs every step off the event loop and continues past
+// failures, reporting the last one.
+func runDotnetRestore(ctx context.Context, steps []restoreStep, covered []string) ui.Effect {
 	return func() ui.Event {
 		var lastErr error
-		for _, p := range projects {
+		for _, step := range steps {
+			p := step.Project
 			if p.FilePath == "" {
 				continue
 			}
-			logDebug("dotnet restore: %s", p.FilePath)
-			cmd := exec.CommandContext(ctx, "dotnet", "restore", p.FilePath)
+			if !step.Requested && step.Reason != "" {
+				logInfo("restoring %s: %s", p.FileName, step.Reason)
+			}
+			if step.ForceEvaluate {
+				logInfo("restoring %s with --force-evaluate: its locked-mode lock file no longer matches the edited packages", p.FileName)
+			}
+			logDebug("dotnet %s", strings.Join(step.Args, " "))
+			cmd := exec.CommandContext(ctx, "dotnet", step.Args...)
 			out, err := cmd.CombinedOutput()
 			if err != nil {
 				logWarn("restore failed for %s: %v\n%s", p.FilePath, err, strings.TrimSpace(string(out)))
@@ -184,7 +201,7 @@ func runDotnetRestore(ctx context.Context, projects []*ParsedProject) ui.Effect 
 				logInfo("restore succeeded for %s", p.FileName)
 			}
 		}
-		return restoreResultMsg{err: lastErr}
+		return restoreResultMsg{err: lastErr, covered: covered}
 	}
 }
 

@@ -99,7 +99,7 @@ func (m *App) startMutation(verb, packageID, version string, targets []mutationT
 		if len(result.Unrecovered) > 0 {
 			err = fmt.Errorf("%w; inspect unrecovered files before retrying: %s", err, strings.Join(result.Unrecovered, ", "))
 		}
-		completion := writeResultMsg{err: err, summary: mutationSummary(verb, packageID, version, len(result.Changed), skipped), written: len(result.Changed), skipped: skipped, reload: len(result.Changed) > 0, selection: selection}
+		completion := writeResultMsg{err: err, summary: mutationSummary(verb, packageID, version, len(result.Changed), skipped), changed: result.Changed, written: len(result.Changed), skipped: skipped, reload: len(result.Changed) > 0, selection: selection}
 		if err != nil || len(result.Changed) == 0 {
 			return completion
 		}

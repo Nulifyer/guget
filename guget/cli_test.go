@@ -172,7 +172,7 @@ func TestRestoreProjectsPassesInteractiveFlag(t *testing.T) {
 					return nil
 				},
 			}
-			if _, code := runtime.restoreProjects(context.Background(), []*ParsedProject{project}, test.interactive); code != ExitSuccess {
+			if _, code := runtime.restoreProjects(context.Background(), planRestore(nil, []*ParsedProject{project}, nil), test.interactive); code != ExitSuccess {
 				t.Fatalf("code = %d", code)
 			}
 			if gotName != "dotnet" || strings.Join(gotArgs, "\x00") != strings.Join(test.wantArgs, "\x00") {
@@ -511,7 +511,7 @@ func TestRestoreDeadlineReportsInterruption(t *testing.T) {
 	runtime := cliRuntime{stdin: strings.NewReader(""), stdout: io.Discard, stderr: io.Discard,
 		runCommand: func(ctx context.Context, _ string, _ []string, _ io.Reader, _, _ io.Writer) error { return ctx.Err() },
 	}
-	if _, code := runtime.restoreProjects(ctx, []*ParsedProject{{FilePath: "App.csproj"}}, false); code != ExitInterrupted {
+	if _, code := runtime.restoreProjects(ctx, planRestore(nil, []*ParsedProject{{FilePath: "App.csproj"}}, nil), false); code != ExitInterrupted {
 		t.Fatalf("deadline returned %d", code)
 	}
 }

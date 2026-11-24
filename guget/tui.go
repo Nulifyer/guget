@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -77,6 +78,10 @@ type App struct {
 	lastWriteNotice       string
 	lastWriteNoticeUntil  time.Time
 	queuedRestore         []*ParsedProject
+	// pendingRestoreChanges are files changed by package edits that no
+	// successful restore has covered yet. The restore planner uses them to
+	// restore affected consumers and regenerate locked lock files.
+	pendingRestoreChanges []string
 }
 
 func (m *App) nextRequestID() int {
@@ -282,6 +287,7 @@ func (m *App) HandleEvent(msg ui.Event) ui.Effect {
 			msg.selection = nil
 			cmds = append(cmds, m.setStatus("▲ Save failed: "+msg.err.Error(), true))
 		} else {
+			m.pendingRestoreChanges = append(m.pendingRestoreChanges, msg.changed...)
 			status := "✓ Saved"
 			if msg.written > 0 && msg.skipped > 0 {
 				status = fmt.Sprintf("✓ Saved %d, %d locked", msg.written, msg.skipped)
@@ -303,6 +309,9 @@ func (m *App) HandleEvent(msg ui.Event) ui.Effect {
 
 	case restoreResultMsg:
 		m.ctx.Restoring = false
+		if msg.err == nil {
+			m.pendingRestoreChanges = slices.DeleteFunc(m.pendingRestoreChanges, func(path string) bool { return slices.Contains(msg.covered, path) })
+		}
 		if msg.err != nil {
 			cmds = append(cmds, m.setStatus("✗ Restore failed (see logs)", true))
 		} else {
@@ -494,8 +503,7 @@ func (m *App) HandleEvent(msg ui.Event) ui.Effect {
 	if len(m.queuedRestore) > 0 && !m.ctx.Saving && !m.ctx.Reloading && !m.ctx.Restoring && !m.workspaceStale {
 		projects := m.queuedRestore
 		m.queuedRestore = nil
-		m.ctx.Restoring = true
-		cmds = append(cmds, runDotnetRestore(m.lifecycle, projects))
+		cmds = append(cmds, m.startRestore(projects))
 	}
 	return ui.Batch(cmds...)
 }

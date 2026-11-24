@@ -1073,7 +1073,9 @@ func (r *cliRuntime) runMutation(ctx context.Context, verb string, inv *cliInvoc
 		doc.Restore = "skipped"
 		if len(doc.Changed) > 0 {
 			var restoreRows []restoreRow
-			restoreRows, code = r.restoreProjects(ctx, targets, args.bools["interactive"])
+			steps := planRestore(snapshot.ParsedProjects, targets, result.Changed)
+			describeRestorePlan(r.stderr, steps)
+			restoreRows, code = r.restoreProjects(ctx, steps, args.bools["interactive"])
 			doc.Restore = "succeeded"
 			if code != ExitSuccess {
 				doc.Restore = "failed"
@@ -1172,7 +1174,7 @@ func (r *cliRuntime) runRestore(ctx context.Context, inv *cliInvocation) ExitCod
 	if err != nil {
 		return inv.fail(ExitUsage, "%v", err)
 	}
-	rows, code := r.restoreProjects(ctx, targets, inv.args.bools["interactive"])
+	rows, code := r.restoreProjects(ctx, planRestore(snapshot.ParsedProjects, targets, nil), inv.args.bools["interactive"])
 	doc.Projects = rows
 	if code == ExitInterrupted || ctx.Err() != nil {
 		return ExitInterrupted
@@ -1202,7 +1204,9 @@ func restoreFailure(rows []restoreRow) string {
 // restoreProjects restores every project in order. A failing project does not
 // stop the rest; the result is ExitRestore when any failed. An interrupt or
 // timeout stops at the current project.
-func (r *cliRuntime) restoreProjects(ctx context.Context, projects []*ParsedProject, interactive bool) ([]restoreRow, ExitCode) {
+// The steps come from planRestore, which adds projects an edit affects and
+// --force-evaluate for locked lock files.
+func (r *cliRuntime) restoreProjects(ctx context.Context, steps []restoreStep, interactive bool) ([]restoreRow, ExitCode) {
 	runCommand := r.runCommand
 	if runCommand == nil {
 		runCommand = runCLICommand
@@ -1211,9 +1215,10 @@ func (r *cliRuntime) restoreProjects(ctx context.Context, projects []*ParsedProj
 	if stdin == nil {
 		stdin = strings.NewReader("")
 	}
-	rows := make([]restoreRow, 0, len(projects))
+	rows := make([]restoreRow, 0, len(steps))
 	code := ExitSuccess
-	for _, project := range projects {
+	for _, step := range steps {
+		project := step.Project
 		if ctx.Err() != nil {
 			return rows, ExitInterrupted
 		}
@@ -1221,7 +1226,7 @@ func (r *cliRuntime) restoreProjects(ctx context.Context, projects []*ParsedProj
 		if row.Project == "" {
 			row.Project = filepath.Base(project.FilePath)
 		}
-		args := []string{"restore", project.FilePath}
+		args := append([]string(nil), step.Args...)
 		if interactive {
 			args = append(args, "--interactive")
 		}

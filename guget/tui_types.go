@@ -123,14 +123,18 @@ type workspaceReloadedMsg struct {
 type writeResultMsg struct {
 	err       error
 	summary   string
-	written   int // number of changed files in the completed transaction
-	skipped   int // number of locked refs skipped during scope=all update
+	changed   []string // files the transaction changed
+	written   int      // number of changed files in the completed transaction
+	skipped   int      // number of locked refs skipped during scope=all update
 	reload    bool
 	selection *reloadSelection
 }
 
 type restoreResultMsg struct {
 	err error
+	// covered lists the pending package edits this restore planned for; they
+	// stop affecting later restores once it succeeds.
+	covered []string
 }
 
 type resizeDebounceMsg struct {
