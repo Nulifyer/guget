@@ -484,7 +484,7 @@ func TestParseCsproj_CPMVersionOverride(t *testing.T) {
 	}
 }
 
-func TestLatestStableForFramework_UnknownTargetDoesNotBlock(t *testing.T) {
+func TestCompatibleCandidate_UnknownTargetDoesNotBlock(t *testing.T) {
 	pkg := &PackageInfo{
 		ID: "Some.Package",
 		Versions: []PackageVersion{
@@ -502,9 +502,9 @@ func TestLatestStableForFramework_UnknownTargetDoesNotBlock(t *testing.T) {
 	targets.Add(ParseTargetFramework("net8.0"))
 	targets.Add(ParseTargetFramework("$(TargetFrameworksForLibraries)"))
 
-	v := pkg.LatestStableForFramework(targets)
+	v := assessPackage(pkg, nil, targets, UpdateTargetCompatibleStable).Candidate
 	if v == nil {
-		t.Fatal("LatestStableForFramework returned nil with a FamilyUnknown target; want a compatible version")
+		t.Fatal("compatible candidate is nil with a FamilyUnknown target; want a compatible version")
 	}
 	if v.SemVer.String() != "2.0.0" {
 		t.Errorf("expected version 2.0.0, got %s", v.SemVer.String())

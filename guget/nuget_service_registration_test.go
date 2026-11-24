@@ -40,19 +40,19 @@ func TestSearchExactHonoursListedAndParsesLongFrameworkNames(t *testing.T) {
 	if !info.Versions[0].Unlisted || info.Versions[1].Unlisted || info.Versions[2].Unlisted {
 		t.Fatalf("listed flags wrong: %+v", info.Versions)
 	}
-	if latest := info.LatestStable(); latest == nil || latest.SemVer.String() != "2.0.0" {
+	if latest := assessPackage(info, nil, nil, UpdateTargetStable).LatestStable; latest == nil || latest.SemVer.String() != "2.0.0" {
 		t.Fatalf("LatestStable = %v, want the newest listed version", latest)
 	}
 	if info.LatestVersion != "2.0.0" || info.Description != "two" {
 		t.Fatalf("metadata from %q (%q), want the newest listed version", info.LatestVersion, info.Description)
 	}
-	if got := info.LatestStableForFramework(targetsOf("net8.0")); got == nil || got.SemVer.String() != "1.0.0" {
+	if got := assessPackage(info, nil, targetsOf("net8.0"), UpdateTargetCompatibleStable).Candidate; got == nil || got.SemVer.String() != "1.0.0" {
 		t.Fatalf("net8.0 cannot use the net8.0-windows7.0 build; got %v", got)
 	}
-	if got := info.LatestStableForFramework(targetsOf("net8.0-windows")); got == nil || got.SemVer.String() != "2.0.0" {
+	if got := assessPackage(info, nil, targetsOf("net8.0-windows"), UpdateTargetCompatibleStable).Candidate; got == nil || got.SemVer.String() != "2.0.0" {
 		t.Fatalf("net8.0-windows can use 2.0.0; got %v", got)
 	}
-	if got := info.LatestStableForFramework(targetsOf("net48")); got == nil || got.SemVer.String() != "1.0.0" {
+	if got := assessPackage(info, nil, targetsOf("net48"), UpdateTargetCompatibleStable).Candidate; got == nil || got.SemVer.String() != "1.0.0" {
 		t.Fatalf("net48 can use the netstandard2.0 build; got %v", got)
 	}
 	frameworks := info.Versions[2].Frameworks
@@ -67,17 +67,17 @@ func TestUnlistedVersionsAreNeverLatest(t *testing.T) {
 		{SemVer: ParseSemVer("2.0.0")},
 		{SemVer: ParseSemVer("1.0.0"), Unlisted: true},
 	}}
-	if v := info.LatestStable(); v == nil || v.SemVer.String() != "2.0.0" {
+	if v := assessPackage(info, nil, nil, UpdateTargetStable).LatestStable; v == nil || v.SemVer.String() != "2.0.0" {
 		t.Fatalf("LatestStable = %v", v)
 	}
-	if v := info.LatestStableForFramework(targetsOf("net8.0")); v == nil || v.SemVer.String() != "2.0.0" {
-		t.Fatalf("LatestStableForFramework = %v", v)
+	if v := assessPackage(info, nil, targetsOf("net8.0"), UpdateTargetCompatibleStable).Candidate; v == nil || v.SemVer.String() != "2.0.0" {
+		t.Fatalf("compatible candidate = %v", v)
 	}
 	if cursor := defaultVersionCursor(info.Versions, targetsOf("net8.0"), nil, UpdateTargetCompatibleStable); cursor != 1 {
 		t.Fatalf("default cursor on unlisted version %d", cursor)
 	}
 	only := &PackageInfo{Versions: []PackageVersion{{SemVer: ParseSemVer("1.0.0"), Unlisted: true}}}
-	if only.LatestStable() != nil || only.LatestStableForFramework(targetsOf("net8.0")) != nil {
+	if assessPackage(only, nil, nil, UpdateTargetStable).LatestStable != nil || assessPackage(only, nil, targetsOf("net8.0"), UpdateTargetCompatibleStable).Candidate != nil {
 		t.Fatal("an unlisted-only package has no latest version")
 	}
 }

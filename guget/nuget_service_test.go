@@ -137,12 +137,12 @@ func TestSearchExact_Serilog(t *testing.T) {
 		t.Errorf("expected at least 10 versions, got %d", len(pkg.Versions))
 	}
 
-	stable := pkg.LatestStable()
+	stable := assessPackage(pkg, nil, nil, UpdateTargetStable).LatestStable
 	if stable == nil {
-		t.Fatal("LatestStable() returned nil")
+		t.Fatal("assessment LatestStable returned nil")
 	}
 	if stable.SemVer.IsPreRelease() {
-		t.Errorf("LatestStable() returned pre-release: %s", stable.SemVer)
+		t.Errorf("assessment LatestStable returned pre-release: %s", stable.SemVer)
 	}
 }
 
@@ -166,15 +166,15 @@ func TestLatestStable_NoPreRelease(t *testing.T) {
 		t.Fatalf("SearchExact: %v", err)
 	}
 
-	stable := pkg.LatestStable()
+	stable := assessPackage(pkg, nil, nil, UpdateTargetStable).LatestStable
 	if stable == nil {
-		t.Fatal("LatestStable() returned nil")
+		t.Fatal("assessment LatestStable returned nil")
 	}
 	if stable.SemVer.IsPreRelease() {
-		t.Errorf("LatestStable() returned pre-release: %s", stable.SemVer)
+		t.Errorf("assessment LatestStable returned pre-release: %s", stable.SemVer)
 	}
 	if stable.SemVer.Major == 0 && stable.SemVer.Minor == 0 && stable.SemVer.Patch == 0 {
-		t.Error("LatestStable() returned a zero version")
+		t.Error("assessment LatestStable returned a zero version")
 	}
 	if stable.SemVer.Major < 13 {
 		t.Errorf("expected major >= 13, got %d", stable.SemVer.Major)

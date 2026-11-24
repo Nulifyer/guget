@@ -1138,34 +1138,6 @@ func (s *NugetService) SearchExactContext(ctx context.Context, packageID string)
 	return pkg, nil
 }
 
-// LatestStable returns the newest listed non-pre-release version.
-func (p *PackageInfo) LatestStable() *PackageVersion {
-	for i := range p.Versions {
-		if v := &p.Versions[i]; !v.SemVer.IsPreRelease() && !v.Unlisted {
-			return v
-		}
-	}
-	return nil
-}
-
-// LatestStableForFramework returns the newest listed stable version usable by
-// all of the project's targets (see PackageVersion.compatibilityFor). A
-// version usable only through AssetTargetFallback counts, as it does for
-// restore. Returns nil if no such version exists (callers fall back to
-// LatestStable themselves for display purposes).
-func (p *PackageInfo) LatestStableForFramework(targets Set[TargetFramework]) *PackageVersion {
-	for i := range p.Versions {
-		v := &p.Versions[i]
-		if v.SemVer.IsPreRelease() || v.Unlisted {
-			continue
-		}
-		if v.compatibilityFor(targets) != FrameworkIncompatible {
-			return v
-		}
-	}
-	return nil
-}
-
 // VersionsSince returns all versions newer than the given semver string.
 func (p *PackageInfo) VersionsSince(since string) []PackageVersion {
 	floor := ParseSemVer(since)

@@ -280,8 +280,8 @@ func (p *packagePanel) Draw(r ui.Rect) string {
 
 // versionCompatible returns true when v is usable by all of the project's
 // target frameworks, directly or through AssetTargetFallback. It uses the same
-// decision as LatestStableForFramework, so the picker, its default cursor and
-// the Available column agree.
+// decision as assessPackage, so the picker, its default cursor and the
+// Available column agree.
 func versionCompatible(v PackageVersion, targets Set[TargetFramework]) bool {
 	return v.compatibilityFor(targets) != FrameworkIncompatible
 }

@@ -349,7 +349,7 @@ type packageRow struct {
 	err                error
 	loading            bool
 	latestCompatible   *PackageVersion // the update-target policy's choice (PackageAssessment.Candidate), even if not newer
-	latestStable       *PackageVersion // the stable policy's choice: newest listed stable, ignoring frameworks
+	latestStable       *PackageVersion // the stable policy's choice (the a key): newest listed stable ignoring frameworks, or prerelease for a prerelease request
 	updateTarget       *PackageVersion // latestCompatible when it is an update; nil when up to date
 	updateRequirements []updateDependencyRequirement
 	diverged           bool

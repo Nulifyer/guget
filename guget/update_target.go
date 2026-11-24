@@ -152,7 +152,10 @@ func assessPackage(info *PackageInfo, refs []PackageReference, frameworks Set[Ta
 		}
 	}
 
-	for i := range info.Versions {
+	for i := range info.Versions { // newest first
+		if a.Candidate != nil && a.LatestStable != nil {
+			break
+		}
 		v := &info.Versions[i]
 		if v.Unlisted || !v.SemVer.IsValid() {
 			continue

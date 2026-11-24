@@ -358,7 +358,7 @@ func TestPickerCursorAndAvailableAgree(t *testing.T) {
 		targetsOf("net48"), targetsOf("net8.0-windows"), targetsOf("netstandard1.6"), targetsOf(),
 	} {
 		info := &PackageInfo{Versions: versions}
-		latest := info.LatestStableForFramework(targets)
+		latest := assessPackage(info, nil, targets, UpdateTargetCompatibleStable).Candidate
 		cursor := defaultVersionCursor(versions, targets, nil, UpdateTargetCompatibleStable)
 		if latest == nil {
 			t.Fatalf("%v: no compatible version", targets.ToSlice())
