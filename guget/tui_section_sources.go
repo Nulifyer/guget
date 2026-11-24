@@ -56,8 +56,9 @@ func (s *sourcesOverlay) Render() string {
 				auth = "  " + styleSubtle.Render(truncate("[auth] "+src.Username, max(1, innerW-style.Width(name)-2)))
 			}
 			lines = append(lines, name+auth)
+			displayURL := redactURL(src.URL)
 			lines = append(lines,
-				"  "+hyperlink(src.URL, styleSubtle.Render(truncate(src.URL, innerW-2))),
+				"  "+hyperlink(displayURL, styleSubtle.Render(truncate(displayURL, innerW-2))),
 			)
 			lines = append(lines, "")
 		}
