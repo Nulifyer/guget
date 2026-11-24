@@ -112,14 +112,19 @@ guget config unset theme          # remove the key from the file
 ```
 
 `guget config show` reports the source of each value as `env`, `file`, or
-`default`. It accepts `--format table|tsv|json|jsonl` and `--output FILE`. In
-JSON, problems with the file appear in a `warnings` array. The other formats
-print them to standard error.
+`default`. It accepts the same `--format`, `--output`, and `--no-headers` as
+the other CLI commands, including Go templates such as
+`--format '{{.key}}={{.value}}'`; see [output formats](cli.md#choose-an-output-format).
+`--output` refuses to replace the settings file itself. Problems with the file
+print to standard error in every format, and JSON also lists them in a
+`warnings` array.
 
 ```json
 {
   "schemaVersion": 1,
   "command": "config",
+  "status": "ok",
+  "error": null,
   "path": "/home/me/.config/guget/config.toml",
   "settings": [
     {
@@ -139,7 +144,8 @@ The real output lists every key; this example shows one. For `mouse`,
 rather than strings.
 
 `guget config set` checks the value before it writes and exits with status 1
-for an unknown key or a value that isn't allowed. It changes only the line for
+for an unknown key or a value that isn't allowed. It exits with status 5 when
+the file can't be written. It changes only the line for
 that key, so your comments and the rest of the file stay as they are. If an
 environment variable overrides the key you just set, the command prints a
 warning. `guget config unset` removes the key's lines and leaves the rest of
