@@ -47,10 +47,30 @@ func unsupportedArtifactReason(path string) string {
 	switch {
 	case strings.EqualFold(name, "packages.config"):
 		return "packages.config mutation is not supported"
+	case projectPackagesConfig(path):
+		return "packages.config mutation is not supported"
 	case strings.EqualFold(name, "dotnet-tools.json") && strings.EqualFold(filepath.Base(filepath.Dir(path)), ".config"):
 		return ".NET tool manifests are outside project package management"
 	}
 	return ""
+}
+
+// projectPackagesConfig reports whether path is packages.<ProjectName>.config
+// next to that project, which NuGet also uses as the project's packages.config
+// (NuGet BuildTasksUtility.GetPackagesConfigFilePath).
+func projectPackagesConfig(path string) bool {
+	name := filepath.Base(path)
+	lower := strings.ToLower(name)
+	if !strings.HasPrefix(lower, "packages.") || !strings.HasSuffix(lower, ".config") || len(name) <= len("packages..config") {
+		return false
+	}
+	project := name[len("packages.") : len(name)-len(".config")]
+	for _, extension := range []string{".csproj", ".fsproj", ".vbproj"} {
+		if _, err := os.Stat(filepath.Join(filepath.Dir(path), project+extension)); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 // walkWorkspace lists project files, watched inputs, and unsupported package

@@ -565,7 +565,16 @@ type cliPackageRow struct {
 	EditSupported    bool     `json:"editSupported"`
 	EditReason       *string  `json:"editReason"`
 	Locked           bool     `json:"locked"`
+	// Global marks a GlobalPackageReference, which NuGet references with
+	// PrivateAssets=All in every project importing its file.
+	Global        bool    `json:"global"`
+	PrivateAssets *string `json:"privateAssets"`
+	// Download marks a restore-only PackageDownload, which is not a
+	// dependency and which guget does not edit.
+	Download bool `json:"download"`
 }
+
+const downloadEditReason = "PackageDownload is restore-only and is not a dependency; guget does not edit it"
 
 type listDocument struct {
 	cliDocHeader
@@ -637,6 +646,18 @@ func (r *cliRuntime) packageRows(ctx context.Context, snapshot *workspaceSnapsho
 				row.Direct, row.Implicit = true, use.Implicit
 				row.EditSupported, row.EditReason = use.Edit.Supported, stringPtr(use.Edit.Reason)
 				row.Locked = isExactLock(use.EvaluatedExpression)
+				row.Global, row.PrivateAssets = use.Global, stringPtr(use.PrivateAssets)
+				rows = append(rows, row)
+			}
+			for _, download := range evaluated.PackageDownloads {
+				if !matches(download.PackageID) {
+					continue
+				}
+				row := newPackageRow(project, download.PackageID, download.TargetFramework)
+				row.RequestedExpression = stringPtr(download.Version)
+				row.setOwners(paths.show(download.Owner), paths.show(download.Owner))
+				row.EditReason = stringPtr(downloadEditReason)
+				row.Locked, row.Download = isExactLock(download.Version), true
 				rows = append(rows, row)
 			}
 		} else {
@@ -659,16 +680,31 @@ func (r *cliRuntime) packageRows(ctx context.Context, snapshot *workspaceSnapsho
 					requested = ref.Version.String()
 				}
 				owner := paths.show(project.SourceFileForPackage(ref.Name))
+				referenceOwner := paths.show(project.ReferenceFileForPackage(ref.Name))
 				for _, framework := range frameworks {
 					row := newPackageRow(project, ref.Name, framework)
 					row.RequestedExpression = stringPtr(requested)
 					if graphUse, ok := resolvedByKey[packageUseKey(ref.Name, framework, true)]; ok {
 						row.ResolvedVersion = stringPtr(graphUse.ResolvedVersion)
 					}
-					row.setOwners(owner, owner)
+					row.setOwners(referenceOwner, owner)
 					row.Direct = true
 					row.EditReason = stringPtr("MSBuild evaluation unavailable")
 					row.Locked = ref.Locked
+					row.Global, row.PrivateAssets = ref.Global, stringPtr(ref.PrivateAssets)
+					rows = append(rows, row)
+				}
+			}
+			for _, download := range project.Downloads {
+				if !matches(download.Name) {
+					continue
+				}
+				for _, framework := range frameworks {
+					row := newPackageRow(project, download.Name, framework)
+					row.RequestedExpression = stringPtr(download.Requested)
+					row.setOwners(paths.show(download.Owner), paths.show(download.Owner))
+					row.EditReason = stringPtr(downloadEditReason)
+					row.Locked, row.Download = isExactLock(download.Requested), true
 					rows = append(rows, row)
 				}
 			}
