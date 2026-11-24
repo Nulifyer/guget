@@ -120,11 +120,12 @@ func (m *App) handleWorkspaceReloaded(msg workspaceReloadedMsg) {
 
 	before := m.packageSelection()
 	offset := m.detail.vp.YOffset()
+	previousScopes := m.ctx.SourceMapping.packageScopesFor(m.ctx.ParsedProjects, m.ctx.PropsProjects)
 	m.applyWorkspaceSnapshot(msg.snapshot)
 	m.workspaceStale = false
 	m.sourceSignature = nextSourceSig
 
-	nextResults, toFetch := planPackageReload(msg.snapshot, m.ctx.Results, invalidateAll)
+	nextResults, toFetch := planPackageReload(msg.snapshot, m.ctx.Results, invalidateAll, previousScopes)
 	m.ctx.Results = nextResults
 	m.startPackageFetch(toFetch, false)
 	selectedPackage := m.packageSelection().name
@@ -254,7 +255,8 @@ func (m *App) startPackageFetch(names []string, initial bool) {
 
 	ctx, cancel := context.WithCancel(m.lifecycle)
 	m.metadataCancel = cancel
-	fetchPackageMetadataAsync(ctx, m.send, m.workspaceGeneration, m.ctx.NugetServices, m.ctx.SourceMapping, names)
+	scopes := m.ctx.SourceMapping.packageScopesFor(m.ctx.ParsedProjects, m.ctx.PropsProjects)
+	fetchPackageMetadataAsync(ctx, m.send, m.workspaceGeneration, m.ctx.NugetServices, m.ctx.SourceMapping, scopes, names)
 }
 
 // Keep a completed action visible while its disk changes reconcile in the background.

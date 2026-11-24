@@ -93,8 +93,10 @@ target framework of the projects sharing the version can use. Those are all the
 projects whose version comes from the same file, such as a shared
 `Directory.Packages.props`, because one update changes them together.
 
-Guget asks every source that package source mapping allows and merges their
-versions, as NuGet does. Unlisted versions never count. Vulnerabilities and
+For each project, Guget asks every source that the project's own NuGet
+configuration and package source mapping allow and merges their versions, as
+NuGet does. A project never gets a version from a source that only another
+project in the workspace uses. Unlisted versions never count. Vulnerabilities and
 deprecation apply to the exact version a row uses. A `PackageDownload` row is
 never assessed: its fields stay `null` and no filter keeps it.
 

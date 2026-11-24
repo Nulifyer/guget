@@ -26,6 +26,51 @@ type reloadSelection struct {
 	name    string
 }
 
+// addSourceProblem explains why a search add must not write: the chosen
+// version comes from a source that the NuGet configuration of a target
+// project, or of a project importing a shared add location, does not allow
+// for the package. Search in All Projects offers what any project may use,
+// so the add re-checks each target. It returns "" when the add may proceed
+// or when the version did not come from search.
+func (m *App) addSourceProblem(pkgName, version string, targets []mutationTarget) string {
+	info := m.search.fetchedInfo
+	if info == nil {
+		return ""
+	}
+	source := m.search.fetchedSource
+	want := ParseSemVer(version)
+	found := false
+	for _, v := range info.Versions {
+		if v.SemVer.Equal(want) {
+			found = true
+			if v.Source != "" {
+				source = v.Source
+			}
+			break
+		}
+	}
+	if !found || source == "" {
+		return fmt.Sprintf("%s %s was not found on a known source; search again before adding", pkgName, version)
+	}
+	allowedFor := func(path string) bool {
+		for _, service := range m.ctx.NugetServices {
+			if strings.EqualFold(service.SourceName(), source) && m.ctx.SourceMapping.AllowsFor(path, service.SourceName(), service.SourceURL(), pkgName) {
+				return true
+			}
+		}
+		return false
+	}
+	for _, target := range targets {
+		if !allowedFor(target.project.FilePath) {
+			return fmt.Sprintf("Not added: %s %s comes from source %s, which %s's NuGet configuration does not allow for this package", pkgName, version, source, target.project.FileName)
+		}
+		if location := target.addTarget; location != nil && (location.Kind == AddTargetBuildProps || location.Kind == AddTargetImportedProps) && !allowedFor(location.FilePath) {
+			return fmt.Sprintf("Not added: %s %s comes from source %s, which a project importing %s may not use for this package", pkgName, version, source, filepath.Base(location.FilePath))
+		}
+	}
+	return ""
+}
+
 func (m *App) packageSelection() packageSelection {
 	selection := packageSelection{cursor: m.packages.cursor, sortMode: m.packages.sortMode, sortDir: m.packages.sortDir}
 	if project := m.selectedProject(); project != nil {
@@ -149,9 +194,10 @@ func (m *App) handleMutationReconciled(msg mutationReconciledMsg) ui.Effect {
 	before := m.packageSelection()
 	offset := m.detail.vp.YOffset()
 	m.activeReload = reloadRequestedMsg{reason: "package files changed", selection: msg.selection}
+	previousScopes := m.ctx.SourceMapping.packageScopesFor(m.ctx.ParsedProjects, m.ctx.PropsProjects)
 	m.applyWorkspaceSnapshot(msg.snapshot)
 	m.workspaceGeneration++
-	next, missing := planPackageReload(msg.snapshot, m.ctx.Results, false)
+	next, missing := planPackageReload(msg.snapshot, m.ctx.Results, false, previousScopes)
 	m.ctx.Results = next
 	m.startPackageFetch(missing, false)
 	m.rebuildPackageRows()

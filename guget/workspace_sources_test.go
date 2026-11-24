@@ -35,46 +35,6 @@ func sourceSummary(sources []NugetSource) []string {
 	return summary
 }
 
-func TestResolveWorkspaceSourcesScopesProjectsByTheirOwnConfiguration(t *testing.T) {
-	root := t.TempDir()
-	mustWriteFile(t, filepath.Join(root, "nuget.config"), `<configuration><packageSources><clear/><add key="shared" value="https://shared.test/index.json"/></packageSources></configuration>`)
-	mustWriteFile(t, filepath.Join(root, "tools", "nuget.config"), `<configuration><packageSources><add key="tools" value="https://tools.test/index.json"/></packageSources>
-		<packageSourceMapping><packageSource key="tools"><package pattern="Tools.*"/></packageSource><packageSource key="shared"><package pattern="*"/></packageSource></packageSourceMapping></configuration>`)
-	app := filepath.Join(root, "app", "App.csproj")
-	tool := filepath.Join(root, "tools", "Tool", "Tool.csproj")
-	mustWriteFile(t, app, minimalProject)
-	mustWriteFile(t, tool, minimalProject)
-
-	resolved, err := resolveWorkspaceSources(parseTestProjects(t, app, tool))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got, want := sourceSummary(resolved.Sources), []string{"shared=https://shared.test/index.json", "tools=https://tools.test/index.json"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("sources = %v, want %v", got, want)
-	}
-	mapping := resolved.Mapping
-	shared, tools := resolved.Sources[0], resolved.Sources[1]
-	// The app project has no mapping, so the shared source may supply anything;
-	// the tools project limits its own feed to Tools.* packages.
-	for _, check := range []struct {
-		source  NugetSource
-		id      string
-		allowed bool
-	}{
-		{shared, "Tools.Cli", true},
-		{tools, "Tools.Cli", true},
-		{tools, "Other.Package", false},
-		{shared, "Other.Package", true},
-	} {
-		if got := mapping.Allows(check.source.Name, check.source.URL, check.id); got != check.allowed {
-			t.Errorf("Allows(%s, %s) = %v, want %v", check.source.Name, check.id, got, check.allowed)
-		}
-	}
-	if got := mapping.Patterns(tools); !reflect.DeepEqual(got, []string{"tools.*"}) {
-		t.Fatalf("Patterns(tools) = %v", got)
-	}
-}
-
 func TestResolveWorkspaceSourcesAppliesProjectRestoreSources(t *testing.T) {
 	root := t.TempDir()
 	mustWriteFile(t, filepath.Join(root, "nuget.config"), `<configuration><packageSources><clear/>

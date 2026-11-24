@@ -316,14 +316,19 @@ func workspaceSourceSignature(sources []NugetSource, mapping *PackageSourceMappi
 	return strings.Join(parts, "\n") + "\n" + mapping.signature()
 }
 
-func planPackageReload(snapshot *workspaceSnapshot, current map[string]nugetResult, invalidateAll bool) (map[string]nugetResult, []string) {
+// planPackageReload keeps the current metadata of packages still in the
+// workspace and lists the rest to fetch. previous, when set, gives the source
+// scopes the current metadata was fetched for: a package now referenced from
+// other scopes is fetched again, since its usable versions may differ.
+func planPackageReload(snapshot *workspaceSnapshot, current map[string]nugetResult, invalidateAll bool, previous func(string) packageScopes) (map[string]nugetResult, []string) {
 	names := distinctPackageNames(snapshot.ParsedProjects, snapshot.PropsProjects)
 	next := make(map[string]nugetResult, len(names))
 	toFetch := make([]string, 0, len(names))
+	scopes := snapshot.SourceMapping.packageScopesFor(snapshot.ParsedProjects, snapshot.PropsProjects)
 
 	for _, name := range names {
 		if !invalidateAll {
-			if res, ok := current[name]; ok && res.pkg != nil && res.err == nil {
+			if res, ok := current[name]; ok && res.pkg != nil && res.err == nil && (previous == nil || previous(name).key == scopes(name).key) {
 				next[name] = res
 				continue
 			}
@@ -334,7 +339,11 @@ func planPackageReload(snapshot *workspaceSnapshot, current map[string]nugetResu
 	return next, toFetch
 }
 
-func fetchPackageMetadataAsync(ctx context.Context, send func(ui.Event), generation int, nugetServices []*NugetService, sourceMapping *PackageSourceMapping, packageNames []string) {
+// fetchPackageMetadataAsync fetches each package for the source scopes that
+// reference it (scopes) and sends, per package, only the versions every one
+// of those scopes can use, so no project is offered a version its own NuGet
+// configuration cannot restore.
+func fetchPackageMetadataAsync(ctx context.Context, send func(ui.Event), generation int, nugetServices []*NugetService, sourceMapping *PackageSourceMapping, scopes func(string) packageScopes, packageNames []string) {
 	if send == nil || len(packageNames) == 0 {
 		return
 	}
@@ -354,7 +363,9 @@ func fetchPackageMetadataAsync(ctx context.Context, send func(ui.Event), generat
 					if ctx.Err() != nil {
 						return
 					}
-					metadata := fetchPackageMetadata(ctx, nugetServices, sourceMapping, name)
+					packageScopes := scopes(name)
+					byScope := fetchScopedPackageMetadata(ctx, nugetServices, sourceMapping, name, packageScopes.indexes)
+					metadata := intersectScopedMetadata(packageScopes.indexes, byScope)
 					if ctx.Err() != nil {
 						return
 					}

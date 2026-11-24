@@ -100,12 +100,19 @@ func (m *App) addPackageToTargets(pkgName, version string, targets []mutationTar
 	if !m.canMutate() {
 		return nil
 	}
+	if problem := m.addSourceProblem(pkgName, version, targets); problem != "" {
+		return m.setStatus("▲ "+problem, true)
+	}
 	m.focus = focusPackages
 	if m.search.fetchedInfo != nil {
 		if m.ctx.Results == nil {
 			m.ctx.Results = make(map[string]nugetResult)
 		}
-		m.ctx.Results[pkgName] = nugetResult{pkg: m.search.fetchedInfo, source: m.search.fetchedSource}
+		// Keep metadata already fetched for the projects referencing the
+		// package; the search source may have versions some of them cannot use.
+		if current, ok := m.ctx.Results[pkgName]; !ok || current.pkg == nil {
+			m.ctx.Results[pkgName] = nugetResult{pkg: m.search.fetchedInfo, source: m.search.fetchedSource}
+		}
 		m.search.fetchedInfo = nil
 		m.search.fetchedSource = ""
 	}

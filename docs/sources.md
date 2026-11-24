@@ -168,8 +168,15 @@ sources list can differ from `dotnet nuget list source` run elsewhere:
   property groups and entries that use other MSBuild properties.
 
 When projects in the workspace resolve different sources, the sources list
-shows all of them. A package can use a source when any project that uses the
-source allows the package under its mapping.
+shows all of them, with each source's mapped patterns from every project.
+Versions and updates still come from each project's own configuration, as
+`dotnet restore` resolves each project alone: a project only gets a package from
+a source its own configuration lists and, under its own mapping, maps the
+package to. `list` and `update --latest` assess each project separately. The
+TUI shows a package's versions only when every project referencing it can
+use them, offers search results from the selected project's sources (from any
+project's sources in All Projects), and refuses an add when the version comes
+from a source the target project cannot use.
 
 ## Refresh source information
 

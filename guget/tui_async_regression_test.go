@@ -164,6 +164,8 @@ func TestRegressionSearchFetchHonorsSelectedResultSource(t *testing.T) {
 	defer selectedServer.Close()
 	m, _, _ := newActionTestApp(t, "")
 	m.ctx.NugetServices = []*NugetService{first, selected}
+	// These services are not the workspace's configured sources; no project scope applies.
+	m.ctx.SourceMapping = nil
 	m.openSearch()
 	m.search.results = []SearchResult{{ID: "Example", Version: "2.0.0", Source: "selected"}}
 	m.ctx.Results["Example"] = nugetResult{pkg: &PackageInfo{ID: "Example", LatestVersion: "9.0.0"}, source: "first"}

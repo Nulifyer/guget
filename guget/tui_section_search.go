@@ -143,7 +143,7 @@ func (s *packageSearch) debounceCmd(query string) ui.Effect {
 
 func (s *packageSearch) doSearchCmd(query string) ui.Effect {
 	services := s.app.ctx.NugetServices
-	sourceMapping := s.app.ctx.SourceMapping
+	allows := s.app.searchAllows()
 	requestID, id := s.requestID, s.debounceID
 	ctx, cancel := context.WithCancel(s.app.lifecycle)
 	s.cancel = cancel
@@ -187,8 +187,9 @@ func (s *packageSearch) doSearchCmd(query string) ui.Effect {
 				if seen.Contains(key) {
 					continue
 				}
-				// Only include results the mapping allows from the source that found them.
-				if !sourceMapping.Allows(sr.source, sr.url, r.ID) {
+				// Only include results the selected project's sources allow
+				// from the source that found them.
+				if !allows(sr.source, sr.url, r.ID) {
 					continue
 				}
 				seen.Add(key)
@@ -211,10 +212,10 @@ func (s *packageSearch) doSearchCmd(query string) ui.Effect {
 }
 
 func (s *packageSearch) fetchPackageCmd(id, source string) ui.Effect {
-	eligible := FilterServices(s.app.ctx.NugetServices, s.app.ctx.SourceMapping, id)
+	allows := s.app.searchAllows()
 	var services []*NugetService
-	for _, service := range eligible {
-		if strings.EqualFold(service.SourceName(), source) {
+	for _, service := range s.app.ctx.NugetServices {
+		if strings.EqualFold(service.SourceName(), source) && allows(service.SourceName(), service.SourceURL(), id) {
 			services = append(services, service)
 		}
 	}
@@ -236,6 +237,19 @@ func (s *packageSearch) fetchPackageCmd(id, source string) ui.Effect {
 		}
 		return packageFetchedMsg{requestID: requestID, err: lastErr}
 	}
+}
+
+// searchAllows returns which search results may be offered: those the
+// selected project's NuGet configuration allows from the source that found
+// them, or in All Projects those some project allows. Adding re-checks the
+// target projects (addSourceProblem).
+func (m *App) searchAllows() func(name, url, packageID string) bool {
+	mapping := m.ctx.SourceMapping
+	if project := m.selectedProject(); project != nil {
+		path := project.FilePath
+		return func(name, url, packageID string) bool { return mapping.AllowsFor(path, name, url, packageID) }
+	}
+	return mapping.Allows
 }
 
 func (s *packageSearch) Render() string {

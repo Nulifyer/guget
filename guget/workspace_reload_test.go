@@ -41,7 +41,7 @@ func TestPlanPackageReload_ReusesCachedResults(t *testing.T) {
 		"Polly":           {pkg: &PackageInfo{ID: "Polly"}},
 	}
 
-	reused, toFetch := planPackageReload(snapshot, current, false)
+	reused, toFetch := planPackageReload(snapshot, current, false, nil)
 
 	if len(reused) != 2 {
 		t.Fatalf("expected 2 reused results, got %d", len(reused))
@@ -53,7 +53,7 @@ func TestPlanPackageReload_ReusesCachedResults(t *testing.T) {
 		t.Fatalf("expected only Serilog to refetch, got %v", toFetch)
 	}
 
-	reused, toFetch = planPackageReload(snapshot, current, true)
+	reused, toFetch = planPackageReload(snapshot, current, true, nil)
 	if len(reused) != 0 {
 		t.Fatalf("expected source invalidation to clear reused results, got %d", len(reused))
 	}

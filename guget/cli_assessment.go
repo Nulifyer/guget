@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -30,9 +31,11 @@ func cliUpdateTarget(args cliArgs) UpdateTarget {
 	return updateTargetOrDefault(effectiveSettings().UpdateTarget)
 }
 
-// cliMetadata is the package metadata a CLI command fetched.
+// cliMetadata is the package metadata a CLI command fetched, per package and
+// source scope: each project gets only what its own sources supply.
 type cliMetadata struct {
-	packages map[string]packageMetadata // lower-case package ID
+	packages map[string]map[int]packageMetadata // lower-case package ID → scope index
+	mapping  *PackageSourceMapping
 	warnings []string
 	// failed counts packages without metadata; sourceFailed counts those
 	// whose sources failed rather than answering "not found".
@@ -54,11 +57,26 @@ func metadataTimedOut(parent, phase context.Context) bool {
 	return parent.Err() == nil && errors.Is(phase.Err(), context.DeadlineExceeded)
 }
 
+// metadataRequest asks for one package's metadata for the projects that
+// reference it.
+type metadataRequest struct {
+	ID       string
+	Projects []string // project file paths
+}
+
+// forProject returns packageID's metadata from the sources the project's
+// own NuGet configuration allows for it.
+func (m cliMetadata) forProject(packageID, projectPath string) packageMetadata {
+	scopes := m.mapping.scopesForPaths(projectPath)
+	return intersectScopedMetadata(scopes, m.packages[strings.ToLower(packageID)])
+}
+
 // fetchCLIMetadata creates a service for every HTTP source and fetches the
-// merged metadata of each package, eight packages at a time.
-func (r *cliRuntime) fetchCLIMetadata(ctx context.Context, snapshot *workspaceSnapshot, packageIDs []string) cliMetadata {
-	result := cliMetadata{packages: make(map[string]packageMetadata, len(packageIDs))}
-	if len(packageIDs) == 0 {
+// merged metadata of each package, eight packages at a time. A package is
+// fetched once for each distinct set of sources its projects may use.
+func (r *cliRuntime) fetchCLIMetadata(ctx context.Context, snapshot *workspaceSnapshot, requests []metadataRequest) cliMetadata {
+	result := cliMetadata{packages: make(map[string]map[int]packageMetadata, len(requests)), mapping: snapshot.SourceMapping}
+	if len(requests) == 0 {
 		return result
 	}
 	var httpSources []NugetSource
@@ -91,21 +109,25 @@ func (r *cliRuntime) fetchCLIMetadata(ctx context.Context, snapshot *workspaceSn
 	DeduplicateADOUpstreams(services)
 
 	var mu sync.Mutex
-	jobs := make(chan string)
-	for range min(8, len(packageIDs)) {
+	jobs := make(chan metadataRequest)
+	scopesOf := make(map[string][]int, len(requests))
+	for _, request := range requests {
+		scopesOf[strings.ToLower(request.ID)] = snapshot.SourceMapping.scopesForPaths(request.Projects...)
+	}
+	for range min(8, len(requests)) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for id := range jobs {
-				metadata := fetchPackageMetadata(ctx, services, snapshot.SourceMapping, id)
+			for request := range jobs {
+				byScope := fetchScopedPackageMetadata(ctx, services, snapshot.SourceMapping, request.ID, scopesOf[strings.ToLower(request.ID)])
 				mu.Lock()
-				result.packages[strings.ToLower(id)] = metadata
+				result.packages[strings.ToLower(request.ID)] = byScope
 				mu.Unlock()
 			}
 		}()
 	}
-	for _, id := range packageIDs {
-		jobs <- id
+	for _, request := range requests {
+		jobs <- request
 	}
 	close(jobs)
 	wg.Wait()
@@ -113,23 +135,44 @@ func (r *cliRuntime) fetchCLIMetadata(ctx context.Context, snapshot *workspaceSn
 		return result
 	}
 
-	sorted := append([]string(nil), packageIDs...)
-	sort.Slice(sorted, func(i, j int) bool { return strings.ToLower(sorted[i]) < strings.ToLower(sorted[j]) })
-	for _, id := range sorted {
-		metadata := result.packages[strings.ToLower(id)]
-		switch {
-		case metadata.Err != nil:
-			result.failed++
-			if len(metadata.Failures) > 0 || len(services) == 0 {
-				result.sourceFailed++
-			}
-			result.warnings = append(result.warnings, fmt.Sprintf("metadata for %s unavailable: %v", id, metadata.Err))
-		case len(metadata.Failures) > 0:
-			result.incomplete = true
-			for _, failure := range metadata.Failures {
-				result.warnings = append(result.warnings, fmt.Sprintf("metadata for %s may be incomplete: source %s failed: %v", id, failure.Source, failure.Err))
+	sorted := append([]metadataRequest(nil), requests...)
+	sort.Slice(sorted, func(i, j int) bool { return strings.ToLower(sorted[i].ID) < strings.ToLower(sorted[j].ID) })
+	for _, request := range sorted {
+		id := request.ID
+		byScope := result.packages[strings.ToLower(id)]
+		var warnings []string
+		warn := func(format string, args ...any) {
+			if warning := fmt.Sprintf(format, args...); !slices.Contains(warnings, warning) {
+				warnings = append(warnings, warning)
 			}
 		}
+		// A package fails when a project gets no metadata, and fails because
+		// of its sources when no project got any.
+		failed, sourceFailed := false, true
+		for _, scope := range scopesOf[strings.ToLower(id)] {
+			metadata := byScope[scope]
+			switch {
+			case metadata.Err != nil:
+				failed = true
+				sourceFailed = sourceFailed && (len(metadata.Failures) > 0 || len(services) == 0)
+				warn("metadata for %s unavailable: %v", id, metadata.Err)
+			case len(metadata.Failures) > 0:
+				sourceFailed = false
+				result.incomplete = true
+				for _, failure := range metadata.Failures {
+					warn("metadata for %s may be incomplete: source %s failed: %v", id, failure.Source, failure.Err)
+				}
+			default:
+				sourceFailed = false
+			}
+		}
+		if failed {
+			result.failed++
+			if sourceFailed {
+				result.sourceFailed++
+			}
+		}
+		result.warnings = append(result.warnings, warnings...)
 	}
 	return result
 }
@@ -159,7 +202,7 @@ func assessListRows(rows []cliPackageRow, snapshot *workspaceSnapshot, metadata 
 		if !assessableRow(*row) {
 			continue
 		}
-		info := metadata.packages[strings.ToLower(row.Package)].Info
+		info := metadata.forProject(row.Package, row.ProjectPath).Info
 		if info == nil {
 			continue
 		}
@@ -239,10 +282,15 @@ func (f listFilter) matches(row cliPackageRow) bool {
 
 // latestVersionSelector returns update's per-project version choice for
 // --latest: the assessment target of the installed reference under policy,
-// judged against the frameworks of every project sharing its version owner.
-// It compares with the requested lower bound, as dotnet package update does.
-func latestVersionSelector(snapshot *workspaceSnapshot, info *PackageInfo, policy UpdateTarget) func(*ParsedProject, PackageReference) (string, bool) {
+// from the metadata of the project's own sources (infoFor), judged against
+// the frameworks of every project sharing its version owner. It compares
+// with the requested lower bound, as dotnet package update does.
+func latestVersionSelector(snapshot *workspaceSnapshot, infoFor func(*ParsedProject) *PackageInfo, policy UpdateTarget) func(*ParsedProject, PackageReference) (string, bool) {
 	return func(project *ParsedProject, installed PackageReference) (string, bool) {
+		info := infoFor(project)
+		if info == nil {
+			return "", false
+		}
 		frameworks := NewSet[TargetFramework]()
 		for framework := range packageFrameworksForView(snapshot.ParsedProjects, project)[strings.ToLower(installed.Name)] {
 			frameworks.Add(framework)

@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -854,16 +855,25 @@ func (r *cliRuntime) runList(ctx context.Context, inv *cliInvocation) ExitCode {
 	if filter.active() || args.bools["metadata"] {
 		policy := cliUpdateTarget(args)
 		doc.UpdateTarget = stringPtr(string(policy))
-		var ids []string
-		seen := NewSet[string]()
+		var requests []metadataRequest
+		index := make(map[string]int)
 		for _, row := range rows {
-			if assessableRow(row) && !seen.Contains(strings.ToLower(row.Package)) {
-				seen.Add(strings.ToLower(row.Package))
-				ids = append(ids, row.Package)
+			if !assessableRow(row) {
+				continue
+			}
+			key := strings.ToLower(row.Package)
+			i, seen := index[key]
+			if !seen {
+				i = len(requests)
+				index[key] = i
+				requests = append(requests, metadataRequest{ID: row.Package})
+			}
+			if !slices.Contains(requests[i].Projects, row.ProjectPath) {
+				requests[i].Projects = append(requests[i].Projects, row.ProjectPath)
 			}
 		}
 		metaCtx, cancel := metadataContext(ctx, inv)
-		metadata := r.fetchCLIMetadata(metaCtx, snapshot, ids)
+		metadata := r.fetchCLIMetadata(metaCtx, snapshot, requests)
 		timedOut := metadataTimedOut(ctx, metaCtx)
 		cancel()
 		if ctx.Err() != nil {
@@ -1140,7 +1150,11 @@ func (r *cliRuntime) runMutation(ctx context.Context, verb string, inv *cliInvoc
 		policy := cliUpdateTarget(args)
 		doc.UpdateTarget = stringPtr(string(policy))
 		metaCtx, cancel := metadataContext(ctx, inv)
-		metadata := r.fetchCLIMetadata(metaCtx, snapshot, []string{packageID})
+		request := metadataRequest{ID: packageID}
+		for _, target := range targets {
+			request.Projects = append(request.Projects, target.FilePath)
+		}
+		metadata := r.fetchCLIMetadata(metaCtx, snapshot, []metadataRequest{request})
 		timedOut := metadataTimedOut(ctx, metaCtx)
 		cancel()
 		if ctx.Err() != nil {
@@ -1151,12 +1165,26 @@ func (r *cliRuntime) runMutation(ctx context.Context, verb string, inv *cliInvoc
 		}
 		doc.Warnings = redactAll(metadata.warnings)
 		r.emitWarnings(metadata.warnings)
-		info := metadata.packages[strings.ToLower(packageID)].Info
-		if info == nil {
-			return inv.fail(ExitSource, "no source supplied metadata for %s", packageID)
+		// Each project updates from what its own NuGet configuration allows,
+		// as restore and dotnet package update resolve each project alone.
+		infos := make(map[*ParsedProject]*PackageInfo, len(targets))
+		for _, target := range targets {
+			info := metadata.forProject(packageID, target.FilePath).Info
+			if info == nil && referencesPackage(target, packageID) {
+				if len(targets) == 1 {
+					return inv.fail(ExitSource, "no source supplied metadata for %s", packageID)
+				}
+				return inv.fail(ExitSource, "no source that %s may use supplied metadata for %s", target.FileName, packageID)
+			}
+			infos[target] = info
 		}
 		partialMetadata = metadata.incomplete
-		options.selectVersion = latestVersionSelector(snapshot, info, policy)
+		options.selectVersion = latestVersionSelector(snapshot, func(project *ParsedProject) *PackageInfo {
+			if info, ok := infos[project]; ok {
+				return info
+			}
+			return metadata.forProject(packageID, project.FilePath).Info
+		}, policy)
 	}
 	plan, rows, skipped, err := planPackageMutation(verb, packageID, args.value("version", ""), mutationTargetsFor(targets), options)
 	if err != nil {
@@ -1248,6 +1276,16 @@ func (r *cliRuntime) runMutation(ctx context.Context, verb string, inv *cliInvoc
 		return ExitPartial
 	}
 	return code
+}
+
+// referencesPackage reports whether the project declares packageID.
+func referencesPackage(project *ParsedProject, packageID string) bool {
+	for ref := range project.Packages {
+		if strings.EqualFold(ref.Name, packageID) {
+			return true
+		}
+	}
+	return false
 }
 
 func mutationTargetsFor(projects []*ParsedProject) []mutationTarget {
