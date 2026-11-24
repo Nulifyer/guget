@@ -74,7 +74,7 @@ binary path explicitly. Restart VS Code after changing its inherited PATH.
 | `guget.binaryPath` | `""` | Absolute executable path; empty uses standard locations, then PATH. |
 | `guget.verbosity` | `"warn"` | Logging level: `none`, `error`, `warn`, `info`, `debug`, or `trace`. |
 | `guget.theme` | `"auto"` | TUI color theme, such as `dracula`, `nord`, or `gruvbox`. |
-| `guget.sortField` | `"status"` | Initial sort: `status`, `name`, `source`, `current`, or `available`. |
+| `guget.sortField` | `"status"` | Initial sort: `status`, `name`, `source`, `requested`, or `available`. `current` still works as an older name for `requested`. |
 | `guget.sortDirection` | `"asc"` | Initial direction: `asc` or `desc`. |
 | `guget.additionalArgs` | `[]` | Extra TUI arguments, such as `["--no-mouse"]`. |
 

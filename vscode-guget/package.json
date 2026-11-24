@@ -152,8 +152,17 @@
             "status",
             "name",
             "source",
+            "requested",
             "current",
             "available"
+          ],
+          "enumDescriptions": [
+            "Update status",
+            "Package name",
+            "Package source",
+            "Requested version",
+            "Requested version (older name for requested)",
+            "Available version"
           ],
           "description": "Initial sort field. When neither sort setting is set, guget uses its own sort setting."
         },
