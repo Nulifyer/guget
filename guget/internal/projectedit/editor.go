@@ -20,6 +20,7 @@ func isExactLock(s string) bool {
 
 type packageElement struct {
 	conditional bool
+	include     bool // Include item rather than Update
 	tag         string
 	name        string
 	start       int
@@ -60,18 +61,21 @@ func scanPackageElements(data []byte) ([]packageElement, error) {
 				active[len(active)-1].conditional = true
 			}
 			if !strings.EqualFold(token.Name.Local, "PackageReference") &&
-				!strings.EqualFold(token.Name.Local, "PackageVersion") {
+				!strings.EqualFold(token.Name.Local, "PackageVersion") &&
+				!strings.EqualFold(token.Name.Local, globalTag) {
 				continue
 			}
 			name := ""
+			include := false
 			for _, attr := range token.Attr {
 				if strings.EqualFold(attr.Name.Local, "Include") || strings.EqualFold(attr.Name.Local, "Update") {
 					name = attr.Value
+					include = strings.EqualFold(attr.Name.Local, "Include")
 					break
 				}
 			}
 			active = append(active, packageElement{
-				tag: token.Name.Local, name: name, start: before, startTagEnd: after, conditional: conditional,
+				tag: token.Name.Local, name: name, include: include, start: before, startTagEnd: after, conditional: conditional,
 			})
 		case xml.EndElement:
 			conditions = conditions[:len(conditions)-1]
@@ -165,6 +169,18 @@ func RemovePackageReference(filePath, pkgName string) error {
 }
 
 func PlanRemovePackageReference(filePath, pkgName string) (editplan.Change, error) {
+	return planRemoveElement(filePath, pkgName, "PackageReference")
+}
+
+// PlanRemoveGlobalPackageReference removes a GlobalPackageReference, which
+// every project importing the file references.
+func PlanRemoveGlobalPackageReference(filePath, pkgName string) (editplan.Change, error) {
+	return planRemoveElement(filePath, pkgName, globalTag)
+}
+
+const globalTag = "GlobalPackageReference"
+
+func planRemoveElement(filePath, pkgName, tag string) (editplan.Change, error) {
 	data, err := os.ReadFile(filePath)
 	if err != nil {
 		return editplan.Change{}, fmt.Errorf("read %s: %w", filePath, err)
@@ -176,7 +192,7 @@ func PlanRemovePackageReference(filePath, pkgName string) (editplan.Change, erro
 	}
 	matches := 0
 	for _, element := range elements {
-		if strings.EqualFold(element.tag, "PackageReference") && strings.EqualFold(element.name, pkgName) {
+		if strings.EqualFold(element.tag, tag) && strings.EqualFold(element.name, pkgName) {
 			if element.conditional {
 				return editplan.Change{}, fmt.Errorf("package %q in %s has conditional ownership and is read-only", pkgName, filePath)
 			}
@@ -184,12 +200,12 @@ func PlanRemovePackageReference(filePath, pkgName string) (editplan.Change, erro
 		}
 	}
 	if matches > 1 {
-		return editplan.Change{}, fmt.Errorf("package %q has %d PackageReference nodes in %s; conditional or duplicate ownership is read-only", pkgName, matches, filePath)
+		return editplan.Change{}, fmt.Errorf("package %q has %d %s nodes in %s; conditional or duplicate ownership is read-only", pkgName, matches, tag, filePath)
 	}
 	after := data
 	for i := len(elements) - 1; i >= 0; i-- {
 		element := elements[i]
-		if strings.EqualFold(element.tag, "PackageReference") && strings.EqualFold(element.name, pkgName) {
+		if strings.EqualFold(element.tag, tag) && strings.EqualFold(element.name, pkgName) {
 			after = removeElementBytes(data, element)
 			break
 		}

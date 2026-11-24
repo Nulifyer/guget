@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/nulifyer/guget/internal/projectedit"
 )
 
 func TestMutationPlanReportsSkippedAndRefusedPins(t *testing.T) {
@@ -131,7 +133,7 @@ func TestInheritedReferenceScopePreservesCentralVersions(t *testing.T) {
 	if err != nil || !defined {
 		t.Fatalf("lost central version: defined=%v err=%v", defined, err)
 	}
-	exists, err := fileHasPackageReference(props, "Example")
+	exists, err := projectedit.IncludesReference(props, "Example")
 	if err != nil || exists {
 		t.Fatalf("inherited reference remains: exists=%v err=%v", exists, err)
 	}

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	editplan "github.com/nulifyer/guget/internal/edit"
+	"github.com/nulifyer/guget/internal/msbuildstatic"
 	"github.com/nulifyer/guget/internal/packageops"
 	"github.com/nulifyer/guget/internal/projectedit"
 )
@@ -80,6 +81,11 @@ func planPackageMutation(verb, packageID, version string, targets []mutationTarg
 	}
 	for _, target := range targets {
 		project := target.project
+		if verb == "update" {
+			if err := declarationProblem(project, packageID); err != nil {
+				return editplan.Plan{}, nil, skipped, err
+			}
+		}
 		if project.RequiresEvaluation && !((verb == "update" || verb == "remove") && options.allowDeclaredEdit && canEditLiteralDeclaration(project, packageID)) {
 			ctx := options.ctx
 			if ctx == nil {
@@ -118,19 +124,11 @@ func planPackageMutation(verb, packageID, version string, targets []mutationTarg
 				return editplan.Plan{}, nil, skipped, fmt.Errorf("unsupported add target %s; choose a project or .props file", location.FilePath)
 			}
 			if location.Kind == AddTargetCPM {
-				defined, err := fileDefinesPackage(location.FilePath, packageID)
+				addCentral, err := planCentralAdd(project, location.FilePath, packageID, version)
 				if err != nil {
 					return editplan.Plan{}, nil, skipped, err
 				}
-				if defined {
-					existing, err := projectedit.LiteralVersion(location.FilePath, packageID)
-					if err != nil {
-						return editplan.Plan{}, nil, skipped, err
-					}
-					if existing != version {
-						return editplan.Plan{}, nil, skipped, fmt.Errorf("central version for %q is %s in %s; requested %s would change shared consumers; update the central version explicitly first", packageID, existing, location.FilePath, version)
-					}
-				} else {
+				if addCentral {
 					appendOperation(projectedit.AddVersion, location.FilePath, "add central version", version)
 				}
 				appendOperation(projectedit.AddReference, project.FilePath, "add reference", "")
@@ -153,29 +151,46 @@ func planPackageMutation(verb, packageID, version string, targets []mutationTarg
 			if !supportedMutationOwner(owner) {
 				return editplan.Plan{}, nil, skipped, fmt.Errorf("unsupported package owner %s; supported owners are project and .props files", owner)
 			}
+			if declaration := project.Declarations[strings.ToLower(packageID)]; declaration.VersionSource == msbuildstatic.VersionCentral || declaration.VersionSource == msbuildstatic.VersionGlobal {
+				if err := centralFloatingAllowed(project, version); err != nil {
+					return editplan.Plan{}, nil, skipped, err
+				}
+			}
 			appendOperation(projectedit.UpdateVersion, owner, "update version", version)
 		case "remove":
 			if installed == nil {
 				continue
 			}
-			local, err := fileHasPackageReference(project.FilePath, packageID)
+			declaration := project.Declarations[strings.ToLower(packageID)]
+			if declaration.Global {
+				// A GlobalPackageReference applies to every project importing its
+				// file; removing it is always a shared-file edit.
+				if !options.removeInherited {
+					return editplan.Plan{}, nil, skipped, fmt.Errorf("package %q is a GlobalPackageReference in %s and applies to every project that imports that file; remove it from that file for all of them", packageID, declaration.ReferenceOwner)
+				}
+				if !supportedMutationOwner(declaration.ReferenceOwner) {
+					return editplan.Plan{}, nil, skipped, fmt.Errorf("unsupported package owner %s; inherited removal is read-only", declaration.ReferenceOwner)
+				}
+				appendOperation(projectedit.RemoveGlobalReference, declaration.ReferenceOwner, "remove global reference", "")
+				continue
+			}
+			local, err := projectedit.IncludesReference(project.FilePath, packageID)
 			if err != nil {
 				return editplan.Plan{}, nil, skipped, err
 			}
-			if !local && !options.removeInherited {
-				return editplan.Plan{}, nil, skipped, fmt.Errorf("package %q is inherited by %s from %s; no project-owned reference can be removed safely", packageID, project.FileName, project.SourceFileForPackage(packageID))
+			referenceOwner := project.ReferenceFileForPackage(packageID)
+			inherited := !sameMutationFile(referenceOwner, project.FilePath)
+			if inherited && !options.removeInherited {
+				return editplan.Plan{}, nil, skipped, fmt.Errorf("package %q is inherited by %s from %s; no project-owned reference can be removed safely", packageID, project.FileName, referenceOwner)
 			}
 			if local {
 				appendOperation(projectedit.RemoveReference, project.FilePath, "remove reference", "")
 			}
-			if options.removeInherited {
-				owner := project.SourceFileForPackage(packageID)
-				if !supportedMutationOwner(owner) {
-					return editplan.Plan{}, nil, skipped, fmt.Errorf("unsupported package owner %s; inherited removal is read-only", owner)
+			if inherited {
+				if !supportedMutationOwner(referenceOwner) || !strings.HasSuffix(strings.ToLower(referenceOwner), ".props") {
+					return editplan.Plan{}, nil, skipped, fmt.Errorf("unsupported package owner %s; inherited removal is read-only", referenceOwner)
 				}
-				if owner != project.FilePath && strings.HasSuffix(strings.ToLower(owner), ".props") {
-					appendOperation(projectedit.RemoveReference, owner, "remove reference", "")
-				}
+				appendOperation(projectedit.RemoveReference, referenceOwner, "remove reference", "")
 			}
 		default:
 			return editplan.Plan{}, nil, skipped, fmt.Errorf("unknown mutation %q", verb)
@@ -228,10 +243,78 @@ func projectCPMTarget(project *ParsedProject) string {
 	return ""
 }
 
-func fileHasPackageReference(path, id string) (bool, error) {
-	return projectedit.HasReference(path, id)
-}
 func fileDefinesPackage(path, id string) (bool, error) { return projectedit.DefinesPackage(path, id) }
+
+func sameMutationFile(a, b string) bool {
+	first, errA := canonicalMutationPath(a)
+	second, errB := canonicalMutationPath(b)
+	if errA != nil || errB != nil {
+		return filepath.Clean(a) == filepath.Clean(b)
+	}
+	return first == second
+}
+
+// planCentralAdd decides how a CPM add treats the central version. NuGet
+// keeps the first PackageVersion for an ID (NU1506), so a second one in the
+// central file would have no effect when the ID is already defined, for
+// example in an imported parent file. dotnet add package refuses that case
+// (NuGet MSBuildAPIUtility.cs:251-257). Guget adds only the reference when
+// the existing central version is the requested one, and otherwise refuses
+// rather than changing the version every consumer uses.
+func planCentralAdd(project *ParsedProject, central, packageID, version string) (bool, error) {
+	if entry, ok := project.CentralVersions[strings.ToLower(packageID)]; ok {
+		owner := entry.Owner
+		switch {
+		case entry.Conditional || !entry.VersionKnown:
+			return false, fmt.Errorf("central version for %q in %s depends on a condition or property; edit it explicitly", packageID, owner)
+		case entry.Global:
+			return false, fmt.Errorf("package %q is a GlobalPackageReference in %s; every project that imports it already references it", packageID, owner)
+		case entry.Version != version:
+			return false, fmt.Errorf("central version for %q is %s in %s, which every project using it shares; to change it for all of them, run: guget update %s --version %s --file %s",
+				packageID, entry.Version, owner, packageID, version, project.FilePath)
+		}
+		return false, nil
+	}
+	defined, err := fileDefinesPackage(central, packageID)
+	if err != nil {
+		return false, err
+	}
+	if defined {
+		return false, fmt.Errorf("package %q is declared in %s without an unconditional PackageVersion Include; edit that file explicitly", packageID, central)
+	}
+	if err := centralFloatingAllowed(project, version); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// centralFloatingAllowed applies NU1011: a floating PackageVersion needs
+// CentralPackageFloatingVersionsEnabled=true (NuGet MSBuildAPIUtility.cs:239-247).
+func centralFloatingAllowed(project *ParsedProject, version string) error {
+	if strings.Contains(version, "*") && !project.CentralFloatingVersions {
+		return fmt.Errorf("floating version %s is not allowed for a central PackageVersion unless CentralPackageFloatingVersionsEnabled is true (NU1011); choose an exact version or range", version)
+	}
+	return nil
+}
+
+// declarationProblem refuses version edits that would keep a restore error.
+func declarationProblem(project *ParsedProject, packageID string) error {
+	declaration, ok := project.Declarations[strings.ToLower(packageID)]
+	if !ok || declaration.Problem == "" {
+		return nil
+	}
+	code, _, _ := strings.Cut(declaration.Problem, ":")
+	switch code {
+	case "NU1008":
+		return fmt.Errorf("%s sets Version on %q, but it uses central package management, so restore fails (NU1008); replace Version with VersionOverride in %s for a project-specific version, or remove it to use the central PackageVersion",
+			project.FileName, packageID, declaration.VersionOwner)
+	case "NU1010":
+		return fmt.Errorf("%q has no central PackageVersion, so restore fails (NU1010); add a PackageVersion to %s first", packageID, projectCPMTarget(project))
+	case "NU1013":
+		return fmt.Errorf("%s sets VersionOverride on %q while CentralPackageVersionOverrideEnabled is false, so restore fails (NU1013); remove the VersionOverride or enable overrides", project.FileName, packageID)
+	}
+	return nil
+}
 
 // evaluatedMutationProject resolves conditional imports for every framework.
 // Source edits still require a unique unconditional literal declaration.
@@ -263,10 +346,10 @@ func evaluatedMutationProject(ctx context.Context, project *ParsedProject, packa
 	if first != nil {
 		declaredOwner, declaredErr := canonicalMutationPath(project.SourceFileForPackage(packageID))
 		evaluatedOwner, evaluatedErr := canonicalMutationPath(first.VersionOwner)
-		if declaredErr != nil || evaluatedErr != nil || declaredOwner != evaluatedOwner {
+		if declaredErr != nil || evaluatedErr != nil || declaredOwner != evaluatedOwner || !sameMutationFile(project.ReferenceFileForPackage(packageID), first.ReferenceOwner) {
 			return nil, fmt.Errorf("evaluated ownership of %q in %s differs from declared discovery; this scope is read-only", packageID, project.FileName)
 		}
-		copy.Packages.Add(PackageReference{Name: first.PackageID, Version: requestedVersion(first.EvaluatedExpression), Requested: first.EvaluatedExpression, Locked: isExactLock(first.EvaluatedExpression)})
+		copy.Packages.Add(PackageReference{Name: first.PackageID, Version: requestedVersion(first.EvaluatedExpression), Requested: first.EvaluatedExpression, Locked: isExactLock(first.EvaluatedExpression), PrivateAssets: first.PrivateAssets, Global: first.Global})
 		copy.PackageSources[strings.ToLower(packageID)] = first.VersionOwner
 	}
 	return &copy, nil

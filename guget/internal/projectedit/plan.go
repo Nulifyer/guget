@@ -16,6 +16,7 @@ const (
 	AddVersion
 	UpdateVersion
 	RemoveReference
+	RemoveGlobalReference
 )
 
 type Operation struct {
@@ -53,6 +54,8 @@ func BuildPlan(operations ...Operation) (edit.Plan, error) {
 			change, err = PlanUpdatePackageVersion(path, op.Package, op.Version)
 		case RemoveReference:
 			change, err = PlanRemovePackageReference(path, op.Package)
+		case RemoveGlobalReference:
+			change, err = PlanRemoveGlobalPackageReference(path, op.Package)
 		default:
 			err = fmt.Errorf("unknown package edit kind %d", op.Kind)
 		}
@@ -66,6 +69,25 @@ func BuildPlan(operations ...Operation) (edit.Plan, error) {
 
 func HasReference(path, packageID string) (bool, error) {
 	return hasPackageElement(path, packageID, "PackageReference")
+}
+
+// IncludesReference reports whether path has a PackageReference Include for
+// packageID. An Update changes an earlier item and declares nothing.
+func IncludesReference(path, packageID string) (bool, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false, err
+	}
+	elements, err := scanPackageElements(data)
+	if err != nil {
+		return false, err
+	}
+	for _, element := range elements {
+		if element.include && strings.EqualFold(element.tag, "PackageReference") && strings.EqualFold(element.name, packageID) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func DefinesPackage(path, packageID string) (bool, error) {
