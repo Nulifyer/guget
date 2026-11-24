@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"github.com/nulifyer/guget/internal/ui"
 	text "github.com/nulifyer/guget/internal/ui/text"
@@ -40,6 +41,9 @@ func (p *detailPanel) Draw(r ui.Rect) string {
 }
 
 func (m *App) renderDetail(row packageRow) string {
+	if errors.Is(row.err, errNoCommonVersion) {
+		return m.renderDetailNoCommonVersion(row)
+	}
 	if row.err != nil {
 		return styleRed.Render(wordWrap("Error: "+row.err.Error(), max(1, m.detail.vp.Width())))
 	}
@@ -65,6 +69,19 @@ func (m *App) renderDetail(row packageRow) string {
 	s.WriteString(m.renderDetailProjectVersions(row))
 	s.WriteString(m.renderDetailVersionList(row, w))
 	s.WriteString(m.renderDetailFrameworks(row))
+	return strings.Join(text.Wrap(s.String(), max(1, m.detail.vp.Width())), "\n")
+}
+
+// renderDetailNoCommonVersion explains a row that has no versions to offer
+// because its projects resolve the package from different sources, and lists
+// those projects. Retrying cannot fix it, so it is not shown as a bare error.
+func (m *App) renderDetailNoCommonVersion(row packageRow) string {
+	w := max(10, m.detail.vp.Width()-2)
+	var s strings.Builder
+	s.WriteString(styleAccentBold.Render(row.ref.Name) + "\n\n")
+	s.WriteString(styleRedBold.Render("No version for every project") + "\n")
+	s.WriteString(styleSubtle.Render(wordWrap("The projects that reference this package use different NuGet sources, and no version is on the sources of all of them.", w)) + "\n\n")
+	s.WriteString(m.renderDetailProjectVersions(row))
 	return strings.Join(text.Wrap(s.String(), max(1, m.detail.vp.Width())), "\n")
 }
 
@@ -249,7 +266,8 @@ func (m *App) renderDetailReferenceKind(row packageRow) string {
 }
 
 func (m *App) renderDetailProjectVersions(row packageRow) string {
-	if !row.diverged && m.selectedProject() != nil {
+	// A row with no version every project can use always names the projects.
+	if !row.diverged && m.selectedProject() != nil && !errors.Is(row.err, errNoCommonVersion) {
 		return ""
 	}
 

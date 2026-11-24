@@ -82,6 +82,10 @@ func fetchScopedPackageMetadata(ctx context.Context, services []*NugetService, m
 	return result
 }
 
+// errNoCommonVersion reports a package whose referencing projects use
+// different sources that have no version in common.
+var errNoCommonVersion = errors.New("no version is available from the sources of every project that references it")
+
 // intersectScopedMetadata combines one package's metadata from several
 // scopes into what every one of them can use: only the versions (by NuGet
 // version equality) each scope has, unlisted when any scope lists it so.
@@ -156,7 +160,7 @@ func intersectScopedMetadata(scopes []int, byScope map[int]packageMetadata) pack
 	}
 	first := common(parts[0])
 	if len(first) == 0 {
-		return packageMetadata{Failures: failures, Err: fmt.Errorf("package %q: no version is available from the sources of every project that references it", parts[0].Info.ID)}
+		return packageMetadata{Failures: failures, Err: fmt.Errorf("package %q: %w", parts[0].Info.ID, errNoCommonVersion)}
 	}
 	newest := newestForMetadata(first)
 	chosen, chosenVersions := parts[0], first

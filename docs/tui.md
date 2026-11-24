@@ -127,6 +127,13 @@ When starting from All Projects, a project picker lets you choose destinations.
 Use `Space` to toggle a project and `Enter` to confirm. The picker does not offer
 projects already using that version or projects marked incompatible.
 
+Search follows the [NuGet sources](sources.md#how-guget-finds-configuration)
+of the selected project. From All Projects it offers what any project's sources
+have, so an add can still be refused for one destination: `▲ Not added:
+App.csproj may not use source nuget.org for Serilog 4.0.0; see its NuGet
+configuration`. Nothing is written; choose a version from a source that
+project lists, or change its NuGet configuration.
+
 ## Remove a package
 
 Select the project and package, then press `d`. Review the package name and
@@ -136,9 +143,9 @@ Removing a reference does not automatically remove its shared central version.
 For a reference inherited from props, Guget may refuse project-local removal.
 
 When Guget refuses or fails to save a change, the status line starts with
-`▲ Save failed` and gives the reason. If the line is cut short, it says
-`(l for logs)`: press `l` to read the whole message, which wraps in the log
-panel.
+`▲ Save failed`, `▲ Not added`, or `▲ Not updated` and gives the reason. If the
+line is cut short, it says `(l for logs)`: press `l` to read the whole message,
+which wraps in the log panel.
 
 ## Global, private-asset, and download-only packages
 
@@ -255,7 +262,7 @@ change a setting.
 | Marker | Meaning |
 | --- | --- |
 | `.` | Metadata is loading. |
-| `✗` | Metadata lookup failed. |
+| `✗` | Metadata lookup failed, or the projects referencing the package use NuGet sources with no version of it in common. The detail panel says which: **No version for every project** lists those projects. |
 | `▲` | A known vulnerability is reported for an installed version. |
 | `~` | The feed marks an installed version deprecated. |
 | `↑` | An update to the update target is available. |

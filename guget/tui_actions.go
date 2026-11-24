@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -25,6 +26,10 @@ func (m *App) updatePackage(useStable bool, scope actionScope) ui.Effect {
 	row := m.packages.rows[m.packages.cursor]
 	if row.loading {
 		return m.setStatus("Loading metadata for "+row.ref.Name+"; press u again when ready", false)
+	}
+	if errors.Is(row.err, errNoCommonVersion) {
+		// A retry cannot help: the projects' configurations disagree.
+		return m.setStatus("Cannot update "+row.ref.Name+": its projects' NuGet sources share no version", true)
 	}
 	if row.err != nil {
 		return m.setStatus("Cannot update "+row.ref.Name+": "+row.err.Error()+"; Ctrl+R to retry", true)

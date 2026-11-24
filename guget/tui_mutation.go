@@ -63,10 +63,10 @@ func (m *App) addSourceProblem(pkgName, version string, targets []mutationTarget
 	}
 	for _, target := range targets {
 		if !allowedFor(target.project.FilePath) {
-			return fmt.Sprintf("%s %s comes from source %s, which %s's NuGet configuration does not allow for this package", pkgName, version, source, target.project.FileName)
+			return fmt.Sprintf("%s may not use source %s for %s %s; see its NuGet configuration", target.project.FileName, source, pkgName, version)
 		}
 		if location := target.addTarget; location != nil && (location.Kind == AddTargetBuildProps || location.Kind == AddTargetImportedProps) && !allowedFor(location.FilePath) {
-			return fmt.Sprintf("%s %s comes from source %s, which a project importing %s may not use for this package", pkgName, version, source, filepath.Base(location.FilePath))
+			return fmt.Sprintf("a project importing %s may not use source %s for %s %s", filepath.Base(location.FilePath), source, pkgName, version)
 		}
 	}
 	return ""
