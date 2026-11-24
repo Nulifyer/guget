@@ -292,8 +292,8 @@ func planCentralAdd(project *ParsedProject, central, packageID, version string) 
 		case entry.Global:
 			return false, fmt.Errorf("package %q is a GlobalPackageReference in %s; every project that imports it already references it", packageID, owner)
 		case entry.Version != version:
-			return false, fmt.Errorf("central version for %q is %s in %s, which every project using it shares; to change it for all of them, run: guget update %s --version %s --file %s",
-				packageID, entry.Version, owner, packageID, version, project.FilePath)
+			return false, fmt.Errorf("central version for %q is %s in %s, which every project using it shares; to change it for all of them, first run: guget update %s --version %s --all --project %s, then repeat the add",
+				packageID, entry.Version, owner, packageID, version, quoteShellArg(filepath.Dir(owner)))
 		}
 		return false, nil
 	}
@@ -391,4 +391,13 @@ func canonicalMutationPath(path string) (string, error) {
 		return "", err
 	}
 	return filepath.EvalSymlinks(abs)
+}
+
+// quoteShellArg quotes a path for a suggested command line. Double quotes
+// work in POSIX shells, PowerShell and cmd for ordinary paths with spaces.
+func quoteShellArg(value string) string {
+	if value != "" && !strings.ContainsAny(value, " \t\"'$`&|;<>()*?[]{}!#~") {
+		return value
+	}
+	return `"` + strings.ReplaceAll(value, `"`, `\"`) + `"`
 }

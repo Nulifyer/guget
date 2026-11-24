@@ -149,8 +149,14 @@ func TestCPMAddRefusesExistingDifferentCentralVersion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := buildMutationPlan("add", "Example", "2.0.0", []*ParsedProject{project}); err == nil {
+	_, _, err = buildMutationPlan("add", "Example", "2.0.0", []*ParsedProject{project})
+	if err == nil {
 		t.Fatal("accepted central version mismatch")
+	}
+	// The project does not reference the package yet, so the hint must update
+	// every consumer of the central file, which works from any directory.
+	if hint := "guget update Example --version 2.0.0 --all --project " + quoteShellArg(root) + ", then repeat the add"; !strings.Contains(err.Error(), hint) {
+		t.Fatalf("refusal %q does not contain %q", err, hint)
 	}
 	after, _ := os.ReadFile(central)
 	if string(after) != before {
