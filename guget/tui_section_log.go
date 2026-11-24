@@ -18,31 +18,112 @@ func appendLogLine(lines []string, line string) []string {
 	return append(lines, line)
 }
 
+// appendLog adds a log entry. While the panel is shown, the entry's row count
+// is recorded with it, so a refresh never has to revisit the buffer.
+func (m *App) appendLog(line string) {
+	m.ctx.LogLines = appendLogLine(m.ctx.LogLines, line)
+	p := &m.log
+	if !m.ctx.ShowLogs || p.heights == nil {
+		p.heights = nil
+		return
+	}
+	if len(p.heights) >= maxLogLines {
+		drop := len(p.heights) - maxLogLines + 1
+		for _, h := range p.heights[:drop] {
+			p.rows -= h
+		}
+		copy(p.heights, p.heights[drop:])
+		p.heights = p.heights[:maxLogLines-1]
+	}
+	h := len(logEntryRows(line, p.wrapWidth))
+	p.heights = append(p.heights, h)
+	p.rows += h
+}
+
+// updateLogView recounts every entry for the current panel width and
+// refreshes the view. Opening the panel and a width change need it; new
+// entries only need refreshLogView.
 func (m *App) updateLogView() {
-	follow := m.log.vp.AtBottom()
-	offset := m.log.vp.YOffset()
-	// Wrap long entries, such as an edit refusal or restore output with full
-	// paths, so the panel can show the part the status row cut off.
-	width := m.log.vp.Width()
-	var colored []string
-	for _, line := range m.ctx.LogLines {
-		lineStyle := logLineStyle(line)
-		for _, piece := range wrapLogLine(line, width) {
-			colored = append(colored, lineStyle.Render(piece))
+	m.log.heights = nil
+	m.refreshLogView()
+}
+
+// refreshLogView shows the current log lines, following the tail unless the
+// reader scrolled away from it. Long entries, such as an edit refusal or
+// restore output with full paths, wrap so the panel can show the part the
+// status row cut off. Only the visible rows are wrapped and styled (see
+// logPanel.window): a refresh costs the entries added since the last one,
+// not the whole buffer.
+func (m *App) refreshLogView() {
+	p := &m.log
+	follow := p.vp.AtBottom()
+	offset := p.vp.YOffset()
+	if width := p.vp.Width(); p.heights == nil || p.wrapWidth != width || len(p.heights) != len(m.ctx.LogLines) {
+		p.wrapWidth = width
+		p.heights = make([]int, len(m.ctx.LogLines), max(len(m.ctx.LogLines), maxLogLines))
+		p.rows = 0
+		for i, line := range m.ctx.LogLines {
+			p.heights[i] = len(logEntryRows(line, width))
+			p.rows += p.heights[i]
 		}
 	}
-	m.log.vp.SetContent(strings.Join(colored, "\n"))
+	p.vp.SetWindow(p.rows, p.window)
 	if follow {
-		m.log.vp.GotoBottom()
+		p.vp.GotoBottom()
 	} else {
-		m.log.vp.SetYOffset(offset)
+		p.vp.SetYOffset(offset)
 	}
 }
 
+// window returns the n styled panel rows from row start. It finds the entry
+// holding that row from whichever end of the buffer is nearer, by adding row
+// counts, and wraps and styles only the entries it returns.
+func (p *logPanel) window(start, n int) []string {
+	lines := p.app.ctx.LogLines
+	if n <= 0 || start < 0 || start >= p.rows || len(p.heights) != len(lines) {
+		return nil
+	}
+	entry, skip := 0, start
+	if start > p.rows/2 {
+		entry, skip = len(lines), start-p.rows
+		for skip < 0 {
+			entry--
+			skip += p.heights[entry]
+		}
+	} else {
+		for skip >= p.heights[entry] {
+			skip -= p.heights[entry]
+			entry++
+		}
+	}
+	out := make([]string, 0, n)
+	for ; entry < len(lines) && len(out) < n; entry++ {
+		lineStyle := logLineStyle(lines[entry])
+		rows := logEntryRows(lines[entry], p.wrapWidth)
+		for _, row := range rows[min(skip, len(rows)):] {
+			if len(out) == n {
+				break
+			}
+			out = append(out, lineStyle.Render(row))
+		}
+		skip = 0
+	}
+	return out
+}
+
+// logEntryRows returns the panel rows of one entry: its wrapped pieces, with
+// an entry that carries its own line breaks split at them.
+func logEntryRows(line string, width int) []string {
+	rows := wrapLogLine(line, width)
+	if len(rows) == 1 && strings.ContainsAny(rows[0], "\r\n") {
+		return strings.Split(text.Normalize(rows[0]), "\n")
+	}
+	return rows
+}
+
 // wrapLogLine splits an entry wider than the panel at spaces, or mid-word
-// when a path leaves no space. The whole buffer is rewrapped on every log
-// refresh, so the common printable-ASCII entry takes a byte-wise path that
-// stays cheap for a full buffer; anything else gets the exact, slower wrap.
+// when a path leaves no space. Printable-ASCII entries, the common case, take
+// a byte-wise path; anything else gets the exact, slower wrap.
 func wrapLogLine(line string, width int) []string {
 	if width <= 0 || len(line) <= width {
 		return []string{line}

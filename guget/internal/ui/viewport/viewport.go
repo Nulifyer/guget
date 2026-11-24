@@ -13,6 +13,10 @@ type Model struct {
 	yOffset       int
 	content       string
 	lines         []string
+	// A windowed source replaces content: count lines exist and window
+	// produces only the ones asked for, so a long buffer costs what is shown.
+	count  int
+	window func(start, n int) []string
 }
 type Option func(*Model)
 
@@ -29,22 +33,51 @@ func (m *Model) SetWidth(v int)  { m.width = max(0, v) }
 func (m *Model) SetHeight(v int) { m.height = max(0, v); m.clamp() }
 func (m Model) Width() int       { return m.width }
 func (m Model) Height() int      { return m.height }
-func (m *Model) clamp()          { m.yOffset = max(0, min(m.yOffset, max(0, len(m.lines)-m.height))) }
+func (m *Model) clamp()          { m.yOffset = max(0, min(m.yOffset, max(0, m.lineCount()-m.height))) }
+func (m Model) lineCount() int {
+	if m.window != nil {
+		return m.count
+	}
+	return len(m.lines)
+}
 func (m *Model) SetContent(v string) {
+	m.count, m.window = 0, nil
 	m.content = text.Normalize(v)
 	m.lines = strings.Split(m.content, "\n")
 	m.clamp()
 }
-func (m Model) GetContent() string { return m.content }
-func (m *Model) SetYOffset(v int)  { m.yOffset = v; m.clamp() }
-func (m *Model) GotoTop()          { m.yOffset = 0 }
-func (m *Model) GotoBottom()       { m.yOffset = max(0, len(m.lines)-m.height) }
-func (m Model) AtBottom() bool     { return m.yOffset >= max(0, len(m.lines)-m.height) }
+
+// SetWindow shows count lines that window(start, n) produces on demand: the n
+// lines from start, each a single row without a line break. View asks only
+// for the visible rows, so the cost of a draw does not grow with count.
+func (m *Model) SetWindow(count int, window func(start, n int) []string) {
+	m.content, m.lines = "", nil
+	m.count, m.window = max(0, count), window
+	m.clamp()
+}
+
+// GetContent returns the whole content. For a windowed source it produces
+// every line, so it is for tests and export, never for drawing.
+func (m Model) GetContent() string {
+	if m.window != nil {
+		return strings.Join(m.window(0, m.count), "\n")
+	}
+	return m.content
+}
+func (m *Model) SetYOffset(v int) { m.yOffset = v; m.clamp() }
+func (m *Model) GotoTop()         { m.yOffset = 0 }
+func (m *Model) GotoBottom()      { m.yOffset = max(0, m.lineCount()-m.height) }
+func (m Model) AtBottom() bool    { return m.yOffset >= max(0, m.lineCount()-m.height) }
 func (m Model) View() string {
 	lines := make([]string, m.height)
+	source := m.lines
+	first := m.yOffset
+	if m.window != nil {
+		source, first = m.window(m.yOffset, max(0, min(m.height, m.count-m.yOffset))), 0
+	}
 	for i := range lines {
-		if j := m.yOffset + i; j < len(m.lines) {
-			lines[i] = text.Truncate(m.lines[j], m.width, "")
+		if j := first + i; j < len(source) {
+			lines[i] = text.Truncate(source[j], m.width, "")
 		}
 		lines[i] += strings.Repeat(" ", max(0, m.width-text.StringWidth(lines[i])))
 	}
@@ -81,4 +114,4 @@ func (m Model) Update(event ui.Event) (Model, ui.Effect) {
 }
 
 func (m Model) YOffset() int        { return m.yOffset }
-func (m Model) TotalLineCount() int { return len(m.lines) }
+func (m Model) TotalLineCount() int { return m.lineCount() }

@@ -248,6 +248,12 @@ type detailPanel struct {
 type logPanel struct {
 	sectionBase
 	vp viewport.Model
+	// heights[i] is the number of panel rows entry i of ctx.LogLines takes at
+	// wrapWidth and rows is their sum. They are kept in step with the log
+	// lines while the panel is shown, and nil when they must be recounted.
+	heights   []int
+	rows      int
+	wrapWidth int
 }
 
 // --- Overlay state types ---

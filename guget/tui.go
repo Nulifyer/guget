@@ -367,7 +367,7 @@ func (m *App) HandleEvent(msg ui.Event) ui.Effect {
 
 	case logBatchMsg:
 		for _, line := range msg.lines {
-			m.ctx.LogLines = appendLogLine(m.ctx.LogLines, line)
+			m.appendLog(line)
 		}
 		if m.ctx.ShowLogs && !m.logRefreshPending {
 			m.logRefreshPending = true
@@ -377,7 +377,7 @@ func (m *App) HandleEvent(msg ui.Event) ui.Effect {
 	case logRefreshMsg:
 		m.logRefreshPending = false
 		if m.ctx.ShowLogs {
-			m.updateLogView()
+			m.refreshLogView()
 		}
 
 	case openURLRequestedMsg:
