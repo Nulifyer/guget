@@ -54,16 +54,23 @@ For quick updates from the package panel:
 | --- | --- |
 | `u` | The update target for the selected project. |
 | `U` | Apply the selected package's update target across projects. |
-| `a` | Latest stable version for the selected project, whatever its frameworks. |
-| `A` | Apply the selected package's latest stable version across projects. |
+| `a` | The `stable` target for the selected project: the newest stable version, whatever its frameworks. |
+| `A` | Apply the selected package's `stable` target across projects. |
 
 The update target follows the [`update-target` setting](settings.md#update-target).
 The default, `compatible-stable`, is the newest stable version every affected
 framework can use. `a` and `A` always choose what `dotnet package update`
 would, the `stable` setting. Under every setting, a reference whose requested
 version is a prerelease, such as `11.0.0-preview.6`, is offered newer
-prereleases. No quick update lowers a version: when nothing newer qualifies,
-the status line says the package is already at that version.
+prereleases. No quick update lowers a version. When nothing newer qualifies,
+the status line says one of these:
+
+- The package is already at the target.
+- An installed version is newer than the target.
+- No version qualifies, with `v to choose a version`.
+
+With All Projects selected, it can also report how many pinned references were
+skipped.
 
 To see which setting is active, press `?`: the Settings section of the help
 names it and what it chooses. With All Projects selected, the footer also
@@ -77,9 +84,17 @@ after confirmation.
 Update targets consider every affected project's frameworks, including
 projects that consume the same shared version. Latest stable and explicit picker
 choices can require newer frameworks; restore and test each affected project.
-A project left on a version its frameworks cannot use is marked `!`, and the
-detail panel adds **Installed version not usable**.
+When a project uses a version its frameworks cannot use, the detail panel adds
+**Installed version not usable**. The row is marked `!` when no update is
+available.
 The version picker opens on the update target.
+
+A shared file such as `Directory.Packages.props` can hold the version for
+projects with different NuGet sources. Guget then refuses a version that the
+sources of some of those projects lack, and writes nothing. The status line
+names the file and the projects, for example `▲ Not updated: Polly 8.5.0 is not
+available from the NuGet sources of every project sharing
+Directory.Packages.props (App.csproj, Worker.csproj)`.
 
 The Available column shows the update target first. When the latest stable
 version (the `a` choice) differs, it follows in parentheses:
@@ -131,8 +146,9 @@ You can continue navigating while saving, reloading, or fetching package informa
 6. Restore the affected project with `r`.
 
 When starting from All Projects, a project picker lets you choose destinations.
-Use `Space` to toggle a project and `Enter` to confirm. The picker does not offer
-projects already using that version or projects marked incompatible.
+Use `Space` to toggle a project, `a` to toggle all, and `Enter` to confirm. You
+cannot select a project that already uses that version or is marked
+incompatible.
 
 Search follows the [NuGet sources](sources.md#how-guget-finds-configuration)
 of the selected project. From All Projects it offers what any project's sources
@@ -147,7 +163,9 @@ Select the project and package, then press `d`. Review the package name and
 confirm Remove. Press `Esc` to cancel. Restore the project afterward.
 
 Removing a reference does not automatically remove its shared central version.
-For a reference inherited from props, Guget may refuse project-local removal.
+With a project selected, Guget refuses to remove a reference that the project
+inherits from a props file. Select All Projects or the props file to remove it
+there.
 
 With a shared props file selected, `d` removes a `PackageReference` that file
 holds. It refuses, before asking, a row the file only versions (`▲ Not removed:
@@ -224,7 +242,8 @@ the pointer. Double-clicking is not a separate action.
 
 Click Requested, Available, or Source in the package header to sort. Click the
 bracketed sort mode to cycle modes, or its arrow to reverse direction. The
-Requested and Available sorts use publication dates.
+Requested and Available sorts use publication dates. In `--sort-by` and the
+`sort` setting, these modes are named `current` and `available`.
 
 To leave mouse input to the terminal for text selection and native link handling:
 
@@ -278,10 +297,14 @@ change a setting.
 | `✗` | Metadata lookup failed, or the projects referencing the package use NuGet sources with no version of it in common. The detail panel says which: **No version for every project** lists those projects. |
 | `▲` | A known vulnerability is reported for an installed version. |
 | `~` | The feed marks an installed version deprecated. |
-| `!` | No update is available, and the feed lists an installed version without support for a target framework of its project. The detail panel shows **Installed version not usable**; `v` lists the versions that are usable. |
+| `!` | No update is available, and the feed lists an installed version without support for a target framework of its project. The detail panel shows **Installed version not usable**, and `v` marks the versions that are usable. |
 | `↑` | An update to the update target is available. |
 | `⇑` | An update is available, and a newer stable version exists beyond it that some framework cannot use. |
 | `✓` | No update is available under the update target. A newer version that a framework cannot use does not count; Available shows it in parentheses and the detail panel shows **Newer version not offered**. |
+
+A row shows one marker. The first that applies wins, in this order: `.`, `▲`,
+`✗`, `↑` or `⇑`, `~`, `!`, `✓`. So a deprecated package with an update shows
+`↑`.
 
 The help overlay (`?`) repeats these markers and the Available convention under
 **Package list**.
