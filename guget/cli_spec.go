@@ -158,7 +158,9 @@ var (
 		Description: "omit the header row of table, tsv, and table template output"}
 	flagNoColor = cliFlagSpec{Name: "no-color",
 		Description: "accepted for symmetry with the TUI; no effect on CLI output, which is never colored"}
-	flagHelp = cliFlagSpec{Name: "help", Short: "h", Description: "show this help"}
+	flagHelp         = cliFlagSpec{Name: "help", Short: "h", Description: "show this help"}
+	flagUpdateTarget = cliFlagSpec{Name: "update-target", Value: "TARGET", Kind: valueChoice, Choices: updateTargets,
+		Description: "update-target policy: compatible-stable, compatible, or stable", Default: "the update-target setting"}
 )
 
 func timeoutFlag(defaultValue string) cliFlagSpec {

@@ -26,11 +26,20 @@ type mutationOptions struct {
 	removeInherited   bool
 	allowDeclaredEdit bool                     // TUI only, after validating the loaded input revisions
 	runner            packageops.ProcessRunner // MSBuild runner; nil runs dotnet
+	// selectVersion, when set, chooses each update target's version instead
+	// of the plan's single version, from the project and its installed
+	// reference. ok=false leaves the reference unchanged (nothing newer).
+	selectVersion func(project *ParsedProject, installed PackageReference) (version string, ok bool)
 }
 
 // pinnedSkipOperation marks a plan row for an exact pin that a bulk update left
 // unchanged. Such rows have no file operation.
 const pinnedSkipOperation = "skip (pinned)"
+
+// unchangedOperation marks a plan row for a reference that a latest-version
+// update leaves alone because nothing newer qualifies. It has no file
+// operation.
+const unchangedOperation = "unchanged"
 
 // evaluationError reports that MSBuild evaluation, required to establish
 // ownership, was unavailable or failed. It is a workspace failure rather than
@@ -65,7 +74,7 @@ func buildMutationPlanContext(ctx context.Context, verb, packageID, version stri
 // planPackageMutation is the shared scope and ownership policy for both front
 // ends. Every file edit is prepared before the resulting transaction can apply.
 func planPackageMutation(verb, packageID, version string, targets []mutationTarget, options mutationOptions) (editplan.Plan, []planRow, int, error) {
-	if verb != "remove" {
+	if verb != "remove" && !(verb == "update" && options.selectVersion != nil) {
 		if err := projectedit.ValidateVersion(version); err != nil {
 			return editplan.Plan{}, nil, 0, err
 		}
@@ -151,12 +160,25 @@ func planPackageMutation(verb, packageID, version string, targets []mutationTarg
 			if !supportedMutationOwner(owner) {
 				return editplan.Plan{}, nil, skipped, fmt.Errorf("unsupported package owner %s; supported owners are project and .props files", owner)
 			}
+			targetVersion := version
+			if options.selectVersion != nil {
+				selected, ok := options.selectVersion(project, *installed)
+				if !ok {
+					current := installed.Requested
+					if current == "" {
+						current = installed.Version.String()
+					}
+					skippedRows = append(skippedRows, planRow{Operation: unchangedOperation, Package: packageID, Version: current, Path: owner})
+					continue
+				}
+				targetVersion = selected
+			}
 			if declaration := project.Declarations[strings.ToLower(packageID)]; declaration.VersionSource == msbuildstatic.VersionCentral || declaration.VersionSource == msbuildstatic.VersionGlobal {
-				if err := centralFloatingAllowed(project, version); err != nil {
+				if err := centralFloatingAllowed(project, targetVersion); err != nil {
 					return editplan.Plan{}, nil, skipped, err
 				}
 			}
-			appendOperation(projectedit.UpdateVersion, owner, "update version", version)
+			appendOperation(projectedit.UpdateVersion, owner, "update version", targetVersion)
 		case "remove":
 			if installed == nil {
 				continue

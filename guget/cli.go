@@ -41,13 +41,18 @@ func init() {
 			{Name: "framework", Value: "TFM", Repeatable: true, Description: "only rows for this target framework"},
 			{Name: "direct", Description: "only direct references"},
 			{Name: "include-transitive", Description: "add restored transitive packages"},
-			{Name: "outdated", Description: "only packages with newer versions (not available yet; exits 7)"},
-			{Name: "vulnerable", Description: "only packages with known vulnerabilities (not available yet; exits 7)"},
-			{Name: "deprecated", Description: "only deprecated packages (not available yet; exits 7)"},
+			{Name: "outdated", Description: "only rows with an update target under the update-target policy; fetches metadata"},
+			{Name: "vulnerable", Description: "only rows whose version has known vulnerabilities; fetches metadata"},
+			{Name: "deprecated", Description: "only rows whose version is deprecated; fetches metadata"},
+			{Name: "metadata", Description: "fetch package metadata from the sources to fill the update, vulnerability, and deprecation fields of every row"},
+			flagUpdateTarget,
 		}, outputFlags(), []cliFlagSpec{timeoutFlag("")}, tailFlags()),
-		Notes: []string{"Exit status 7 means some data could not be produced, for example when MSBuild evaluation or restore metadata is missing; warnings say what."},
-		Row:   func(*cliInvocation) any { return cliPackageRow{} },
-		Run:   (*cliRuntime).runList,
+		Notes: []string{
+			"--outdated, --vulnerable, and --deprecated combine as any of: a row is listed when it has any selected problem. Without --timeout, fetching metadata stops after 30s.",
+			"Exit status 7 means some data could not be produced, for example when MSBuild evaluation, restore metadata, or some package metadata is missing; warnings say what. 3 means every source failed.",
+		},
+		Row: func(*cliInvocation) any { return cliPackageRow{} },
+		Run: (*cliRuntime).runList,
 	})
 	registerCLIVerb(cliVerbSpec{
 		Name: "show", Order: 20, Summary: "show one package across projects",
@@ -135,17 +140,24 @@ func mutationVerbSpec(verb string, order int) cliVerbSpec {
 	scope := []cliFlagSpec{{Name: "file", Value: "PROJECT", Kind: valueFile, Repeatable: true, Description: "edit this discovered project, relative to --project"}}
 	selectors := []cliFlagSpec{
 		{Name: "version", Value: "VERSION", Description: "the version or NuGet version range to write"},
-		{Name: "latest-compatible", Description: "select the newest compatible version (not available yet; exits 4)"},
-		{Name: "latest-stable", Description: "select the newest stable version (not available yet; exits 4)"},
 	}
 	var extra []cliFlagSpec
 	switch verb {
 	case "add":
 		spec.Summary = "add a package to explicit --file targets"
 		spec.Description = "Add PACKAGE to each --file project. In a central package management workspace the version goes to Directory.Packages.props."
+		selectors = append(selectors,
+			cliFlagSpec{Name: "latest-compatible", Description: "select the newest compatible version (not available for add; exits 4)"},
+			cliFlagSpec{Name: "latest-stable", Description: "select the newest stable version (not available for add; exits 4)"})
 	case "update":
 		spec.Summary = "update explicit --file targets or --all"
 		spec.Description = "Update the version of PACKAGE where it is owned. --all covers only projects that reference PACKAGE. Exact pins such as [1.2.3] are skipped by --all and refused for --file unless --include-pinned is given."
+		selectors = append(selectors,
+			cliFlagSpec{Name: "latest", Description: "write each project's update target under the update-target policy; a project with nothing newer is left unchanged"},
+			cliFlagSpec{Name: "latest-compatible", Description: "alias of --latest --update-target compatible-stable"},
+			cliFlagSpec{Name: "latest-stable", Description: "alias of --latest --update-target stable, the version dotnet package update chooses"},
+			flagUpdateTarget)
+		spec.Notes = append(spec.Notes, "Without --timeout, fetching metadata for --latest stops after 30s. Exit status 3 means no source supplied PACKAGE; 7 means some sources failed and the choice comes from the rest.")
 		scope = append(scope, cliFlagSpec{Name: "all", Description: "every discovered project that references PACKAGE"})
 		extra = append(extra, cliFlagSpec{Name: "include-pinned", Description: "also update exact [x.y.z] pins"})
 	case "remove":
@@ -159,7 +171,7 @@ func mutationVerbSpec(verb string, order int) cliVerbSpec {
 		{Name: "restore", Description: "run dotnet restore for the targets after a successful edit"},
 		{Name: "interactive", Description: "let dotnet restore prompt for feed authentication; requires --restore"},
 	}, outputFlags(), []cliFlagSpec{timeoutFlag("")}, tailFlags())
-	spec.Notes = []string{"A dry run prints one row per planned file change. Applying prints the same rows as a table or TSV, and one result document for json, jsonl, and templates."}
+	spec.Notes = append([]string{"A dry run prints one row per planned file change. Applying prints the same rows as a table or TSV, and one result document for json, jsonl, and templates."}, spec.Notes...)
 	spec.Validate = func(inv *cliInvocation) error { return validateMutation(verb, inv) }
 	spec.Row = func(inv *cliInvocation) any {
 		if inv.args.bools["dry-run"] {
@@ -189,13 +201,19 @@ func validateMutation(verb string, inv *cliInvocation) error {
 		return nil
 	}
 	selectors := 0
-	for _, set := range []bool{args.value("version", "") != "", args.bools["latest-compatible"], args.bools["latest-stable"]} {
+	for _, set := range []bool{args.value("version", "") != "", args.bools["latest"], args.bools["latest-compatible"], args.bools["latest-stable"]} {
 		if set {
 			selectors++
 		}
 	}
 	if selectors != 1 {
+		if verb == "update" {
+			return errors.New("choose exactly one version selector: --version, --latest, --latest-compatible, or --latest-stable")
+		}
 		return errors.New("choose exactly one version selector: --version, --latest-compatible, or --latest-stable")
+	}
+	if args.value("update-target", "") != "" && !args.bools["latest"] {
+		return errors.New("--update-target applies only to --latest; --latest-compatible and --latest-stable name their own target")
 	}
 	if version := args.value("version", ""); version != "" {
 		if err := projectedit.ValidateVersion(version); err != nil {
@@ -572,15 +590,44 @@ type cliPackageRow struct {
 	// Download marks a restore-only PackageDownload, which is not a
 	// dependency and which guget does not edit.
 	Download bool `json:"download"`
+	// Assessment fields (update_target.go). They are null (or []) until
+	// package metadata is fetched (--metadata, --outdated, --vulnerable,
+	// --deprecated), and stay so for PackageDownload rows and packages whose
+	// metadata could not be fetched.
+	UpdateTarget              *string       `json:"updateTarget"`
+	UpdateTargetCompatibility *string       `json:"updateTargetCompatibility"`
+	LatestStable              *string       `json:"latestStable"`
+	LatestVersion             *string       `json:"latestVersion"`
+	Vulnerable                *bool         `json:"vulnerable"`
+	Advisories                []cliAdvisory `json:"advisories"`
+	Deprecated                *bool         `json:"deprecated"`
+	DeprecationReasons        []string      `json:"deprecationReasons"`
+	AlternatePackage          *string       `json:"alternatePackage"`
+}
+
+// cliAdvisory is one known vulnerability of the row's version.
+type cliAdvisory struct {
+	Severity string `json:"severity"`
+	URL      string `json:"url"`
 }
 
 const downloadEditReason = "PackageDownload is restore-only and is not a dependency; guget does not edit it"
 
 type listDocument struct {
 	cliDocHeader
-	Workspace string          `json:"workspace"`
-	Packages  []cliPackageRow `json:"packages"`
-	Warnings  []string        `json:"warnings"`
+	Workspace string `json:"workspace"`
+	// UpdateTarget is the update-target policy the assessment fields use, or
+	// null when package metadata was not fetched.
+	UpdateTarget *string         `json:"updateTarget"`
+	Packages     []cliPackageRow `json:"packages"`
+	Warnings     []string        `json:"warnings"`
+}
+
+// assessedPackageColumns are the table and TSV columns once metadata is fetched.
+var assessedPackageColumns = []cliColumn{
+	{"PROJECT", "project"}, {"PACKAGE", "package"}, {"REQUESTED", "requestedExpression"},
+	{"RESOLVED", "resolvedVersion"}, {"UPDATE TARGET", "updateTarget"}, {"LATEST STABLE", "latestStable"},
+	{"LATEST", "latestVersion"}, {"VULNERABLE", "vulnerable"}, {"DEPRECATED", "deprecated"},
 }
 
 var packageColumns = []cliColumn{
@@ -596,6 +643,7 @@ func newPackageRow(project *ParsedProject, packageID, framework string) cliPacka
 	return cliPackageRow{
 		Project: project.FileName, ProjectPath: project.FilePath, Package: packageID,
 		TargetFramework: stringPtr(framework), TargetFrameworks: frameworks,
+		Advisories: []cliAdvisory{}, DeprecationReasons: []string{},
 	}
 }
 
@@ -769,9 +817,7 @@ func (r *cliRuntime) runList(ctx context.Context, inv *cliInvocation) ExitCode {
 	args := inv.args
 	doc := &listDocument{cliDocHeader: newDocHeader(verb, "ok"), Packages: []cliPackageRow{}, Warnings: []string{}}
 	inv.document = doc
-	if args.bools["outdated"] || args.bools["vulnerable"] || args.bools["deprecated"] {
-		return inv.fail(ExitPartial, "the requested filter requires evaluated restore metadata, which is not available yet")
-	}
+	filter := listFilter{outdated: args.bools["outdated"], vulnerable: args.bools["vulnerable"], deprecated: args.bools["deprecated"]}
 	snapshot, code := r.loadCLIWorkspace(ctx, inv, func(root string) { doc.Workspace = root })
 	if code != ExitSuccess {
 		return code
@@ -805,6 +851,45 @@ func (r *cliRuntime) runList(ctx context.Context, inv *cliInvocation) ExitCode {
 	if verb == "show" && len(rows) == 0 {
 		warnings = append(warnings, fmt.Sprintf("package %s is not referenced in this workspace", only))
 	}
+	if filter.active() || args.bools["metadata"] {
+		policy := cliUpdateTarget(args)
+		doc.UpdateTarget = stringPtr(string(policy))
+		var ids []string
+		seen := NewSet[string]()
+		for _, row := range rows {
+			if assessableRow(row) && !seen.Contains(strings.ToLower(row.Package)) {
+				seen.Add(strings.ToLower(row.Package))
+				ids = append(ids, row.Package)
+			}
+		}
+		metaCtx, cancel := metadataContext(ctx, inv)
+		metadata := r.fetchCLIMetadata(metaCtx, snapshot, ids)
+		timedOut := metadataTimedOut(ctx, metaCtx)
+		cancel()
+		if ctx.Err() != nil {
+			return ExitInterrupted
+		}
+		if timedOut {
+			return inv.fail(ExitTimeout, "timed out after %s fetching package metadata; pass --timeout to allow longer", defaultMetadataTimeout)
+		}
+		warnings = append(warnings, metadata.warnings...)
+		if metadata.allSourcesFailed() {
+			doc.Warnings = redactAll(warnings)
+			r.emitWarnings(warnings)
+			return inv.fail(ExitSource, "every source failed to supply package metadata")
+		}
+		partial = partial || metadata.failed > 0 || metadata.incomplete
+		assessListRows(rows, snapshot, metadata, policy)
+		if filter.active() {
+			filtered := rows[:0]
+			for _, row := range rows {
+				if filter.matches(row) {
+					filtered = append(filtered, row)
+				}
+			}
+			rows = filtered
+		}
+	}
 	for _, artifact := range snapshot.Unsupported {
 		warnings = append(warnings, fmt.Sprintf("%s: %s", artifact.Path, artifact.Reason))
 	}
@@ -816,7 +901,11 @@ func (r *cliRuntime) runList(ctx context.Context, inv *cliInvocation) ExitCode {
 		return ExitInterrupted
 	}
 	r.emitWarnings(warnings)
-	code = inv.emit(cliResult{Document: doc, Items: doc.Packages, Columns: packageColumns})
+	columns := packageColumns
+	if doc.UpdateTarget != nil {
+		columns = assessedPackageColumns
+	}
+	code = inv.emit(cliResult{Document: doc, Items: doc.Packages, Columns: columns})
 	if code == ExitSuccess && partial {
 		return ExitPartial
 	}
@@ -1000,16 +1089,18 @@ type planRow struct {
 
 type planDocument struct {
 	cliDocHeader
-	Workspace   string    `json:"workspace"`
-	DryRun      bool      `json:"dryRun"`
-	Changes     []planRow `json:"changes"`
-	Skipped     int       `json:"skipped"`
-	Changed     []string  `json:"changed"`
-	Restore     string    `json:"restore"`
-	RolledBack  []string  `json:"rolledBack"`
-	Conflicting []string  `json:"conflicting"`
-	Unrecovered []string  `json:"unrecovered"`
-	Warnings    []string  `json:"warnings"`
+	Workspace string `json:"workspace"`
+	DryRun    bool   `json:"dryRun"`
+	// UpdateTarget is the update-target policy --latest used, or null.
+	UpdateTarget *string   `json:"updateTarget"`
+	Changes      []planRow `json:"changes"`
+	Skipped      int       `json:"skipped"`
+	Changed      []string  `json:"changed"`
+	Restore      string    `json:"restore"`
+	RolledBack   []string  `json:"rolledBack"`
+	Conflicting  []string  `json:"conflicting"`
+	Unrecovered  []string  `json:"unrecovered"`
+	Warnings     []string  `json:"warnings"`
 }
 
 var planColumns = []cliColumn{{"OPERATION", "operation"}, {"PACKAGE", "package"}, {"VERSION", "version"}, {"PATH", "path"}}
@@ -1026,8 +1117,9 @@ func (r *cliRuntime) runMutation(ctx context.Context, verb string, inv *cliInvoc
 		doc.Status = "unchanged"
 	}
 	inv.document = doc
-	if args.bools["latest-compatible"] || args.bools["latest-stable"] {
-		return inv.fail(ExitRefused, "latest-version selection requires evaluated framework compatibility and is not available yet")
+	latest := verb == "update" && (args.bools["latest"] || args.bools["latest-compatible"] || args.bools["latest-stable"])
+	if verb == "add" && (args.bools["latest-compatible"] || args.bools["latest-stable"]) {
+		return inv.fail(ExitRefused, "add needs an explicit --version; latest-version selection is available for update")
 	}
 	snapshot, code := r.loadCLIWorkspace(ctx, inv, func(root string) { doc.Workspace = root })
 	if code != ExitSuccess {
@@ -1042,6 +1134,29 @@ func (r *cliRuntime) runMutation(ctx context.Context, verb string, inv *cliInvoc
 	if verb == "update" && !args.bools["include-pinned"] {
 		options.skipLocked = args.bools["all"]
 		options.refuseLocked = !args.bools["all"]
+	}
+	partialMetadata := false
+	if latest {
+		policy := cliUpdateTarget(args)
+		doc.UpdateTarget = stringPtr(string(policy))
+		metaCtx, cancel := metadataContext(ctx, inv)
+		metadata := r.fetchCLIMetadata(metaCtx, snapshot, []string{packageID})
+		timedOut := metadataTimedOut(ctx, metaCtx)
+		cancel()
+		if ctx.Err() != nil {
+			return ExitInterrupted
+		}
+		if timedOut {
+			return inv.fail(ExitTimeout, "timed out after %s fetching package metadata; pass --timeout to allow longer", defaultMetadataTimeout)
+		}
+		doc.Warnings = redactAll(metadata.warnings)
+		r.emitWarnings(metadata.warnings)
+		info := metadata.packages[strings.ToLower(packageID)].Info
+		if info == nil {
+			return inv.fail(ExitSource, "no source supplied metadata for %s", packageID)
+		}
+		partialMetadata = metadata.incomplete
+		options.selectVersion = latestVersionSelector(snapshot, info, policy)
 	}
 	plan, rows, skipped, err := planPackageMutation(verb, packageID, args.value("version", ""), mutationTargetsFor(targets), options)
 	if err != nil {
@@ -1067,7 +1182,11 @@ func (r *cliRuntime) runMutation(ctx context.Context, verb string, inv *cliInvoc
 		if args.bools["restore"] {
 			doc.Restore = "skipped-dry-run"
 		}
-		return inv.emit(cliResult{Document: doc, Items: doc.Changes, Columns: planColumns})
+		code := inv.emit(cliResult{Document: doc, Items: doc.Changes, Columns: planColumns})
+		if code == ExitSuccess && partialMetadata {
+			return ExitPartial
+		}
+		return code
 	}
 	if ctx.Err() != nil {
 		return ExitInterrupted
@@ -1124,6 +1243,9 @@ func (r *cliRuntime) runMutation(ctx context.Context, verb string, inv *cliInvoc
 	if outputCode := inv.emit(applyResult); outputCode != ExitSuccess {
 		fmt.Fprintln(r.stderr, "guget: package changes were applied; result output failed, inspect files before retrying")
 		return outputCode
+	}
+	if code == ExitSuccess && partialMetadata {
+		return ExitPartial
 	}
 	return code
 }
