@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -130,6 +131,94 @@ func (f cliFormat) validateTemplateFields(keys []string) error {
 		}
 	}
 	return nil
+}
+
+// validateTemplateSample executes the template once against a sample of the
+// command's row, so an error that only execution finds, such as reading a
+// field of a string, fails before evaluation, network access, or edits. The
+// sample has every JSON key with a zero value of its JSON type, a present
+// value for each nullable field, and one element in each list, so range
+// bodies run too. Branches the zero values skip are not checked.
+func (f cliFormat) validateTemplateSample(row any) error {
+	if !f.isTemplate() || row == nil {
+		return nil
+	}
+	if err := f.template.Execute(io.Discard, templateData(sampleJSON(reflect.TypeOf(row), 0))); err != nil {
+		return fmt.Errorf("invalid --format template: %v", err)
+	}
+	return nil
+}
+
+var jsonMarshalerType = reflect.TypeFor[json.Marshaler]()
+
+// sampleJSON returns the decoded JSON shape of a value of type t, as
+// cliRowMaps decodes it, with zero scalars, present pointers, and one
+// element per list.
+func sampleJSON(t reflect.Type, depth int) any {
+	if depth > 8 {
+		return templateNull("")
+	}
+	if t.Kind() != reflect.Pointer && t.Kind() != reflect.Interface && (t.Implements(jsonMarshalerType) || reflect.PointerTo(t).Implements(jsonMarshalerType)) {
+		data, err := json.Marshal(reflect.New(t).Interface())
+		if err != nil {
+			return templateNull("")
+		}
+		decoder := json.NewDecoder(bytes.NewReader(data))
+		decoder.UseNumber()
+		var value any
+		if decoder.Decode(&value) != nil {
+			return templateNull("")
+		}
+		return value
+	}
+	switch t.Kind() {
+	case reflect.Pointer:
+		return sampleJSON(t.Elem(), depth+1)
+	case reflect.Struct:
+		fields := make(map[string]any)
+		addSampleFields(fields, t, depth)
+		return fields
+	case reflect.Slice, reflect.Array:
+		if t.Elem().Kind() == reflect.Uint8 {
+			return ""
+		}
+		return []any{sampleJSON(t.Elem(), depth+1)}
+	case reflect.Map:
+		return map[string]any{}
+	case reflect.String, reflect.Interface:
+		return ""
+	case reflect.Bool:
+		return false
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
+		reflect.Float32, reflect.Float64:
+		return json.Number("0")
+	}
+	return templateNull("")
+}
+
+func addSampleFields(fields map[string]any, t reflect.Type, depth int) {
+	for i := range t.NumField() {
+		field := t.Field(i)
+		name, _, _ := strings.Cut(field.Tag.Get("json"), ",")
+		if name == "-" || (!field.IsExported() && !field.Anonymous) {
+			continue
+		}
+		if field.Anonymous && name == "" {
+			embedded := field.Type
+			if embedded.Kind() == reflect.Pointer {
+				embedded = embedded.Elem()
+			}
+			if embedded.Kind() == reflect.Struct {
+				addSampleFields(fields, embedded, depth)
+				continue
+			}
+		}
+		if name == "" {
+			name = field.Name
+		}
+		fields[name] = sampleJSON(field.Type, depth+1)
+	}
 }
 
 func templateFields(tmpl *template.Template) [][]string {

@@ -434,7 +434,11 @@ guget list --project ./src --format '{{.package}} {{join .targetFrameworks ","}}
 
 Guget checks the template and its field names before it reads the workspace,
 runs MSBuild, or contacts a feed. A syntax error or an unknown field exits 1 and
-lists the valid fields. For add, update, and remove, a dry run renders the plan
+lists the valid fields. Guget also runs the template once on a sample row with
+every field empty and one item in each list, so an error such as reading a
+field of a text value, `{{.status.x}}`, exits 1 as well. A template can still
+fail on real values in a branch the sample skips. If that happens after an edit
+or restore has run, the command exits 5 and the change stays in place. For add, update, and remove, a dry run renders the plan
 rows; applying renders the one result document, so its fields are the
 document's top-level keys such as `status` and `changed`.
 

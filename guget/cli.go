@@ -410,6 +410,17 @@ func (inv *cliInvocation) emit(result cliResult) ExitCode {
 	return inv.write(data)
 }
 
+// emitAfterWrite renders the result of a command that has already changed
+// files, such as an applied edit or a restore. A render failure is then an
+// output failure (exit 5), not a usage error: the change is in place.
+func (inv *cliInvocation) emitAfterWrite(result cliResult) ExitCode {
+	data, err := renderCLIResult(inv.format, inv.noHeaders, result)
+	if err != nil {
+		return inv.fail(ExitWrite, "render output: %v", err)
+	}
+	return inv.write(data)
+}
+
 func (inv *cliInvocation) write(data []byte) ExitCode {
 	inv.written = true
 	path := inv.outputPath
@@ -1236,7 +1247,7 @@ func (r *cliRuntime) runMutation(ctx context.Context, verb string, inv *cliInvoc
 		if len(result.Conflicting) > 0 {
 			fmt.Fprintf(r.stderr, "guget: external edits were preserved; inspect these conflicts before retrying: %s\n", strings.Join(doc.Conflicting, ", "))
 		}
-		inv.emit(applyResult)
+		inv.emitAfterWrite(applyResult)
 		if ctx.Err() != nil {
 			return ExitInterrupted
 		}
@@ -1268,7 +1279,7 @@ func (r *cliRuntime) runMutation(ctx context.Context, verb string, inv *cliInvoc
 			}
 		}
 	}
-	if outputCode := inv.emit(applyResult); outputCode != ExitSuccess {
+	if outputCode := inv.emitAfterWrite(applyResult); outputCode != ExitSuccess {
 		fmt.Fprintln(r.stderr, "guget: package changes were applied; result output failed, inspect files before retrying")
 		return outputCode
 	}
@@ -1381,7 +1392,7 @@ func (r *cliRuntime) runRestore(ctx context.Context, inv *cliInvocation) ExitCod
 		message := inv.failure
 		doc.Error = &message
 	}
-	if outputCode := inv.emit(cliResult{Document: doc, Items: doc.Projects, Columns: restoreColumns}); outputCode != ExitSuccess {
+	if outputCode := inv.emitAfterWrite(cliResult{Document: doc, Items: doc.Projects, Columns: restoreColumns}); outputCode != ExitSuccess {
 		return outputCode
 	}
 	return code

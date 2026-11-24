@@ -254,6 +254,53 @@ func TestInvalidFormatIsRejectedBeforeWorkspaceWork(t *testing.T) {
 	}
 }
 
+func TestTemplateExecutionErrorsAreRejectedBeforeWork(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "does-not-exist")
+	for _, test := range []struct {
+		args  []string
+		valid bool
+	}{
+		{args: []string{"list", "--format", "{{.package.x}}"}},
+		{args: []string{"list", "--format", "{{range .advisories}}{{.nope}}{{end}}"}},
+		{args: []string{"list", "--format", "{{range .advisories}}{{.severity}}{{end}}{{.updateTarget}}"}, valid: true},
+		{args: []string{"update", "Example", "--all", "--version", "2.0.0", "--format", "{{.status.x}}"}},
+		{args: []string{"update", "Example", "--all", "--version", "2.0.0", "--format", "{{range .changes}}{{.version.x}}{{end}}"}},
+		{args: []string{"update", "Example", "--all", "--version", "2.0.0", "--dry-run", "--format", "{{.path.x}}"}},
+		{args: []string{"update", "Example", "--all", "--version", "2.0.0", "--format", "{{len .changed}} {{.error}}"}, valid: true},
+		{args: []string{"sources", "--format", "{{.patterns.x}}"}},
+	} {
+		code, stdout, stderr := runHermetic(t, append(test.args, "--project", missing)...)
+		if test.valid {
+			// A valid template gets as far as the missing workspace.
+			if code != ExitWorkspace {
+				t.Errorf("%v: code=%d stderr=%q", test.args, code, stderr)
+			}
+			continue
+		}
+		if code != ExitUsage || stdout != "" || !strings.Contains(stderr, "invalid --format template") {
+			t.Errorf("%v: code=%d stdout=%q stderr=%q", test.args, code, stdout, stderr)
+		}
+	}
+}
+
+func TestOutputFailureAfterAnEditExitsWithWriteError(t *testing.T) {
+	root := t.TempDir()
+	mustWriteFile(t, filepath.Join(root, "NuGet.Config"), `<configuration><packageSources><clear/></packageSources></configuration>`)
+	project := writeCLIProject(t, root, "App", `<Project><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup><ItemGroup><PackageReference Include="Example" Version="1.0.0" /></ItemGroup></Project>`)
+	before, _ := os.ReadFile(project)
+	code, _, stderr := runHermetic(t, "update", "Example", "--file", project, "--version", "2.0.0", "--project", root, "--format", "{{.status.x}}")
+	if after, _ := os.ReadFile(project); code != ExitUsage || !bytes.Equal(before, after) {
+		t.Fatalf("invalid template: code=%d stderr=%q, project changed=%v", code, stderr, !bytes.Equal(before, after))
+	}
+	// The sample row's empty status skips this branch, so only the applied
+	// result fails to render: the edit is in place and the exit is 5.
+	code, _, stderr = runHermetic(t, "update", "Example", "--file", project, "--version", "2.0.0", "--project", root, "--format", `{{if eq .status "changed"}}{{.status.x}}{{end}}`)
+	after, _ := os.ReadFile(project)
+	if code != ExitWrite || !strings.Contains(string(after), `Version="2.0.0"`) || !strings.Contains(stderr, "package changes were applied") {
+		t.Fatalf("code=%d stderr=%q project=%s", code, stderr, after)
+	}
+}
+
 func TestDefaultFormatIsTableOnlyForATerminal(t *testing.T) {
 	old := isTerminalWriter
 	t.Cleanup(func() { isTerminalWriter = old })

@@ -343,7 +343,11 @@ func (r *cliRuntime) prepareInvocation(spec *cliVerbSpec, argv []string) (*cliIn
 		}
 	}
 	if inv.format.isTemplate() && spec.Row != nil {
-		if err := inv.format.validateTemplateFields(cliRowKeys(spec.Row(inv))); err != nil {
+		row := spec.Row(inv)
+		if err := inv.format.validateTemplateFields(cliRowKeys(row)); err != nil {
+			return nil, err
+		}
+		if err := inv.format.validateTemplateSample(row); err != nil {
 			return nil, err
 		}
 	}
