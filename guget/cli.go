@@ -49,7 +49,7 @@ func init() {
 			flagUpdateTarget,
 		}, outputFlags(), []cliFlagSpec{timeoutFlag("")}, tailFlags()),
 		Notes: []string{
-			"--outdated, --vulnerable, and --deprecated combine as any of: a row is listed when it has any selected problem. Without --timeout, fetching metadata stops after 30s.",
+			"--outdated, --vulnerable, and --deprecated combine as any of: a row is listed when it has any selected problem. Without --timeout, fetching metadata stops after 30s and the command exits 124.",
 			"Exit status 7 means some data could not be produced, for example when MSBuild evaluation, restore metadata, or some package metadata is missing; warnings say what. 3 means every source failed.",
 		},
 		Row: func(*cliInvocation) any { return cliPackageRow{} },
@@ -158,7 +158,7 @@ func mutationVerbSpec(verb string, order int) cliVerbSpec {
 			cliFlagSpec{Name: "latest-compatible", Description: "alias of --latest --update-target compatible-stable"},
 			cliFlagSpec{Name: "latest-stable", Description: "alias of --latest --update-target stable, the version dotnet package update chooses"},
 			flagUpdateTarget)
-		spec.Notes = append(spec.Notes, "Without --timeout, fetching metadata for --latest stops after 30s. Exit status 3 means no source supplied PACKAGE; 7 means some sources failed and the choice comes from the rest.")
+		spec.Notes = append(spec.Notes, "Without --timeout, fetching package metadata stops after 30s and the command exits 124. Exit status 3 means no source supplied PACKAGE, or a source failed while checking a version for a shared file; 7 means some sources failed and --latest chose from the rest.")
 		scope = append(scope, cliFlagSpec{Name: "all", Description: "every discovered project that references PACKAGE"})
 		extra = append(extra, cliFlagSpec{Name: "include-pinned", Description: "also update exact [x.y.z] pins"})
 	case "remove":
@@ -169,7 +169,7 @@ func mutationVerbSpec(verb string, order int) cliVerbSpec {
 	}
 	spec.Flags = joinFlags(workspaceFlags(), scope, selectors, extra, []cliFlagSpec{
 		{Name: "dry-run", Description: "print the planned changes without writing files"},
-		{Name: "restore", Description: "run dotnet restore for the targets after a successful edit"},
+		{Name: "restore", Description: "after a successful edit, run dotnet restore for the targets and every project the edit affects"},
 		{Name: "interactive", Description: "let dotnet restore prompt for feed authentication; requires --restore"},
 	}, outputFlags(), []cliFlagSpec{timeoutFlag("")}, tailFlags())
 	spec.Notes = append([]string{"A dry run prints one row per planned file change. Applying prints the same rows as a table or TSV, and one result document for json, jsonl, and templates."}, spec.Notes...)

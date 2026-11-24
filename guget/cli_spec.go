@@ -148,7 +148,7 @@ var (
 	flagProject = cliFlagSpec{Name: "project", Value: "DIR", Kind: valueDir,
 		Description: "workspace directory to discover projects in", Default: "current directory"}
 	flagIncludeIgnored = cliFlagSpec{Name: includeIgnoredFlag,
-		Description: "also search directories excluded by .gitignore (bin and obj stay excluded)"}
+		Description: "also search directories excluded by .gitignore (bin, obj, and other build output stay excluded)"}
 	flagFormat = cliFlagSpec{Name: "format", Value: "FORMAT", Kind: valueChoice, Choices: []string{"table", "tsv", "json", "jsonl"},
 		Description: "output format: " + cliFormatHelp,
 		Default:     "table on a terminal, tsv otherwise"}
