@@ -16,14 +16,27 @@ type PackageUse struct {
 	VersionOwner        string      `json:"versionOwner,omitempty"`
 	Direct              bool        `json:"direct"`
 	Implicit            bool        `json:"implicit"`
+	Global              bool        `json:"global,omitempty"`        // from a GlobalPackageReference
+	PrivateAssets       string      `json:"privateAssets,omitempty"` // "All" for a GlobalPackageReference
 	Edit                EditSupport `json:"edit"`
 }
 
+// PackageDownload is a restore-only PackageDownload item. It is not a
+// dependency and is never centrally managed.
+type PackageDownload struct {
+	ProjectPath     string `json:"projectPath"`
+	TargetFramework string `json:"targetFramework"`
+	PackageID       string `json:"packageId"`
+	Version         string `json:"version"`
+	Owner           string `json:"owner"`
+}
+
 type ProjectSnapshot struct {
-	CentralPackageManagement bool         `json:"centralPackageManagement"`
-	ProjectPath              string       `json:"projectPath"`
-	TargetFrameworks         []string     `json:"targetFrameworks"`
-	PackageUses              []PackageUse `json:"packageUses"`
-	Evaluated                bool         `json:"evaluated"`
-	Warnings                 []string     `json:"warnings"`
+	CentralPackageManagement bool              `json:"centralPackageManagement"`
+	ProjectPath              string            `json:"projectPath"`
+	TargetFrameworks         []string          `json:"targetFrameworks"`
+	PackageUses              []PackageUse      `json:"packageUses"`
+	PackageDownloads         []PackageDownload `json:"packageDownloads,omitempty"`
+	Evaluated                bool              `json:"evaluated"`
+	Warnings                 []string          `json:"warnings"`
 }

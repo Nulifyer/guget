@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/nulifyer/guget/internal/msbuildstatic"
 )
 
 // testDataDir returns the absolute path to the test-dotnet directory.
@@ -37,45 +39,7 @@ func TestFindDirectoryBuildProps_NotFound(t *testing.T) {
 	}
 }
 
-func TestResolveImportPath_Relative(t *testing.T) {
-	got, err := resolveImportPath("imported.props", "/proj/src", "/proj/src")
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := filepath.Clean("/proj/src/imported.props")
-	if got != want {
-		t.Fatalf("got %q, want %q", got, want)
-	}
-}
-
-func TestResolveImportPath_ProjectDir(t *testing.T) {
-	got, err := resolveImportPath("$(ProjectDir)\\imported.props", "/proj/src", "/proj/src")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.HasSuffix(got, "imported.props") {
-		t.Fatalf("expected path ending in imported.props, got %s", got)
-	}
-}
-
-func TestResolveImportPath_MSBuildThisFileDirectory(t *testing.T) {
-	got, err := resolveImportPath("$(MSBuildThisFileDirectory)\\common.props", "/a/b", "/proj")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.HasSuffix(got, "common.props") {
-		t.Fatalf("expected path ending in common.props, got %s", got)
-	}
-}
-
-func TestResolveImportPath_UnresolvedVariable(t *testing.T) {
-	_, err := resolveImportPath("$(SomeCustomVar)\\file.props", "/a", "/b")
-	if err == nil {
-		t.Fatal("expected error for unresolved variable")
-	}
-}
-
-func TestResolveImportPath_DistinguishesProjectAndReferringDirectories(t *testing.T) {
+func TestImportPathDistinguishesProjectAndReferringDirectories(t *testing.T) {
 	root := t.TempDir()
 	projectDir := filepath.Join(root, "App")
 	propsDir := filepath.Join(root, "Shared")
@@ -84,18 +48,16 @@ func TestResolveImportPath_DistinguishesProjectAndReferringDirectories(t *testin
 		raw  string
 		want string
 	}{
+		{"relative to the declaring file", "imported.props", filepath.Join(propsDir, "imported.props")},
 		{"project directory", "$(MSBuildProjectDirectory)/imported.props", filepath.Join(projectDir, "imported.props")},
 		{"project directory backslashes", `$(MSBuildProjectDirectory)\imported.props`, filepath.Join(projectDir, "imported.props")},
 		{"project directory has no trailing separator", "$(MSBuildProjectDirectory).props", projectDir + ".props"},
 		{"referring directory", "$(MSBuildThisFileDirectory)imported.props", filepath.Join(propsDir, "imported.props")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := resolveImportPath(tc.raw, propsDir, projectDir)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got != tc.want {
-				t.Fatalf("resolved import = %q, want %q", got, tc.want)
+			got, ok := msbuildstatic.ImportPath(tc.raw, filepath.Join(propsDir, "Shared.props"), filepath.Join(projectDir, "App.csproj"))
+			if !ok || got != tc.want {
+				t.Fatalf("resolved import = %q, %v; want %q", got, ok, tc.want)
 			}
 		})
 	}

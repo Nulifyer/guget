@@ -225,17 +225,21 @@ func TestMutationRefusesEvaluatedOwnerOutsideDeclaredScope(t *testing.T) {
 		t.Skip("dotnet SDK required for evaluated ownership")
 	}
 	root := t.TempDir()
-	first := filepath.Join(root, "Inactive.props")
-	second := filepath.Join(root, "Active.props")
-	mustWriteFile(t, first, `<Project><ItemGroup><PackageReference Include="Example" Version="1.0.0" /></ItemGroup></Project>`)
-	mustWriteFile(t, second, `<Project><ItemGroup><PackageReference Include="Example" Version="2.0.0" /></ItemGroup></Project>`)
-	path := writeCLIProject(t, root, "App", `<Project><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup><Import Project="../Inactive.props" Condition="false" /><Import Project="../Active.props" /></Project>`)
+	first := filepath.Join(root, "Other.props")
+	second := filepath.Join(root, "Directory.Packages.props")
+	// Static evaluation cannot decide the import condition, so it prefers the
+	// unconditional central version. MSBuild imports Other.props, whose
+	// PackageVersion comes first and wins.
+	mustWriteFile(t, first, `<Project><ItemGroup><PackageVersion Include="Example" Version="2.0.0" /></ItemGroup></Project>`)
+	mustWriteFile(t, second, `<Project><PropertyGroup><ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally></PropertyGroup>`+
+		`<Import Project="Other.props" Condition="'$(MSBuildToolsVersion)' != ''" /><ItemGroup><PackageVersion Include="Example" Version="1.0.0" /></ItemGroup></Project>`)
+	path := writeCLIProject(t, root, "App", `<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup><ItemGroup><PackageReference Include="Example" /></ItemGroup></Project>`)
 	project, err := ParseCsproj(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if project.SourceFileForPackage("Example") != first {
-		t.Fatal("fixture must discover the inactive source first")
+	if project.SourceFileForPackage("Example") != second {
+		t.Fatalf("fixture must prefer the unconditional declaration statically, got %s", project.SourceFileForPackage("Example"))
 	}
 	if _, _, err := buildMutationPlan("update", "Example", "3.0.0", []*ParsedProject{project}); err == nil || !strings.Contains(err.Error(), "differs from declared discovery") {
 		t.Fatalf("err=%v", err)

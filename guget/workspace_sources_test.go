@@ -86,7 +86,7 @@ func TestResolveWorkspaceSourcesAppliesProjectRestoreSources(t *testing.T) {
 		<TargetFramework>net8.0</TargetFramework>
 		<LocalFeed>../feed</LocalFeed>
 		<RestoreSources>$(RestoreSources);$(LocalFeed)</RestoreSources>
-		<RestoreAdditionalProjectSources>$(MSBuildThisFileDirectory)unresolved</RestoreAdditionalProjectSources>
+		<RestoreAdditionalProjectSources>$(SdkDefinedFeedRoot)unresolved</RestoreAdditionalProjectSources>
 	</PropertyGroup></Project>`)
 
 	resolved, err := resolveWorkspaceSources(parseTestProjects(t, project))

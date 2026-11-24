@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/nulifyer/guget/internal/msbuildstatic"
 	"github.com/nulifyer/guget/internal/projectedit"
 )
 
@@ -23,15 +24,15 @@ func canEditLiteralDeclaration(project *ParsedProject, packageID string) bool {
 	if len(project.InputRevisions) == 0 || len(project.DiscoveryErrors) != 0 {
 		return false
 	}
-	// The declared parser does not consume Directory.Build.targets. Its presence
-	// can change ownership after the project declaration, so require evaluation.
-	for dir := filepath.Dir(project.FilePath); ; dir = filepath.Dir(dir) {
-		if _, err := os.Stat(filepath.Join(dir, "Directory.Build.targets")); !os.IsNotExist(err) {
-			return false
-		}
-		if filepath.Dir(dir) == dir {
-			break
-		}
+	// Static evaluation reads Directory.Build.targets and the other implicit
+	// imports. When it could not decide an import, switch, or condition, the
+	// recorded inputs may be incomplete, so require MSBuild evaluation.
+	if len(project.StaticGaps) != 0 {
+		return false
+	}
+	projectPath, err := filepath.Abs(project.FilePath)
+	if err != nil {
+		return false
 	}
 	inputs := make(map[string]bool, len(project.InputRevisions))
 	for path := range project.InputRevisions {
@@ -75,8 +76,8 @@ func canEditLiteralDeclaration(project *ParsedProject, packageID string) bool {
 			}
 		}
 		for _, imported := range source.Imports {
-			resolved, err := resolveImportPath(imported.Project, filepath.Dir(path), filepath.Dir(project.FilePath))
-			if err != nil || !inputs[mutationInputKey(resolved)] {
+			resolved, ok := msbuildstatic.ImportPath(imported.Project, path, projectPath)
+			if !ok || !inputs[mutationInputKey(resolved)] {
 				return false
 			}
 		}
@@ -102,6 +103,17 @@ func canEditLiteralDeclaration(project *ParsedProject, packageID string) bool {
 					if mutationInputKey(path) != owner || projectedit.ValidateVersion(ref.versionExpression()) != nil {
 						return false
 					}
+				}
+			}
+			for _, ref := range group.GlobalPackageReferences {
+				if !strings.EqualFold(ref.effectiveName(), packageID) {
+					continue
+				}
+				// A GlobalPackageReference is both the reference and the version.
+				references++
+				versions++
+				if mutationInputKey(path) != owner || projectedit.ValidateVersion(ref.versionExpression()) != nil {
+					return false
 				}
 			}
 			for _, ref := range group.PackageVersions {

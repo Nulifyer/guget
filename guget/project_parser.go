@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/nulifyer/guget/internal/msbuildstatic"
 )
 
 type ImportElement struct {
@@ -15,6 +17,9 @@ type ImportElement struct {
 	Condition string `xml:"Condition,attr"`
 }
 
+// Project is the literal XML shape of one project or props file. Discovery
+// uses internal/msbuildstatic; this shape serves single-file views and the
+// TUI's literal-edit checks.
 type Project struct {
 	SDK         string `xml:"Sdk,attr"`
 	SDKElements []struct {
@@ -79,9 +84,10 @@ func (pg *PropertyGroup) UnmarshalXML(d *xml.Decoder, start xml.StartElement) er
 }
 
 type ItemGroup struct {
-	Condition         string                `xml:"Condition,attr"`
-	PackageReferences []rawPackageReference `xml:"PackageReference"`
-	PackageVersions   []rawPackageReference `xml:"PackageVersion"`
+	Condition               string                `xml:"Condition,attr"`
+	PackageReferences       []rawPackageReference `xml:"PackageReference"`
+	PackageVersions         []rawPackageReference `xml:"PackageVersion"`
+	GlobalPackageReferences []rawPackageReference `xml:"GlobalPackageReference"`
 }
 
 // rawPackageReference is used only for XML unmarshalling.
@@ -95,6 +101,7 @@ type rawPackageReference struct {
 	VersionOverride string `xml:"VersionOverride,attr"`
 	VersionChild    string `xml:"Version"`
 	OverrideChild   string `xml:"VersionOverride"`
+	global          bool
 }
 
 func (r rawPackageReference) versionExpression() string {
@@ -143,6 +150,10 @@ type PackageReference struct {
 	Version   SemVer
 	Requested string // original requested expression before SemVer range normalization
 	Locked    bool   // true when the version was specified as [x.y.z] exact pin in the project file
+	// PrivateAssets is the reference's PrivateAssets metadata; NuGet sets
+	// "All" for a GlobalPackageReference (NuGet.targets:138-162).
+	PrivateAssets string
+	Global        bool // declared by a GlobalPackageReference
 }
 
 // RequestedRange parses the reference's version expression with NuGet's
@@ -154,6 +165,45 @@ func (r PackageReference) RequestedRange() (VersionRange, bool) {
 		expression = r.Version.Raw
 	}
 	return ParseVersionRange(expression)
+}
+
+// PackageDeclaration records where a package's reference and version are
+// declared, as static evaluation determined them.
+type PackageDeclaration struct {
+	ReferenceOwner string // file with the PackageReference or GlobalPackageReference
+	VersionOwner   string // file that sets the effective version
+	VersionSource  msbuildstatic.VersionSource
+	Global         bool
+	Conditional    bool
+	Duplicate      bool
+	// Problem is a restore error for this reference, such as NU1008 for a
+	// Version on a centrally managed reference. Version edits are refused.
+	Problem string
+}
+
+// PackageDownload is a restore-only PackageDownload item. It is shown but
+// never edited: it is not a dependency and is not centrally managed.
+type PackageDownload struct {
+	Name      string
+	Requested string
+	Owner     string
+}
+
+// LockSetting is a statically evaluated boolean restore property.
+type LockSetting int
+
+const (
+	LockSettingFalse LockSetting = iota
+	LockSettingTrue
+	LockSettingUnknown // set conditionally or from SDK-defined properties
+)
+
+// LockFileSettings describe a project's packages.lock.json use
+// (NuGet PackagesLockFileUtilities.cs:21-62).
+type LockFileSettings struct {
+	Path         string // the lock file NuGet would use
+	WithLockFile LockSetting
+	LockedMode   LockSetting
 }
 
 // isExactLock reports whether a raw version string is a NuGet exact-version pin ([x.y.z]).
@@ -177,23 +227,36 @@ type AddTarget struct {
 }
 
 type ParsedProject struct {
-	FileName               string
-	RequiresEvaluation     bool // conditional declarations/imports cannot establish active ownership from XML alone
+	FileName           string
+	RequiresEvaluation bool // conditional declarations/imports cannot establish active ownership from XML alone
+	// StaticGaps lists what static evaluation could not decide, such as an
+	// unresolved import or an undecidable condition. See msbuildstatic.Gaps.
+	StaticGaps             []string
 	DiscoveryErrors        []error
 	FilePath               string // full path to the .csproj/.fsproj file
 	TargetFrameworks       Set[TargetFramework]
 	Packages               Set[PackageReference]
-	PackageSources         map[string]string            // lowercase pkg name → absolute path of defining file
+	PackageSources         map[string]string            // lowercase pkg name → absolute path of the file declaring its version
 	InputRevisions         map[string][sha256.Size]byte // exact bytes consumed by project/import parsing
 	PackageOwnerIdentities map[string]string            // recorded owner path → canonical file identity, resolved during discovery
 	AddTargets             []AddTarget                  // possible locations for adding new packages
+
+	// Declarations holds reference and version owners by lowercase package ID.
+	Declarations map[string]PackageDeclaration
+	// CentralVersions holds the effective PackageVersion entries (first
+	// wins) by lowercase package ID when central package management is on.
+	CentralVersions map[string]msbuildstatic.CentralVersion
+	// CentralFloatingVersions is CentralPackageFloatingVersionsEnabled; without
+	// it NuGet rejects floating central versions (NU1011).
+	CentralFloatingVersions bool
+	Downloads               []PackageDownload
+	ProjectReferences       []string // absolute paths of ProjectReference items
+	LockFile                LockFileSettings
 
 	// MSBuild source overrides, statically evaluated from Directory.Build.props,
 	// imports, and the project file. RestoreSources is nil when unset.
 	RestoreSources                  *string
 	RestoreAdditionalProjectSources string
-
-	importedPropertyGroups []PropertyGroup // evaluation order, consumed during parsing
 }
 
 // SourceFileForPackage returns the file path where pkgName is defined.
@@ -205,200 +268,89 @@ func (pp *ParsedProject) SourceFileForPackage(pkgName string) string {
 	return pp.FilePath
 }
 
+// ReferenceFileForPackage returns the file declaring pkgName's reference,
+// which can differ from its version owner under central package management.
+func (pp *ParsedProject) ReferenceFileForPackage(pkgName string) string {
+	if declaration, ok := pp.Declarations[strings.ToLower(pkgName)]; ok && declaration.ReferenceOwner != "" {
+		return declaration.ReferenceOwner
+	}
+	return pp.SourceFileForPackage(pkgName)
+}
+
+// ParseCsproj statically evaluates a project's package declarations. See
+// internal/msbuildstatic for the MSBuild and NuGet rules it applies.
 func ParseCsproj(filePath string) (*ParsedProject, error) {
-	data, err := os.ReadFile(filePath)
+	evaluation, err := msbuildstatic.Evaluate(filePath, msbuildstatic.Options{})
 	if err != nil {
-		return nil, fmt.Errorf("failed to read file: %w", err)
+		return nil, fmt.Errorf("failed to parse %s: %w", filePath, err)
 	}
-
-	var project Project
-	if err := xml.Unmarshal(data, &project); err != nil {
-		return nil, fmt.Errorf("failed to parse XML: %w", err)
-	}
-
-	absFilePath, err := filepath.Abs(filePath)
-	if err != nil {
-		logWarn("filepath.Abs(%s): %v", filePath, err)
-		absFilePath = filePath
+	absFilePath := evaluation.ProjectPath
+	// Owners inside the project keep the caller's spelling of its path.
+	owner := func(path string) string {
+		if path == absFilePath {
+			return filePath
+		}
+		return path
 	}
 
 	result := &ParsedProject{
-		FileName:         filepath.Base(filePath),
-		FilePath:         filePath,
-		TargetFrameworks: NewSet[TargetFramework](),
-		Packages:         NewSet[PackageReference](),
-		PackageSources:   make(map[string]string),
+		FileName:           filepath.Base(filePath),
+		FilePath:           filePath,
+		RequiresEvaluation: len(evaluation.Reasons) > 0,
+		StaticGaps:         evaluation.Gaps,
+		DiscoveryErrors:    evaluation.Errors,
+		TargetFrameworks:   NewSet[TargetFramework](),
+		Packages:           NewSet[PackageReference](),
+		PackageSources:     make(map[string]string),
+		InputRevisions:     evaluation.Inputs,
+		Declarations:       make(map[string]PackageDeclaration),
+		CentralVersions:    make(map[string]msbuildstatic.CentralVersion),
+		ProjectReferences:  evaluation.ProjectReferences,
+	}
+	for _, reason := range evaluation.Reasons {
+		logDebug("%s: static evaluation: %s", filePath, reason)
+	}
+	for _, framework := range evaluation.TargetFrameworks() {
+		result.TargetFrameworks.Add(ParseTargetFramework(framework))
 	}
 
-	if err := recordProjectInput(result, absFilePath, data); err != nil {
-		return nil, err
-	}
-	result.RequiresEvaluation = projectNeedsEvaluation(project)
-	mergePropertyGroups(result, project.PropertyGroups)
-
-	projectDir := filepath.Dir(filePath)
-	visited := map[string]bool{absFilePath: true}
-	dbp := findDirectoryBuildProps(projectDir)
-
-	// Build CPM version map from Directory.Packages.props if present.
-	// CPM projects declare <PackageReference Include="Pkg" /> without a Version;
-	// the version is defined centrally as <PackageVersion Include="Pkg" Version="x" />.
-	if central := findDirectoryPackagesProps(projectDir); central != "" {
-		markProjectEvaluation(result, central)
-	}
-	cpmVersions := make(map[string]string) // lowercase name → version string
-	var cpmFilePath string
-	if dpp := activeDirectoryPackagesProps(projectDir, project.PropertyGroups, dbp, result); dpp != "" {
-		if absDpp, err := filepath.Abs(dpp); err == nil {
-			cpmFilePath = absDpp
-			if refs, _, _, err := parsePropsFileRecording(absDpp, result); err == nil {
-				markProjectEvaluation(result, absDpp)
-				for _, r := range refs {
-					if r.Version != "" {
-						cpmVersions[strings.ToLower(r.Include)] = r.Version
-					}
-				}
-			} else {
-				return nil, fmt.Errorf("central package file %s: %w", absDpp, err)
-			}
-		}
-	}
-
-	for _, ig := range project.ItemGroups {
-		for _, raw := range ig.PackageReferences {
-			name := raw.effectiveName()
-			if name == "" {
-				continue
-			}
-			version := raw.versionExpression()
-			sourceFile := filePath
-			switch {
-			case version != "":
-				// Explicit Version in the project file — use as-is.
-			case raw.VersionOverride != "":
-				// VersionOverride pins a project-specific version in a CPM repo;
-				// the override lives in the project file, not the central props.
-				version = raw.VersionOverride
-			case cpmFilePath != "":
-				// No version specified — resolve from Directory.Packages.props.
-				if cpmVer, ok := cpmVersions[strings.ToLower(name)]; ok {
-					version = cpmVer
-					sourceFile = cpmFilePath
-				}
-			}
-			result.Packages.Add(PackageReference{
-				Name:      name,
-				Version:   requestedVersion(version),
-				Requested: version,
-				Locked:    isExactLock(version),
-			})
-			result.PackageSources[strings.ToLower(name)] = sourceFile
-		}
-	}
-
-	// Implicit import: Directory.Build.props (walk up from project dir)
-	if dbp != "" {
-		collectPropsPackages(result, dbp, projectDir, visited)
-	}
-
-	// Explicit <Import> elements in the project file
-	var resolvedImports []string
-	for _, imp := range project.Imports {
-		resolved, err := resolveImportPath(imp.Project, projectDir, projectDir)
-		if err != nil {
-			logDebug("Skipping import in %s: %v", filePath, err)
+	for _, pkg := range evaluation.References {
+		if pkg.Implicit {
 			continue
 		}
-		if _, err := os.Stat(resolved); os.IsNotExist(err) && imp.Condition != "" {
-			continue
-		}
-		collectPropsPackages(result, resolved, projectDir, visited)
-		resolvedImports = append(resolvedImports, resolved)
-	}
-
-	result.RestoreSources, result.RestoreAdditionalProjectSources = restoreSourceProperties(filePath, append(result.importedPropertyGroups, project.PropertyGroups...))
-	result.importedPropertyGroups = nil
-
-	// Post-process: imported props files (e.g. Directory.Build.props) may also
-	// reference packages without versions in CPM repos. Fill in any that are
-	// still empty using the central version map, and redirect their source to
-	// the CPM file so the TUI points edits to the right place.
-	if cpmFilePath != "" && len(cpmVersions) > 0 {
-		var emptyRefs []PackageReference
-		for ref := range result.Packages {
-			if ref.Version.Raw == "" {
-				emptyRefs = append(emptyRefs, ref)
-			}
-		}
-		for _, ref := range emptyRefs {
-			name := strings.ToLower(ref.Name)
-			if cpmVer, ok := cpmVersions[name]; ok {
-				result.Packages.Remove(ref)
-				result.Packages.Add(PackageReference{Name: ref.Name, Version: requestedVersion(cpmVer), Requested: cpmVer})
-				result.PackageSources[name] = cpmFilePath
-			}
-		}
-	}
-
-	// Build AddTargets: possible locations for adding new packages.
-	// Use the visited map to include ALL transitively discovered props files.
-	absDBP := ""
-	if dbp != "" {
-		if absDBP, err = filepath.Abs(dbp); err != nil {
-			logWarn("filepath.Abs(%s): %v", dbp, err)
-			absDBP = dbp
-		}
-	}
-	absCPM := ""
-	if cpmFilePath != "" {
-		if absCPM, err = filepath.Abs(cpmFilePath); err != nil {
-			logWarn("filepath.Abs(%s): %v", cpmFilePath, err)
-			absCPM = cpmFilePath
-		}
-	}
-	directImports := make(map[string]bool)
-	for _, resolved := range resolvedImports {
-		abs, absErr := filepath.Abs(resolved)
-		if absErr != nil {
-			logWarn("filepath.Abs(%s): %v", resolved, absErr)
-			abs = resolved
-		}
-		directImports[abs] = true
-	}
-
-	result.AddTargets = []AddTarget{
-		{FilePath: absFilePath, Kind: AddTargetProject, Description: "this project only"},
-	}
-	if absDBP != "" {
-		result.AddTargets = append(result.AddTargets, AddTarget{
-			FilePath:    absDBP,
-			Kind:        AddTargetBuildProps,
-			Description: "all projects under " + filepath.Base(filepath.Dir(absDBP)),
+		result.Packages.Add(PackageReference{
+			Name:          pkg.ID,
+			Version:       requestedVersion(pkg.Version),
+			Requested:     pkg.Version,
+			Locked:        isExactLock(pkg.Version),
+			PrivateAssets: pkg.PrivateAssets,
+			Global:        pkg.Global,
 		})
-	}
-	if absCPM != "" {
-		result.AddTargets = append(result.AddTargets, AddTarget{
-			FilePath:    absCPM,
-			Kind:        AddTargetCPM,
-			Description: "central package management",
-		})
-	}
-	// Add all visited props files (includes both direct and transitive imports).
-	// Skip files already handled above (Directory.Build.props, CPM file).
-	for visitedPath := range visited {
-		if visitedPath == absFilePath || visitedPath == absDBP || visitedPath == absCPM {
-			continue
+		key := strings.ToLower(pkg.ID)
+		versionOwner := pkg.VersionOwner
+		if versionOwner == "" {
+			versionOwner = pkg.ReferenceOwner
 		}
-		desc := "imported props"
-		if directImports[visitedPath] {
-			desc = "imported by " + result.FileName
+		result.PackageSources[key] = owner(versionOwner)
+		result.Declarations[key] = PackageDeclaration{
+			ReferenceOwner: owner(pkg.ReferenceOwner), VersionOwner: owner(pkg.VersionOwner), VersionSource: pkg.VersionSource,
+			Global: pkg.Global, Conditional: pkg.Conditional, Duplicate: pkg.Duplicate, Problem: pkg.Problem,
 		}
-		result.AddTargets = append(result.AddTargets, AddTarget{
-			FilePath:    visitedPath,
-			Kind:        AddTargetImportedProps,
-			Description: desc,
-		})
 	}
+	if evaluation.CentralPackageManagement {
+		for _, entry := range evaluation.CentralVersions {
+			result.CentralVersions[strings.ToLower(entry.ID)] = entry
+		}
+	}
+	for _, download := range evaluation.Downloads {
+		result.Downloads = append(result.Downloads, PackageDownload{Name: download.ID, Requested: download.Version, Owner: owner(download.Owner)})
+	}
+	if text, known, _ := evaluation.Property("CentralPackageFloatingVersionsEnabled"); known && strings.EqualFold(text, "true") {
+		result.CentralFloatingVersions = true
+	}
+	result.LockFile = lockFileSettings(evaluation)
+	result.RestoreSources, result.RestoreAdditionalProjectSources = restoreSourceProperties(filePath, evaluation)
+	result.AddTargets = addTargets(evaluation, result.FileName)
 
 	if len(result.DiscoveryErrors) > 0 {
 		return nil, fmt.Errorf("incomplete package discovery for %s: %w", filePath, errors.Join(result.DiscoveryErrors...))
@@ -407,6 +359,105 @@ func ParseCsproj(filePath string) (*ParsedProject, error) {
 	return result, nil
 }
 
+// addTargets lists where a new reference can go: the project, the
+// Directory.Build.props it imports, its central file under CPM, and .props
+// files the project or Directory.Build.props import. Files reached through
+// the central file or Directory.Build.targets are not add locations.
+func addTargets(evaluation *msbuildstatic.Evaluation, projectName string) []AddTarget {
+	targets := []AddTarget{{FilePath: evaluation.ProjectPath, Kind: AddTargetProject, Description: "this project only"}}
+	if evaluation.DirectoryBuildProps != "" {
+		targets = append(targets, AddTarget{
+			FilePath:    evaluation.DirectoryBuildProps,
+			Kind:        AddTargetBuildProps,
+			Description: "all projects under " + filepath.Base(filepath.Dir(evaluation.DirectoryBuildProps)),
+		})
+	}
+	if evaluation.CentralPackageManagement && evaluation.DirectoryPackagesProps != "" {
+		targets = append(targets, AddTarget{FilePath: evaluation.DirectoryPackagesProps, Kind: AddTargetCPM, Description: "central package management"})
+	}
+	for _, imported := range evaluation.Imports {
+		if imported.Kind != msbuildstatic.ImportExplicit && imported.Kind != msbuildstatic.ImportCustomBuildProps ||
+			imported.Root != msbuildstatic.ImportExplicit && imported.Root != msbuildstatic.ImportDirectoryBuildProps && imported.Root != msbuildstatic.ImportCustomBuildProps ||
+			!strings.EqualFold(filepath.Ext(imported.Path), ".props") {
+			continue
+		}
+		description := "imported props"
+		if imported.Importer == evaluation.ProjectPath {
+			description = "imported by " + projectName
+		}
+		targets = append(targets, AddTarget{FilePath: imported.Path, Kind: AddTargetImportedProps, Description: description})
+	}
+	return targets
+}
+
+func lockSetting(evaluation *msbuildstatic.Evaluation, name string) LockSetting {
+	text, known, set := evaluation.Property(name)
+	switch {
+	case !known:
+		return LockSettingUnknown
+	case set && strings.EqualFold(strings.TrimSpace(text), "true"):
+		return LockSettingTrue
+	}
+	return LockSettingFalse
+}
+
+// lockFileSettings follows NuGet PackagesLockFileUtilities.GetNuGetLockFilePath:
+// NuGetLockFilePath relative to the project, else packages.<project>.lock.json
+// when it exists, else packages.lock.json.
+func lockFileSettings(evaluation *msbuildstatic.Evaluation) LockFileSettings {
+	projectDir := filepath.Dir(evaluation.ProjectPath)
+	settings := LockFileSettings{
+		WithLockFile: lockSetting(evaluation, "RestorePackagesWithLockFile"),
+		LockedMode:   lockSetting(evaluation, "RestoreLockedMode"),
+	}
+	if text, known, _ := evaluation.Property("NuGetLockFilePath"); known && strings.TrimSpace(text) != "" {
+		path := filepath.FromSlash(strings.ReplaceAll(strings.TrimSpace(text), `\`, "/"))
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(projectDir, path)
+		}
+		settings.Path = filepath.Clean(path)
+		return settings
+	}
+	name := strings.TrimSuffix(filepath.Base(evaluation.ProjectPath), filepath.Ext(evaluation.ProjectPath))
+	named := filepath.Join(projectDir, "packages."+strings.ReplaceAll(name, " ", "_")+".lock.json")
+	if _, err := os.Stat(named); err == nil {
+		settings.Path = named
+	} else {
+		settings.Path = filepath.Join(projectDir, "packages.lock.json")
+	}
+	return settings
+}
+
+// restoreSourceProperties returns the final RestoreSources and
+// RestoreAdditionalProjectSources values. Entries that still reference
+// properties the static evaluator cannot resolve are dropped with a warning.
+func restoreSourceProperties(projectPath string, evaluation *msbuildstatic.Evaluation) (*string, string) {
+	values := map[string]*string{}
+	for _, property := range []string{"RestoreSources", "RestoreAdditionalProjectSources"} {
+		text, _, set := evaluation.Property(property)
+		if !set {
+			continue
+		}
+		var kept []string
+		for _, entry := range strings.Split(text, ";") {
+			if strings.Contains(entry, "$(") {
+				logWarn("%s: ignoring %s entry %q that needs MSBuild evaluation", projectPath, property, strings.TrimSpace(entry))
+				continue
+			}
+			kept = append(kept, entry)
+		}
+		joined := strings.Join(kept, ";")
+		values[property] = &joined
+	}
+	additional := ""
+	if values["RestoreAdditionalProjectSources"] != nil {
+		additional = *values["RestoreAdditionalProjectSources"]
+	}
+	return values["RestoreSources"], additional
+}
+
+// projectNeedsEvaluation reports whether one file's literal XML uses
+// constructs whose effect static reading cannot pin to a single declaration.
 func projectNeedsEvaluation(project Project) bool {
 	if project.SDK != "" || len(project.SDKElements) > 0 || len(project.Imports) > 0 {
 		return true
@@ -426,7 +477,7 @@ func projectNeedsEvaluation(project Project) bool {
 		if group.Condition != "" {
 			return true
 		}
-		for _, ref := range append(group.PackageReferences, group.PackageVersions...) {
+		for _, ref := range append(append(group.PackageReferences, group.PackageVersions...), group.GlobalPackageReferences...) {
 			key := strings.ToLower(ref.effectiveName())
 			if seen[key] {
 				return true
@@ -438,67 +489,6 @@ func projectNeedsEvaluation(project Project) bool {
 		}
 	}
 	return false
-}
-
-func markProjectEvaluation(result *ParsedProject, path string) {
-	data, err := os.ReadFile(path)
-	var project Project
-	if err == nil {
-		err = recordProjectInput(result, path, data)
-	}
-	if err == nil {
-		err = xml.Unmarshal(data, &project)
-	}
-	if err != nil {
-		result.DiscoveryErrors = append(result.DiscoveryErrors, fmt.Errorf("%s: %w", path, err))
-		return
-	}
-	result.RequiresEvaluation = result.RequiresEvaluation || projectNeedsEvaluation(project)
-}
-
-// restoreSourceProperties evaluates RestoreSources and
-// RestoreAdditionalProjectSources across groups in MSBuild evaluation order.
-// Later definitions replace earlier ones and may reference them. Conditional
-// groups cannot be evaluated statically and are skipped; entries that still
-// reference unknown properties are dropped with a warning.
-func restoreSourceProperties(projectPath string, groups []PropertyGroup) (*string, string) {
-	values := map[string]*string{}
-	known := map[string]string{}
-	for _, group := range groups {
-		if group.Condition != "" {
-			continue
-		}
-		for name, value := range group.Properties {
-			known[name] = value
-		}
-		for name, value := range group.Properties {
-			for _, property := range []string{"RestoreSources", "RestoreAdditionalProjectSources"} {
-				if !strings.EqualFold(name, property) {
-					continue
-				}
-				previous := ""
-				if values[property] != nil {
-					previous = *values[property]
-				}
-				resolved := resolveProps(strings.ReplaceAll(value, "$("+property+")", previous), known)
-				var kept []string
-				for _, entry := range strings.Split(resolved, ";") {
-					if strings.Contains(entry, "$(") {
-						logWarn("%s: ignoring %s entry %q that needs MSBuild evaluation", projectPath, property, strings.TrimSpace(entry))
-						continue
-					}
-					kept = append(kept, entry)
-				}
-				joined := strings.Join(kept, ";")
-				values[property] = &joined
-			}
-		}
-	}
-	additional := ""
-	if values["RestoreAdditionalProjectSources"] != nil {
-		additional = *values["RestoreAdditionalProjectSources"]
-	}
-	return values["RestoreSources"], additional
 }
 
 // mergePropertyGroups extracts target frameworks from PropertyGroup elements.
@@ -516,181 +506,26 @@ func mergePropertyGroups(result *ParsedProject, groups []PropertyGroup) {
 // findDirectoryBuildProps walks up from startDir looking for Directory.Build.props.
 // Returns the full path if found, or "" if not found.
 func findDirectoryBuildProps(startDir string) string {
-	dir := startDir
-	for {
-		candidate := filepath.Join(dir, "Directory.Build.props")
-		if _, err := os.Stat(candidate); err == nil {
-			return candidate
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			break
-		}
-		dir = parent
-	}
-	return ""
+	return findFileAbove(startDir, "Directory.Build.props")
 }
 
 // findDirectoryPackagesProps walks up from startDir looking for Directory.Packages.props,
 // the central file used by NuGet Central Package Management (CPM).
 // Returns the full path if found, or "" if not found.
 func findDirectoryPackagesProps(startDir string) string {
-	dir := startDir
-	for {
-		candidate := filepath.Join(dir, "Directory.Packages.props")
+	return findFileAbove(startDir, "Directory.Packages.props")
+}
+
+func findFileAbove(startDir, name string) string {
+	for dir := startDir; ; dir = filepath.Dir(dir) {
+		candidate := filepath.Join(dir, name)
 		if _, err := os.Stat(candidate); err == nil {
 			return candidate
 		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			break
-		}
-		dir = parent
-	}
-	return ""
-}
-
-// activeDirectoryPackagesProps returns the nearest central package file only
-// when CPM is enabled by a literal, unconditional property. NuGet imports the
-// central file before Directory.Build.props and the project, so later values
-// override earlier ones here as they do during evaluation.
-func activeDirectoryPackagesProps(startDir string, projectGroups []PropertyGroup, buildPropsPath string, recording ...*ParsedProject) string {
-	dpp := findDirectoryPackagesProps(startDir)
-	if dpp == "" {
-		return ""
-	}
-
-	enabled := false
-	known := false
-	applyGroups := func(groups []PropertyGroup) {
-		if value, ok := literalBoolProperty(groups, "ManagePackageVersionsCentrally"); ok {
-			enabled = value
-			known = true
+		if filepath.Dir(dir) == dir {
+			return ""
 		}
 	}
-	if value, ok := literalBoolPropertyFromFile(dpp, startDir, "ManagePackageVersionsCentrally", make(map[string]bool), recording...); ok {
-		enabled, known = value, true
-	}
-	if buildPropsPath != "" {
-		if value, ok := literalBoolPropertyFromFile(buildPropsPath, startDir, "ManagePackageVersionsCentrally", make(map[string]bool), recording...); ok {
-			enabled, known = value, true
-		}
-	}
-	applyGroups(projectGroups)
-	if !known || !enabled {
-		return ""
-	}
-	return dpp
-}
-
-func literalBoolPropertyFromFile(path, projectDir, name string, visited map[string]bool, recording ...*ParsedProject) (bool, bool) {
-	absPath, err := filepath.Abs(path)
-	if err != nil || visited[absPath] {
-		return false, false
-	}
-	visited[absPath] = true
-
-	var result *ParsedProject
-	if len(recording) > 0 {
-		result = recording[0]
-	}
-	_, imports, groups, err := parsePropsFileRecording(absPath, result)
-	if err != nil {
-		if result != nil {
-			result.DiscoveryErrors = append(result.DiscoveryErrors, fmt.Errorf("property input %s: %w", absPath, err))
-		}
-		return false, false
-	}
-	value := false
-	found := false
-	for _, imported := range imports {
-		if strings.TrimSpace(imported.Condition) != "" {
-			continue
-		}
-		resolved, resolveErr := resolveImportPath(imported.Project, filepath.Dir(absPath), projectDir)
-		if resolveErr != nil {
-			resolved = resolveGetPathOfFileAboveImport(imported.Project, filepath.Dir(absPath))
-		}
-		if resolved == "" {
-			continue
-		}
-		if importedValue, ok := literalBoolPropertyFromFile(resolved, projectDir, name, visited, recording...); ok {
-			value, found = importedValue, true
-		}
-	}
-	if localValue, ok := literalBoolProperty(groups, name); ok {
-		value, found = localValue, true
-	}
-	return value, found
-}
-
-func resolveGetPathOfFileAboveImport(raw, referringFileDir string) string {
-	lower := strings.ToLower(raw)
-	const buildPropsCall = "getpathoffileabove('directory.build.props'"
-	const packagesPropsCall = "getpathoffileabove('directory.packages.props'"
-	startDir := filepath.Dir(referringFileDir)
-	switch {
-	case strings.Contains(lower, buildPropsCall):
-		return findDirectoryBuildProps(startDir)
-	case strings.Contains(lower, packagesPropsCall):
-		return findDirectoryPackagesProps(startDir)
-	default:
-		return ""
-	}
-}
-
-func literalBoolProperty(groups []PropertyGroup, name string) (bool, bool) {
-	var value bool
-	found := false
-	for _, group := range groups {
-		for property, raw := range group.Properties {
-			if !strings.EqualFold(property, name) {
-				continue
-			}
-			if strings.TrimSpace(group.Condition) != "" || group.HasConditionalProperties {
-				value, found = false, true
-				continue
-			}
-			switch strings.ToLower(strings.TrimSpace(raw)) {
-			case "true":
-				value, found = true, true
-			case "false":
-				value, found = false, true
-			default:
-				value, found = false, true
-			}
-		}
-	}
-	return value, found
-}
-
-// resolveImportPath resolves MSBuild-style import paths with basic variable substitution.
-// referringFileDir is the directory containing the file with the <Import> element.
-// projectDir is the directory of the .csproj/.fsproj being parsed.
-func resolveImportPath(rawPath, referringFileDir, projectDir string) (string, error) {
-	resolved := rawPath
-	resolved = strings.ReplaceAll(resolved, "$(MSBuildThisFileDirectory)", referringFileDir+string(os.PathSeparator))
-	resolved = strings.ReplaceAll(resolved, "$(ProjectDir)", projectDir+string(os.PathSeparator))
-	if strings.Contains(resolved, "$(MSBuildProjectDirectory)") {
-		absoluteProjectDir, err := filepath.Abs(projectDir)
-		if err != nil {
-			return "", fmt.Errorf("resolve project directory: %w", err)
-		}
-		resolved = strings.ReplaceAll(resolved, "$(MSBuildProjectDirectory)", absoluteProjectDir)
-	}
-
-	if strings.Contains(resolved, "$(") {
-		return "", fmt.Errorf("unresolved MSBuild variable in import path: %s", rawPath)
-	}
-
-	// MSBuild paths often use Windows-style backslashes; normalize them so
-	// import resolution works on Linux/macOS as well.
-	resolved = strings.ReplaceAll(resolved, `\`, "/")
-	resolved = filepath.FromSlash(resolved)
-	if !filepath.IsAbs(resolved) {
-		resolved = filepath.Join(referringFileDir, resolved)
-	}
-	return filepath.Clean(resolved), nil
 }
 
 // parsePropsFile parses a .props file and returns its PackageReferences, Import
@@ -699,6 +534,8 @@ func parsePropsFile(filePath string) ([]rawPackageReference, []ImportElement, []
 	return parsePropsFileRecording(filePath, nil)
 }
 
+// parsePropsFileRecording reads the package elements one file declares,
+// without following imports. It backs the single-file props views.
 func parsePropsFileRecording(filePath string, result *ParsedProject) ([]rawPackageReference, []ImportElement, []PropertyGroup, error) {
 	data, err := os.ReadFile(filePath)
 	if err != nil {
@@ -715,6 +552,16 @@ func parsePropsFileRecording(filePath string, result *ParsedProject) ([]rawPacka
 	// Properties must be gathered before iterating ItemGroups because they may
 	// be declared above or below the PackageVersion elements in the file.
 	props := buildPropsMap(project.PropertyGroups)
+	elements := func(group ItemGroup) []rawPackageReference {
+		var refs []rawPackageReference
+		refs = append(refs, group.PackageReferences...)
+		refs = append(refs, group.PackageVersions...)
+		for _, global := range group.GlobalPackageReferences {
+			global.global = true
+			refs = append(refs, global)
+		}
+		return refs
+	}
 
 	// First pass: unconditional ItemGroups — these are the canonical versions.
 	// Collect conditional groups for a fallback pass below.
@@ -725,14 +572,7 @@ func parsePropsFileRecording(filePath string, result *ParsedProject) ([]rawPacka
 			conditionalGroups = append(conditionalGroups, ig)
 			continue
 		}
-		for _, r := range ig.PackageReferences {
-			if r.effectiveName() == "" {
-				continue
-			}
-			r.Version = resolveProps(r.versionExpression(), props)
-			refs = append(refs, r)
-		}
-		for _, r := range ig.PackageVersions {
+		for _, r := range elements(ig) {
 			if r.effectiveName() == "" {
 				continue
 			}
@@ -750,16 +590,7 @@ func parsePropsFileRecording(filePath string, result *ParsedProject) ([]rawPacka
 		seen[strings.ToLower(r.effectiveName())] = true
 	}
 	for _, ig := range conditionalGroups {
-		for _, r := range ig.PackageReferences {
-			name := strings.ToLower(r.effectiveName())
-			if name == "" || seen[name] {
-				continue
-			}
-			r.Version = resolveProps(r.versionExpression(), props)
-			refs = append(refs, r)
-			seen[name] = true
-		}
-		for _, r := range ig.PackageVersions {
+		for _, r := range elements(ig) {
 			name := strings.ToLower(r.effectiveName())
 			if name == "" || seen[name] {
 				continue
@@ -771,64 +602,6 @@ func parsePropsFileRecording(filePath string, result *ParsedProject) ([]rawPacka
 	}
 
 	return refs, project.Imports, project.PropertyGroups, nil
-}
-
-// collectPropsPackages parses a .props file and merges its PackageReferences
-// into the result. Recurses into nested <Import> elements. Uses visited to
-// prevent cycles.
-func collectPropsPackages(result *ParsedProject, propsPath, projectDir string, visited map[string]bool) {
-	absPath, err := filepath.Abs(propsPath)
-	if err != nil {
-		logWarn("Could not resolve absolute path for %s: %v", propsPath, err)
-		return
-	}
-	if visited[absPath] {
-		return
-	}
-	visited[absPath] = true
-
-	markProjectEvaluation(result, absPath)
-	refs, imports, propertyGroups, err := parsePropsFileRecording(absPath, result)
-	if err != nil {
-		result.DiscoveryErrors = append(result.DiscoveryErrors, fmt.Errorf("import %s: %w", absPath, err))
-		logDebug("Failed to parse props file %s: %v", absPath, err)
-		return
-	}
-
-	for _, raw := range refs {
-		ref := PackageReference{
-			Name:      raw.effectiveName(),
-			Version:   requestedVersion(raw.Version),
-			Requested: raw.Version,
-			Locked:    isExactLock(raw.Version),
-		}
-		result.Packages.Add(ref)
-		key := strings.ToLower(raw.effectiveName())
-		if _, exists := result.PackageSources[key]; exists {
-			result.RequiresEvaluation = true
-		}
-		// Only set source if not already defined (.csproj takes precedence)
-		if _, exists := result.PackageSources[key]; !exists {
-			result.PackageSources[key] = absPath
-		}
-	}
-
-	mergePropertyGroups(result, propertyGroups)
-	result.importedPropertyGroups = append(result.importedPropertyGroups, propertyGroups...)
-
-	// Recurse into nested imports
-	propsDir := filepath.Dir(absPath)
-	for _, imp := range imports {
-		resolved, err := resolveImportPath(imp.Project, propsDir, projectDir)
-		if err != nil {
-			logDebug("Skipping nested import in %s: %v", absPath, err)
-			continue
-		}
-		if _, err := os.Stat(resolved); os.IsNotExist(err) && imp.Condition != "" {
-			continue
-		}
-		collectPropsPackages(result, resolved, projectDir, visited)
-	}
 }
 
 // ParsePropsAsProject parses a .props file and returns a ParsedProject
@@ -854,12 +627,17 @@ func ParsePropsAsProject(filePath string) (*ParsedProject, error) {
 	mergePropertyGroups(result, propertyGroups)
 
 	for _, raw := range refs {
-		result.Packages.Add(PackageReference{
+		ref := PackageReference{
 			Name:      raw.effectiveName(),
 			Version:   requestedVersion(raw.Version),
 			Requested: raw.Version,
 			Locked:    isExactLock(raw.Version),
-		})
+			Global:    raw.global,
+		}
+		if raw.global {
+			ref.PrivateAssets = "All"
+		}
+		result.Packages.Add(ref)
 		result.PackageSources[strings.ToLower(raw.effectiveName())] = absPath
 	}
 

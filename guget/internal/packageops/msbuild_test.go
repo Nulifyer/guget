@@ -118,7 +118,7 @@ func TestEvaluatedOwnershipRefusesSourceMetadataOverrides(t *testing.T) {
 		t.Fatal(err)
 	}
 	output := msbuildOutput{Items: map[string][]msbuildItem{"PackageReference": {{Identity: "Example", Version: "2.0.0", DefiningProjectFullPath: path}}}}
-	uses := packageUses(path, "net8.0", output)
+	uses := packageUses(path, "net8.0", output, nil)
 	if len(uses) != 1 || uses[0].Edit.Supported || !strings.Contains(uses[0].Edit.Reason, "differs") {
 		t.Fatalf("uses=%+v", uses)
 	}
