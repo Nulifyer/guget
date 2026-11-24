@@ -98,19 +98,36 @@ type PackageVersion struct {
 	// Unlisted versions stay visible (a project may already use one) but are
 	// never chosen as a latest or default version.
 	Unlisted bool
+	// Deprecation is this version's registration deprecation, nil when the
+	// source reports none. NuGet deprecates individual versions.
+	Deprecation *PackageDeprecation
+	// Source names the configured source this entry came from. When several
+	// sources have the version, it is the first listed one in source order.
+	Source string
+}
+
+// PackageDeprecation is one version's deprecation notice
+// (PackageDeprecationMetadata in NuGet.Protocol).
+type PackageDeprecation struct {
+	Message            string
+	Reasons            []string
+	AlternatePackageID string
 }
 
 // PackageInfo is the full picture of a package.
 type PackageInfo struct {
-	ID                 string
-	LatestVersion      string
-	Description        string
-	Authors            Set[string]
-	Tags               Set[string]
-	ProjectURL         string           // from catalog entry (e.g. GitHub repo)
-	RepositoryType     string           // e.g. "git"
-	RepositoryURL      string           // e.g. "https://github.com/owner/repo"
-	Versions           []PackageVersion // sorted newest → oldest
+	ID             string
+	LatestVersion  string
+	Description    string
+	Authors        Set[string]
+	Tags           Set[string]
+	ProjectURL     string           // from catalog entry (e.g. GitHub repo)
+	RepositoryType string           // e.g. "git"
+	RepositoryURL  string           // e.g. "https://github.com/owner/repo"
+	Versions       []PackageVersion // sorted newest → oldest
+	// Deprecated, DeprecationMessage, and AlternatePackageID describe the
+	// version package-level metadata comes from (the newest listed stable
+	// one). Installed-version decisions use PackageVersion.Deprecation.
 	Deprecated         bool
 	DeprecationMessage string
 	AlternatePackageID string
@@ -190,6 +207,17 @@ type deprecationRaw struct {
 		ID string `json:"id"`
 	} `json:"alternatePackage"`
 }
+
+func (d *deprecationRaw) toDeprecation() *PackageDeprecation {
+	if d == nil {
+		return nil
+	}
+	return &PackageDeprecation{Message: d.Message, Reasons: append([]string(nil), d.Reasons...), AlternatePackageID: d.AlternatePackage.ID}
+}
+
+// errPackageNotFound reports that a source has no version of a package. It
+// is an answer, not a source failure.
+var errPackageNotFound = errors.New("not found")
 
 // authTransport injects Basic Auth and, like NuGet restore, asks credential
 // providers when a feed answers 401 or 403.
@@ -966,7 +994,7 @@ func (s *NugetService) SearchExactContext(ctx context.Context, packageID string)
 		var he *httpStatusError
 		if errors.As(err, &he) && he.Code == http.StatusNotFound {
 			logDebug("[%s] %q not found (404)", s.sourceName, packageID)
-			return nil, fmt.Errorf("package %q not found", packageID)
+			return nil, fmt.Errorf("package %q %w", packageID, errPackageNotFound)
 		}
 		return nil, err
 	}
@@ -1034,13 +1062,15 @@ func (s *NugetService) SearchExactContext(ctx context.Context, packageID string)
 				Vulnerabilities:  ce.Vulnerabilities,
 				DependencyGroups: ce.DependencyGroups,
 				Unlisted:         unlisted,
+				Deprecation:      ce.Deprecation.toDeprecation(),
+				Source:           s.sourceName,
 			})
 		}
 	}
 
 	if len(versions) == 0 || latestLeaf == nil {
 		logDebug("[%s] %q has no versions in registration index", s.sourceName, packageID)
-		return nil, fmt.Errorf("package %q not found", packageID)
+		return nil, fmt.Errorf("package %q %w", packageID, errPackageNotFound)
 	}
 
 	sortVersionsDesc(versions)

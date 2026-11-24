@@ -340,13 +340,6 @@ func fetchPackageMetadataAsync(ctx context.Context, send func(ui.Event), generat
 	}
 
 	go func() {
-		var nugetOrgSvc *NugetService
-		for _, svc := range nugetServices {
-			if strings.EqualFold(svc.SourceName(), "nuget.org") {
-				nugetOrgSvc = svc
-				break
-			}
-		}
 		workerCount := 8
 		if len(packageNames) < workerCount {
 			workerCount = len(packageNames)
@@ -361,40 +354,19 @@ func fetchPackageMetadataAsync(ctx context.Context, send func(ui.Event), generat
 					if ctx.Err() != nil {
 						return
 					}
-					var info *PackageInfo
-					var sourceName string
-					var lastErr error
-					eligibleServices := FilterServices(nugetServices, sourceMapping, name)
-					if len(eligibleServices) == 0 {
-						if len(nugetServices) == 0 {
-							lastErr = fmt.Errorf("no metadata-capable NuGet source is available for %q", name)
-						} else {
-							lastErr = fmt.Errorf("package source mapping allows no available source for %q", name)
-						}
-					}
-					for _, svc := range eligibleServices {
-						info, lastErr = svc.SearchExactContext(ctx, name)
-						if lastErr == nil {
-							sourceName = svc.SourceName()
-							break
-						}
-						logDebug("Source [%s] failed for %s: %v", svc.SourceName(), name, lastErr)
-					}
-
-					if info != nil && !strings.EqualFold(sourceName, "nuget.org") && nugetOrgSvc != nil && serviceIncluded(eligibleServices, nugetOrgSvc) {
-						if nugetInfo, err := nugetOrgSvc.SearchExactContext(ctx, name); err == nil {
-							info.NugetOrgURL = "https://www.nuget.org/packages/" + nugetInfo.ID
-							enrichFromNugetOrg(info, nugetInfo)
-						}
-					}
-
+					metadata := fetchPackageMetadata(ctx, nugetServices, sourceMapping, name)
 					if ctx.Err() != nil {
 						return
+					}
+					for _, failure := range metadata.Failures {
+						if metadata.Info != nil {
+							logDebug("Source [%s] failed for %s; using the other sources: %v", failure.Source, name, failure.Err)
+						}
 					}
 					send(packageReadyMsg{
 						generation: generation,
 						name:       name,
-						result:     nugetResult{pkg: info, source: sourceName, err: lastErr},
+						result:     nugetResult{pkg: metadata.Info, source: metadata.Source, err: metadata.Err},
 					})
 				}
 			}()
@@ -411,13 +383,4 @@ func fetchPackageMetadataAsync(ctx context.Context, send func(ui.Event), generat
 		close(jobs)
 		wg.Wait()
 	}()
-}
-
-func serviceIncluded(services []*NugetService, target *NugetService) bool {
-	for _, service := range services {
-		if service == target {
-			return true
-		}
-	}
-	return false
 }
