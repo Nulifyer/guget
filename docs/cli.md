@@ -100,11 +100,11 @@ project in the workspace uses. Unlisted versions never count. Vulnerabilities an
 deprecation apply to the exact version a row uses. A `PackageDownload` row is
 never assessed: its fields stay `null` and no filter keeps it.
 
-Fetching metadata stops after 30 seconds unless you pass `--timeout`, which
-then bounds the whole command. When the metadata of some packages is missing,
-for example because a package is on no source or one source failed, those rows
-keep `null` fields, filters drop them, a warning names them, and the command
-exits 7. When every source fails, it exits 3.
+Fetching metadata stops after 30 seconds and the command exits 124, unless
+you pass `--timeout`, which then bounds the whole command. When the metadata
+of some packages is missing, for example because a package is on no source or
+one source failed, those rows keep `null` fields, filters drop them, a warning
+names them, and the command exits 7. When every source fails, it exits 3.
 
 Package rows have these fields:
 
@@ -269,10 +269,10 @@ combinations exit 1. Exact pins follow the same rules as an explicit version.
 The document's `updateTarget` key names the target used, or is `null` for
 `--version`.
 
-Fetching metadata stops after 30 seconds unless you pass `--timeout`. When no
-source supplies the package, the command exits 3. When a source fails but
-another answers, Guget chooses from the versions it has, warns, and exits 7
-after the edit. `add` still needs `--version`: its `--latest-compatible` and
+Fetching metadata stops after 30 seconds and the command exits 124, unless you
+pass `--timeout`. When no source supplies the package, the command exits 3.
+When a source fails but another answers, Guget chooses from the versions it
+has, warns, and exits 7 after the edit. `add` still needs `--version`: its `--latest-compatible` and
 `--latest-stable` exit 4.
 
 ### Exact pins
@@ -313,9 +313,13 @@ guget add Newtonsoft.Json --version 13.0.4 --project ./src --file App/App.csproj
 guget show Newtonsoft.Json --project ./src --format json
 ```
 
-In a CPM workspace, check the existing central version before adding a reference.
-Use that version when the package is already centrally defined, then verify the
-effective result. The CLI does not offer the TUI's choice of add locations.
+In a CPM workspace, `add` writes a reference without a version, and a new
+`PackageVersion` goes to the central file the project imports. When the package
+already has a central version, request that version and `add` writes only the
+reference. A different version exits 4, and the message shows the `update`
+command that changes the shared version for every project. See
+[add a package under CPM](project-support.md#add-a-package-under-cpm).
+The CLI does not offer the TUI's choice of add locations.
 
 ## Remove a package
 
@@ -324,8 +328,10 @@ guget remove Newtonsoft.Json --project ./src --file App/App.csproj --dry-run --f
 guget remove Newtonsoft.Json --project ./src --file App/App.csproj --restore
 ```
 
-Removal leaves a shared central version in place. Guget may refuse removal of a
-reference inherited from a shared props file.
+Removal leaves a shared central version in place. `remove` exits 4 for a
+reference that a project inherits from an imported props file, and for a
+`GlobalPackageReference`. Remove those in the TUI from All Projects, or edit
+the shared file.
 
 Plan rows, in `changes`, have these fields:
 
@@ -355,10 +361,13 @@ guget restore --project ./src --file App/App.csproj --interactive
 
 On add, update, and remove, `--restore` also restores every project an edit
 affects: projects that read a changed shared file, such as
-`Directory.Packages.props`, and projects that reference those. Guget prints
+`Directory.Packages.props`, and projects that reference those, directly or
+through other projects. Guget restores them in dependency order and prints
 each added project and why on stderr. A project whose lock file is in locked
 mode is restored with `--force-evaluate`, so NuGet regenerates its
-`packages.lock.json`. See [project support](project-support.md#restore-after-an-edit).
+`packages.lock.json`. `guget restore` on its own restores only the projects
+you name and never adds `--force-evaluate`. See
+[project support](project-support.md#restore-after-an-edit).
 
 On add, update, and remove, `--interactive` requires `--restore` as well.
 A failed restore can follow a successful file edit. Check the changed reference
@@ -460,12 +469,15 @@ guget list --project ./src --format '{{.package}} {{join .targetFrameworks ","}}
 Guget checks the template and its field names before it reads the workspace,
 runs MSBuild, or contacts a feed. A syntax error or an unknown field exits 1 and
 lists the valid fields. Guget also runs the template once on a sample row with
-every field empty and one item in each list, so an error such as reading a
-field of a text value, `{{.status.x}}`, exits 1 as well. A template can still
-fail on real values in a branch the sample skips. If that happens after an edit
-or restore has run, the command exits 5 and the change stays in place. For add, update, and remove, a dry run renders the plan
-rows; applying renders the one result document, so its fields are the
-document's top-level keys such as `status` and `changed`.
+every field empty and one item in each list. An error such as reading a field
+of a text value, for example `{{.status.x}}` on a `restore` row, exits 1 as
+well. A template can still fail on real values in a branch the sample skips.
+If that happens after an edit or restore has run, the command exits 5 and the
+change stays in place.
+
+For add, update, and remove, a dry run renders the plan rows. Applying renders
+the one result document, so its fields are the document's top-level keys such
+as `status` and `changed`.
 
 ### Output files
 
@@ -587,14 +599,15 @@ guget update Example --project ./src --file App/App.csproj --version 2.0.0 --for
 | `5` | File write or rollback failure, or an unusable `--output`. Inspect changed files before retrying. |
 | `6` | Restore failure. An edit may already be present. |
 | `7` | Partial result: some requested data could not be produced. Inspect warnings before using it. |
-| `124` | `--timeout` expired. Guget prints `guget: timed out after` and the duration. |
+| `124` | A time limit expired: `--timeout`, or the 30-second default for `search` and for fetching package metadata. Guget prints `guget: timed out after` and the duration. |
 | `130` | Interrupted. Check the current state before retrying a mutation. |
 
 Warnings about permanent conditions do not change the exit code. Examples are a
 restore-only source skipped by search and an unsupported package artifact such
 as `packages.config`.
 
-Codes each command can return besides 0, 1, 124, and 130:
+Codes each command can return besides 0, 1, and 130. Every command that
+accepts `--timeout` can also return 124.
 
 | Command | Other codes |
 | --- | --- |
@@ -602,7 +615,8 @@ Codes each command can return besides 0, 1, 124, and 130:
 | `show` | 2, 5, 7 |
 | `sources` | 2, 5 |
 | `search` | 2, 3, 5, 7 |
-| `add`, `remove` | 2, 4, 5, 6 |
+| `add` | 2, 3, 4, 5, 6 |
+| `remove` | 2, 4, 5, 6 |
 | `update` | 2, 3, 4, 5, 6, 7 |
 | `restore` | 2, 5, 6 |
 | `config` | 5 |
