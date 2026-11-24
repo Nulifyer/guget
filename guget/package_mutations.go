@@ -20,9 +20,32 @@ type mutationTarget struct {
 
 type mutationOptions struct {
 	ctx               context.Context
-	skipLocked        bool
+	skipLocked        bool // bulk updates leave exact [x.y.z] pins alone
+	refuseLocked      bool // explicit updates of an exact pin are refused
 	removeInherited   bool
-	allowDeclaredEdit bool // TUI only, after validating the loaded input revisions
+	allowDeclaredEdit bool                     // TUI only, after validating the loaded input revisions
+	runner            packageops.ProcessRunner // MSBuild runner; nil runs dotnet
+}
+
+// pinnedSkipOperation marks a plan row for an exact pin that a bulk update left
+// unchanged. Such rows have no file operation.
+const pinnedSkipOperation = "skip (pinned)"
+
+// evaluationError reports that MSBuild evaluation, required to establish
+// ownership, was unavailable or failed. It is a workspace failure rather than
+// an edit-policy refusal.
+type evaluationError struct{ err error }
+
+func (e evaluationError) Error() string { return e.err.Error() }
+func (e evaluationError) Unwrap() error { return e.err }
+
+// pinnedPackageError refuses an explicit update of an exact version pin.
+type pinnedPackageError struct {
+	Package, Version, Owner string
+}
+
+func (e pinnedPackageError) Error() string {
+	return fmt.Sprintf("%q is pinned to %s in %s", e.Package, e.Version, e.Owner)
 }
 
 func buildMutationPlan(verb, packageID, version string, projects []*ParsedProject) (editplan.Plan, []planRow, error) {
@@ -48,6 +71,7 @@ func planPackageMutation(verb, packageID, version string, targets []mutationTarg
 	}
 	var operations []projectedit.Operation
 	var rows []planRow
+	var skippedRows []planRow
 	skipped := 0
 	packageSeen := false
 	appendOperation := func(kind projectedit.Kind, path, operation, targetVersion string) {
@@ -61,7 +85,7 @@ func planPackageMutation(verb, packageID, version string, targets []mutationTarg
 			if ctx == nil {
 				ctx = context.Background()
 			}
-			evaluated, err := evaluatedMutationProject(ctx, project, packageID, verb)
+			evaluated, err := evaluatedMutationProject(ctx, project, packageID, verb, options.runner)
 			if err != nil {
 				return editplan.Plan{}, nil, skipped, err
 			}
@@ -117,11 +141,15 @@ func planPackageMutation(verb, packageID, version string, targets []mutationTarg
 			if installed == nil {
 				continue
 			}
+			owner := project.SourceFileForPackage(packageID)
+			if installed.Locked && options.refuseLocked {
+				return editplan.Plan{}, nil, skipped, pinnedPackageError{Package: packageID, Version: installed.Requested, Owner: owner}
+			}
 			if options.skipLocked && installed.Locked {
 				skipped++
+				skippedRows = append(skippedRows, planRow{Operation: pinnedSkipOperation, Package: packageID, Version: installed.Requested, Path: owner})
 				continue
 			}
-			owner := project.SourceFileForPackage(packageID)
 			if !supportedMutationOwner(owner) {
 				return editplan.Plan{}, nil, skipped, fmt.Errorf("unsupported package owner %s; supported owners are project and .props files", owner)
 			}
@@ -176,6 +204,18 @@ func planPackageMutation(verb, packageID, version string, targets []mutationTarg
 			delete(changed, path)
 		}
 	}
+	seenSkips := make(map[string]bool)
+	for _, row := range skippedRows {
+		path, err := canonicalMutationPath(row.Path)
+		if err != nil {
+			return editplan.Plan{}, nil, skipped, err
+		}
+		if !seenSkips[path] {
+			row.Path = path
+			actualRows = append(actualRows, row)
+			seenSkips[path] = true
+		}
+	}
 	return plan, actualRows, skipped, nil
 }
 
@@ -195,10 +235,10 @@ func fileDefinesPackage(path, id string) (bool, error) { return projectedit.Defi
 
 // evaluatedMutationProject resolves conditional imports for every framework.
 // Source edits still require a unique unconditional literal declaration.
-func evaluatedMutationProject(ctx context.Context, project *ParsedProject, packageID, verb string) (*ParsedProject, error) {
-	snapshot, err := (packageops.MSBuildInspector{}).InspectProject(ctx, project.FilePath)
+func evaluatedMutationProject(ctx context.Context, project *ParsedProject, packageID, verb string, runner packageops.ProcessRunner) (*ParsedProject, error) {
+	snapshot, err := (packageops.MSBuildInspector{Runner: runner}).InspectProject(ctx, project.FilePath)
 	if err != nil {
-		return nil, fmt.Errorf("%s requires MSBuild evaluation to establish active ownership: %w", project.FileName, err)
+		return nil, fmt.Errorf("%s requires MSBuild evaluation to establish active ownership: %w", project.FileName, evaluationError{err})
 	}
 	if verb == "add" && snapshot.CentralPackageManagement != (projectCPMTarget(project) != "") {
 		return nil, fmt.Errorf("%s has evaluated central-package configuration that cannot be assigned to a unique add target safely", project.FileName)

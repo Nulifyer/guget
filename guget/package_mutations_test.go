@@ -1,12 +1,53 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestMutationPlanReportsSkippedAndRefusedPins(t *testing.T) {
+	root := t.TempDir()
+	path := writeCLIProject(t, root, "Pinned", `<Project><ItemGroup><PackageReference Include="Example" Version="[1.0.0]" /></ItemGroup></Project>`)
+	project, err := ParseCsproj(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	targets := []mutationTarget{{project: project}}
+	plan, rows, skipped, err := planPackageMutation("update", "Example", "2.0.0", targets, mutationOptions{skipLocked: true})
+	if err != nil || plan.Len() != 0 || skipped != 1 || len(rows) != 1 || rows[0].Operation != pinnedSkipOperation || rows[0].Version != "[1.0.0]" {
+		t.Fatalf("plan len=%d rows=%+v skipped=%d err=%v", plan.Len(), rows, skipped, err)
+	}
+	_, _, _, err = planPackageMutation("update", "Example", "2.0.0", targets, mutationOptions{refuseLocked: true})
+	var pinned pinnedPackageError
+	if !errors.As(err, &pinned) || pinned.Version != "[1.0.0]" {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+type failingRunner struct{}
+
+func (failingRunner) Run(context.Context, string, ...string) ([]byte, error) {
+	return nil, errors.New("dotnet unavailable")
+}
+
+func TestMutationPlanReportsEvaluationFailureSeparately(t *testing.T) {
+	root := t.TempDir()
+	path := writeCLIProject(t, root, "Sdk", `<Project Sdk="Microsoft.NET.Sdk"><ItemGroup><PackageReference Include="Example" Version="1.0.0" /></ItemGroup></Project>`)
+	project, err := ParseCsproj(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, _, err = planPackageMutation("update", "Example", "2.0.0", []mutationTarget{{project: project}}, mutationOptions{runner: failingRunner{}})
+	var evaluation evaluationError
+	if !errors.As(err, &evaluation) || !strings.Contains(err.Error(), "requires MSBuild evaluation") {
+		t.Fatalf("err=%v", err)
+	}
+}
 
 func TestMutationPlanReportsOnlyActualChanges(t *testing.T) {
 	root := t.TempDir()
