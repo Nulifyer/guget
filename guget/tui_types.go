@@ -368,6 +368,14 @@ type packageRow struct {
 	vulnerable         bool                  // an installed version has ≥1 known vulnerability
 	deprecated         bool                  // an installed version is deprecated in the registry
 	deprecation        *InstalledDeprecation // the first deprecated installed version
+	unusable           []unusableInstall     // installed versions a referencing project's frameworks cannot use
+}
+
+// unusableInstall is an installed version that the feed lists without
+// support for a target framework of the project that references it.
+type unusableInstall struct {
+	version string
+	project string // file name
 }
 
 // effectiveVersion returns the version used for status comparisons.
@@ -417,6 +425,9 @@ func (r packageRow) statusIcon() string {
 	if r.deprecated {
 		return "~"
 	}
+	if len(r.unusable) > 0 {
+		return "!"
+	}
 	return "✓"
 }
 
@@ -437,6 +448,9 @@ func (r packageRow) statusStyle() style.Style {
 		return styleYellow
 	}
 	if r.deprecated {
+		return styleYellow
+	}
+	if len(r.unusable) > 0 {
 		return styleYellow
 	}
 	return styleGreen

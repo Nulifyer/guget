@@ -386,6 +386,21 @@ func (m *App) assessRow(row *packageRow, refs []PackageReference, targets Set[Ta
 	}
 }
 
+// installedUnusable reports whether the feed lists version without support
+// for one of targets. A version the feed does not list, or lists without
+// frameworks, is never reported: nothing is known against it.
+func installedUnusable(info *PackageInfo, version SemVer, targets Set[TargetFramework]) bool {
+	if info == nil || !version.IsValid() || targets.Len() == 0 {
+		return false
+	}
+	for i := range info.Versions {
+		if info.Versions[i].SemVer.Equal(version) {
+			return !versionCompatible(info.Versions[i], targets)
+		}
+	}
+	return false
+}
+
 // rowVersion is the version a row treats as current: the reference's known
 // version or, for floating and open-ended requests such as "1.*" or
 // "(1.0,)", the version restore selects from the package's versions. It stays
@@ -422,8 +437,9 @@ func (m *App) rebuildPackageRows() {
 	if sel == nil {
 		// All Projects — merge by package name
 		type group struct {
-			refs    []PackageReference
-			project *ParsedProject
+			refs     []PackageReference
+			projects []*ParsedProject // the project of each ref
+			project  *ParsedProject
 		}
 		grouped := make(map[string]*group)
 
@@ -435,6 +451,7 @@ func (m *App) rebuildPackageRows() {
 					grouped[ref.Name] = g
 				}
 				g.refs = append(g.refs, ref)
+				g.projects = append(g.projects, p)
 			}
 		}
 
@@ -473,6 +490,12 @@ func (m *App) rebuildPackageRows() {
 				oldest:            oldest,
 			}
 			m.assessRow(&row, g.refs, frameworks[strings.ToLower(name)])
+			for i, version := range versions {
+				if installedUnusable(res.pkg, version, g.projects[i].TargetFrameworks) {
+					row.unusable = append(row.unusable, unusableInstall{version: version.String(), project: g.projects[i].FileName})
+				}
+			}
+			slices.SortFunc(row.unusable, func(a, b unusableInstall) int { return strings.Compare(a.project, b.project) })
 			rows = append(rows, row)
 		}
 	} else {
@@ -488,6 +511,11 @@ func (m *App) rebuildPackageRows() {
 			}
 			row.ref.Version = rowVersion(ref, res.pkg)
 			m.assessRow(&row, []PackageReference{ref}, frameworks[strings.ToLower(ref.Name)])
+			// The same frameworks as the Available column: the selected
+			// project's and those of projects sharing the version's owner.
+			if installedUnusable(res.pkg, row.ref.Version, frameworks[strings.ToLower(ref.Name)]) {
+				row.unusable = []unusableInstall{{version: row.ref.Version.String()}}
+			}
 			rows = append(rows, row)
 		}
 	}

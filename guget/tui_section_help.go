@@ -98,6 +98,7 @@ func (s *helpOverlay) refreshView() {
 				{"⇑", "update available, and a newer stable version exists that a target framework cannot use"},
 				{"✓", "up to date under the update target"},
 				{"▲  ~", "an installed version is vulnerable / deprecated"},
+				{"!", "an installed version does not support a target framework of its project"},
 				{".  ✗", "metadata is loading / lookup failed, or no version is on every project's sources"},
 				{"1.2.0 (2.0.0)", "Available: the update target (u), then the latest stable version (a) when it differs"},
 				{"[deps]  pin", "update needs a dependency changed first / exact-version pin"},

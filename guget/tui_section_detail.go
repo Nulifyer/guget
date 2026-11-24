@@ -127,6 +127,19 @@ func (m *App) renderDetailUpdateRequirements(row packageRow) string {
 		s.WriteString(styleYellow.Render("Version pinned") + "\n")
 		s.WriteString(styleSubtle.Render("Updating this project asks for confirmation. Bulk updates skip it.") + "\n\n")
 	}
+	if len(row.unusable) > 0 {
+		// The row can still read as up to date; say what restore will meet.
+		s.WriteString(styleYellow.Render("Installed version not usable") + "\n")
+		var installs []string
+		for _, install := range row.unusable {
+			scope := "the affected projects"
+			if install.project != "" {
+				scope = install.project
+			}
+			installs = append(installs, install.version+" does not support every target framework of "+scope+".")
+		}
+		s.WriteString(styleSubtle.Render(strings.Join(installs, " ")+" v lists the versions that do.") + "\n\n")
+	}
 	if skipped := row.skippedStable(); skipped != nil {
 		// The status icon and u ignore this version; say why it is in the
 		// Available column's parentheses and how to take it anyway.

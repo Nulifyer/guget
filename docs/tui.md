@@ -77,6 +77,8 @@ after confirmation.
 Update targets consider every affected project's frameworks, including
 projects that consume the same shared version. Latest stable and explicit picker
 choices can require newer frameworks; restore and test each affected project.
+A project left on a version its frameworks cannot use is marked `!`, and the
+detail panel adds **Installed version not usable**.
 The version picker opens on the update target.
 
 The Available column shows the update target first. When the latest stable
@@ -276,6 +278,7 @@ change a setting.
 | `✗` | Metadata lookup failed, or the projects referencing the package use NuGet sources with no version of it in common. The detail panel says which: **No version for every project** lists those projects. |
 | `▲` | A known vulnerability is reported for an installed version. |
 | `~` | The feed marks an installed version deprecated. |
+| `!` | No update is available, and the feed lists an installed version without support for a target framework of its project. The detail panel shows **Installed version not usable**; `v` lists the versions that are usable. |
 | `↑` | An update to the update target is available. |
 | `⇑` | An update is available, and a newer stable version exists beyond it that some framework cannot use. |
 | `✓` | No update is available under the update target. A newer version that a framework cannot use does not count; Available shows it in parentheses and the detail panel shows **Newer version not offered**. |
