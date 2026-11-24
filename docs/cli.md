@@ -73,6 +73,9 @@ Package rows have these fields:
 | `editSupported` | `true` when Guget can edit this reference. |
 | `editReason` | Why the row is read-only, or `null`. |
 | `locked` | `true` for an exact pin such as `[1.2.3]`. |
+| `global` | `true` for a `GlobalPackageReference`, which applies to every project importing its file. |
+| `privateAssets` | The reference's `PrivateAssets`, such as `All` for a global package, or `null`. |
+| `download` | `true` for a read-only `PackageDownload` row. Downloads are restore-only and not dependencies. |
 
 ## Search configured sources
 
@@ -221,6 +224,13 @@ For feed authentication that needs a prompt, run in an interactive terminal:
 ```bash
 guget restore --project ./src --file App/App.csproj --interactive
 ```
+
+On add, update, and remove, `--restore` also restores every project an edit
+affects: projects that read a changed shared file, such as
+`Directory.Packages.props`, and projects that reference those. Guget prints
+each added project and why on stderr. A project whose lock file is in locked
+mode is restored with `--force-evaluate`, so NuGet regenerates its
+`packages.lock.json`. See [project support](project-support.md#restore-after-an-edit).
 
 On add, update, and remove, `--interactive` requires `--restore` as well.
 A failed restore can follow a successful file edit. Check the changed reference
