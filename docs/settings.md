@@ -134,7 +134,9 @@ print them to standard error.
 }
 ```
 
-The real output lists every key; this example shows one.
+The real output lists every key; this example shows one. For `mouse`,
+`update-check`, and `color`, `value` and `default` are JSON `true` or `false`
+rather than strings.
 
 `guget config set` checks the value before it writes and exits with status 1
 for an unknown key or a value that isn't allowed. It changes only the line for

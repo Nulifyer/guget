@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -190,7 +191,8 @@ func TestConfigCommandShowJSON(t *testing.T) {
 		Command       string `json:"command"`
 		Path          string `json:"path"`
 		Settings      []struct {
-			Key, Value, Source, Default, Description string
+			Key, Source, Description string
+			Value, Default           any
 		} `json:"settings"`
 		Warnings []string `json:"warnings"`
 	}
@@ -205,16 +207,16 @@ func TestConfigCommandShowJSON(t *testing.T) {
 		if row.Description == "" {
 			t.Fatalf("%s has no description", row.Key)
 		}
-		got = append(got, row.Key+"="+row.Value+"/"+row.Source+"/"+row.Default)
+		got = append(got, fmt.Sprintf("%s=%#v/%s/%#v", row.Key, row.Value, row.Source, row.Default))
 	}
 	want := []string{
-		"theme=nord/file/auto",
-		"sort=status:asc/default/status:asc",
-		"mouse=true/default/true",
-		"update-check=true/default/true",
-		"verbosity=warn/default/warn",
-		"color=false/env/true",
-		"update-target=compatible-stable/default/compatible-stable",
+		`theme="nord"/file/"auto"`,
+		`sort="status:asc"/default/"status:asc"`,
+		`mouse=true/default/true`,
+		`update-check=true/default/true`,
+		`verbosity="warn"/default/"warn"`,
+		`color=false/env/true`,
+		`update-target="compatible-stable"/default/"compatible-stable"`,
 	}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("settings:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))

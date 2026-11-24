@@ -28,11 +28,13 @@ Run guget config show to list the keys.
 `
 }
 
+// configSettingRow holds Value and Default as a bool for boolean keys and a
+// string otherwise, so JSON reports booleans as true or false.
 type configSettingRow struct {
 	Key         string `json:"key"`
-	Value       string `json:"value"`
+	Value       any    `json:"value"`
 	Source      string `json:"source"`
-	Default     string `json:"default"`
+	Default     any    `json:"default"`
 	Description string `json:"description"`
 }
 
@@ -130,8 +132,8 @@ func (r cliRuntime) showConfig(args cliArgs, values userconfig.Values) ExitCode 
 	doc := configDocument{SchemaVersion: 1, Command: "config", Path: values.Path, Settings: []configSettingRow{}, Warnings: values.Warnings}
 	for _, setting := range values.Settings {
 		doc.Settings = append(doc.Settings, configSettingRow{
-			Key: setting.Key.Name, Value: setting.Value, Source: string(setting.Source),
-			Default: setting.Key.Default, Description: setting.Key.Description,
+			Key: setting.Key.Name, Value: typedSettingValue(setting.Key, setting.Value), Source: string(setting.Source),
+			Default: typedSettingValue(setting.Key, setting.Key.Default), Description: setting.Key.Description,
 		})
 	}
 	format := outputFormat(args, r.stdout)
@@ -144,6 +146,13 @@ func (r cliRuntime) showConfig(args cliArgs, values userconfig.Values) ExitCode 
 		r.emitWarnings(doc.Warnings)
 	}
 	return r.writeOutput(args.value("output", ""), data)
+}
+
+func typedSettingValue(key userconfig.Key, value string) any {
+	if key.Kind == userconfig.Bool {
+		return value == "true"
+	}
+	return value
 }
 
 func renderConfig(doc configDocument, format string) ([]byte, error) {
@@ -166,7 +175,7 @@ func renderConfig(doc configDocument, format string) ([]byte, error) {
 		writer := tabwriter.NewWriter(&buffer, 0, 4, 2, ' ', 0)
 		fmt.Fprintln(writer, "KEY\tVALUE\tSOURCE\tDEFAULT\tDESCRIPTION")
 		for _, row := range doc.Settings {
-			fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\n", row.Key, row.Value, row.Source, row.Default, row.Description)
+			fmt.Fprintf(writer, "%s\t%v\t%s\t%v\t%s\n", row.Key, row.Value, row.Source, row.Default, row.Description)
 		}
 		if err := writer.Flush(); err != nil {
 			return nil, err
@@ -174,7 +183,7 @@ func renderConfig(doc configDocument, format string) ([]byte, error) {
 	case "tsv":
 		fmt.Fprintln(&buffer, "KEY\tVALUE\tSOURCE\tDEFAULT\tDESCRIPTION")
 		for _, row := range doc.Settings {
-			fmt.Fprintf(&buffer, "%s\t%s\t%s\t%s\t%s\n", row.Key, row.Value, row.Source, row.Default, row.Description)
+			fmt.Fprintf(&buffer, "%s\t%v\t%s\t%v\t%s\n", row.Key, row.Value, row.Source, row.Default, row.Description)
 		}
 	default:
 		return nil, fmt.Errorf("invalid --format %q (expected table, tsv, json, or jsonl)", format)
