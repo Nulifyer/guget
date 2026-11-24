@@ -1,6 +1,7 @@
 package main
 
 import (
+	"slices"
 	"strings"
 
 	ui "github.com/nulifyer/guget/internal/ui"
@@ -194,6 +195,11 @@ func (s *versionPicker) Render() string {
 		if isVulnerable {
 			extras += styleRed.Render(" ▲")
 		}
+		if v.Deprecation != nil {
+			// NuGet deprecates individual versions; mark each one, as the
+			// package list does for the installed version.
+			extras += styleYellow.Render(" ~")
+		}
 		if isPre {
 			extras += styleMuted.Render(" pre")
 		}
@@ -240,6 +246,9 @@ func (s *versionPicker) Render() string {
 			styleYellow.Render("■") + " pre  " +
 			styleRed.Render("■") + " incompat  " +
 			styleRed.Render("▲") + " vuln"
+		if slices.ContainsFunc(versions, func(v PackageVersion) bool { return v.Deprecation != nil }) {
+			legend += "  " + styleYellow.Render("~") + " depr"
+		}
 		lines = append(lines, styleMuted.Render(legend))
 		lines = append(lines, "")
 	}
