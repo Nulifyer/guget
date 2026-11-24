@@ -72,8 +72,9 @@ and deprecation fields of each row:
 
 The filters combine as "any of": `--deprecated --vulnerable` keeps rows that
 are deprecated, vulnerable, or both. `dotnet list package` accepts only one of
-its matching options at a time; each guget filter on its own selects what that
-dotnet option selects for the same version.
+its matching options at a time. `--vulnerable` and `--deprecated` judge the
+same version its options do, and `--outdated` matches `dotnet list package
+--outdated` under `--update-target stable`, as described below.
 
 Rows compare the restored version, as `dotnet list package` does. When restore
 metadata is missing they use the requested version. A row's update target
