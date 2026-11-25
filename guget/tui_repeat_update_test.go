@@ -77,6 +77,52 @@ func TestRepeatedUpdatePressesWorkDownTheStatusSortedList(t *testing.T) {
 	}
 }
 
+// A's update waits for B's, and A is vulnerable, so by priority alone A
+// would be first and stop the key. The status sort lists B just above A:
+// repeated presses from the top update B, then A, then the rest.
+func TestRepeatedUpdatePressesUpdateADependencyBeforeItsDependent(t *testing.T) {
+	for _, view := range []string{"project", "all projects"} {
+		t.Run(view, func(t *testing.T) {
+			m, messages, path := newActionTestApp(t, repeatTestProject)
+			versions := m.ctx.Results["A"].pkg.Versions
+			versions[1].DependencyGroups = []dependencyGroup{{TargetFramework: "net8.0", Dependencies: []packageDependency{{ID: "b", Range: "[2.0.0, )"}}}}
+			versions[2].Vulnerabilities = []PackageVulnerability{{AdvisoryURL: "https://example.invalid/security", Severity: 2}}
+			if view == "all projects" {
+				selectAllProjectsForTest(t, m)
+			}
+			m.rebuildPackageRows()
+			m.packages.cursor = 0
+			var order []string
+			for _, row := range m.packages.rows {
+				order = append(order, row.ref.Name)
+			}
+			if got := strings.Join(order, " "); got != "B A C" {
+				t.Fatalf("order = %s, want B A C", got)
+			}
+			if a := m.packages.rows[1]; !a.vulnerable || len(a.updateRequirements) == 0 {
+				t.Fatalf("A: vulnerable=%v requirements=%v", a.vulnerable, a.updateRequirements)
+			}
+			for _, name := range []string{"B", "A", "C"} {
+				if m.packages.cursor != 0 || selectedActionPackage(m) != name {
+					t.Fatalf("cursor=%d selected=%s, want %s at row 0", m.packages.cursor, selectedActionPackage(m), name)
+				}
+				save := m.HandleEvent(ui.KeyPress(ui.Key{Code: 'u', IsRepeat: true}))
+				if save == nil || !m.ctx.Saving {
+					t.Fatalf("press did not start the update of %s: status=%q", name, m.ctx.StatusLine)
+				}
+				executeActionCmd(t, m, save)
+				finishActionReload(t, m, messages)
+				if want := "✓ Updated " + name + " to 2.0.0"; !strings.Contains(m.ctx.StatusLine, want) {
+					t.Fatalf("status=%q, want %q", m.ctx.StatusLine, want)
+				}
+			}
+			if versions := repeatTestVersions(t, path); versions["A"] != "2.0.0" || versions["B"] != "2.0.0" || versions["C"] != "2.0.0" {
+				t.Fatalf("versions=%v", versions)
+			}
+		})
+	}
+}
+
 // A press during a reload is dropped like one during a save: the footer
 // shows "reloading..." in place of the status row.
 func TestUpdatePressDuringReloadLeavesTheStatusRow(t *testing.T) {
@@ -183,4 +229,65 @@ func TestQuickUpdateAcrossProjectsNamesAPinLeftBehind(t *testing.T) {
 	if cmd := m.handleKey(ui.KeyPress(ui.Key{Code: 'u'})); cmd != nil || m.ctx.StatusLine != "A is already at 2.0.0" {
 		t.Fatalf("status=%q", m.ctx.StatusLine)
 	}
+}
+
+// Before metadata arrives the rows are in name order. Metadata then re-sorts
+// them. A cursor the user has not moved stays on the top row, so the first
+// u acts on the package the sort put first. Once the user picks a row, a
+// later re-sort follows that package.
+func TestMetadataResortKeepsAnUnmovedCursorOnTheTopRow(t *testing.T) {
+	m, _, _ := newActionTestApp(t, `<Project><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup><ItemGroup><PackageReference Include="Alpha" Version="1.0.0"/><PackageReference Include="Bravo" Version="1.0.0"/><PackageReference Include="Charlie" Version="1.0.0"/></ItemGroup></Project>`)
+	arrive := func(name string, versions ...string) {
+		t.Helper()
+		info := &PackageInfo{ID: name}
+		for _, version := range versions {
+			info.Versions = append(info.Versions, PackageVersion{SemVer: ParseSemVer(version), Frameworks: []TargetFramework{ParseTargetFramework("net8.0")}})
+		}
+		m.HandleEvent(packageReadyMsg{generation: m.workspaceGeneration, name: name, result: nugetResult{pkg: info}})
+		m.HandleEvent(packageRowsRefreshMsg{})
+	}
+	check := func(cursor int, selected, order string) {
+		t.Helper()
+		var names []string
+		for _, row := range m.packages.rows {
+			names = append(names, row.ref.Name)
+		}
+		if got := strings.Join(names, " "); got != order || m.packages.cursor != cursor || selectedActionPackage(m) != selected {
+			t.Fatalf("order=%q cursor=%d selected=%s, want %q with %s at row %d", got, m.packages.cursor, selectedActionPackage(m), order, selected, cursor)
+		}
+		// A row without metadata has no detail to show yet.
+		if detail := m.detail.vp.GetContent(); m.packages.rows[cursor].info != nil && !strings.Contains(detail, selected) {
+			t.Fatalf("the detail panel does not show %s:\n%s", selected, detail)
+		}
+	}
+	check(0, "Alpha", "Alpha Bravo Charlie")
+
+	// Bravo has an update and sorts first; the cursor stays at the top.
+	arrive("Bravo", "2.0.0", "1.0.0")
+	check(0, "Bravo", "Bravo Alpha Charlie")
+	arrive("Alpha", "1.0.0")
+	check(0, "Bravo", "Bravo Alpha Charlie")
+
+	// The user picks Alpha. Charlie's update moves it above Alpha, and the
+	// cursor follows Alpha down.
+	m.HandleEvent(ui.KeyPress(ui.Key{Code: ui.KeyDown}))
+	check(1, "Alpha", "Bravo Alpha Charlie")
+	arrive("Charlie", "2.0.0", "1.0.0")
+	check(2, "Alpha", "Bravo Charlie Alpha")
+
+	// Picking the top row is a choice as well: Up from row 1 selects Bravo,
+	// and a re-sort follows Bravo.
+	m.selectPackageByName("Charlie")
+	m.HandleEvent(ui.KeyPress(ui.Key{Code: ui.KeyUp}))
+	check(0, "Bravo", "Bravo Charlie Alpha")
+	arrive("Bravo", "1.0.0")
+	check(2, "Bravo", "Charlie Alpha Bravo")
+
+	// A new sort starts at the top again.
+	m.cyclePackageSort()
+	m.packages.sortMode, m.packages.sortDir = sortByStatus, true
+	m.refreshPackageSort()
+	check(0, "Charlie", "Charlie Alpha Bravo")
+	arrive("Alpha", "3.0.0", "1.0.0")
+	check(0, "Alpha", "Alpha Charlie Bravo")
 }

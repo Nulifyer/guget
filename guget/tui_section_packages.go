@@ -229,6 +229,7 @@ func (m *App) reversePackageSort() {
 
 func (m *App) refreshPackageSort() {
 	m.packages.cursor = 0
+	m.packages.atTop = true
 	m.packages.scroll = 0
 	m.rebuildPackageRows()
 	m.refreshDetail()
@@ -549,9 +550,12 @@ func (m *App) rebuildPackageRows() {
 	}
 
 	if !m.packages.sortDir {
-		for i, j := 0, len(rows)-1; i < j; i, j = i+1, j-1 {
-			rows[i], rows[j] = rows[j], rows[i]
-		}
+		slices.Reverse(rows)
+	}
+	if m.packages.sortMode == sortByStatus {
+		// After the direction, so a dependency precedes its dependents in
+		// both: the list is updated from the top either way.
+		hoistUpdateDependencies(rows)
 	}
 
 	m.packages.rows = rows
@@ -586,6 +590,87 @@ func sortPackageRowsByStatus(rows []packageRow) {
 	slices.SortStableFunc(rows, func(a, b packageRow) int {
 		return cmp.Compare(priority(a), priority(b))
 	})
+}
+
+// hoistUpdateDependencies moves each row that another row's update waits for
+// (packageRow.updateRequirements) to just before the first row that needs
+// it, so updating the list from the top reaches a dependency before its
+// dependents. A dependency brings its own dependencies along. Every other
+// row keeps its place, and rows that require each other keep their order.
+func hoistUpdateDependencies(rows []packageRow) {
+	index := make(map[string]int, len(rows))
+	blocked := false
+	for i, row := range rows {
+		id := strings.ToLower(row.ref.Name)
+		if _, seen := index[id]; !seen {
+			index[id] = i
+		}
+		blocked = blocked || len(row.updateRequirements) > 0
+	}
+	if !blocked {
+		return
+	}
+	// A requirement counts only when its package has a row here that an
+	// update can change; one without a row, or already at its target,
+	// would not help by moving.
+	needs := make([][]int, len(rows))
+	for i, row := range rows {
+		for _, requirement := range row.updateRequirements {
+			j, found := index[strings.ToLower(requirement.packageID)]
+			if found && j != i && rows[j].updateTarget != nil && !slices.Contains(needs[i], j) {
+				needs[i] = append(needs[i], j)
+			}
+		}
+	}
+	// A requirement inside a cycle orders nothing: drop i -> j when j leads
+	// back to i. What remains has no cycle, so the placement below ends.
+	reaches := func(from, to int) bool {
+		seen := make([]bool, len(rows))
+		stack := []int{from}
+		for len(stack) > 0 {
+			at := stack[len(stack)-1]
+			stack = stack[:len(stack)-1]
+			if at == to {
+				return true
+			}
+			if seen[at] {
+				continue
+			}
+			seen[at] = true
+			stack = append(stack, needs[at]...)
+		}
+		return false
+	}
+	before := make([][]int, len(rows))
+	moved := false
+	for i := range rows {
+		for _, j := range needs[i] {
+			if !reaches(j, i) {
+				before[i] = append(before[i], j)
+				moved = moved || j > i
+			}
+		}
+	}
+	if !moved {
+		return
+	}
+	ordered := make([]packageRow, 0, len(rows))
+	placed := make([]bool, len(rows))
+	var place func(i int)
+	place = func(i int) {
+		if placed[i] {
+			return
+		}
+		placed[i] = true
+		for _, j := range before[i] {
+			place(j)
+		}
+		ordered = append(ordered, rows[i])
+	}
+	for i := range rows {
+		place(i)
+	}
+	copy(rows, ordered)
 }
 
 func sortPackageRowsBySource(rows []packageRow) {

@@ -64,6 +64,16 @@ after row. A row the key cannot update stops this: a pinned reference asks for
 confirmation, and a `[deps]` row or a failed save reports why in the status
 line. Move past that row to continue.
 
+A `[deps]` row needs another package updated first. The status sort lists that
+package just above the first row that needs it, in either direction. Holding
+`u` therefore updates it before them. The other sorts do not do this. A
+`[deps]` row still stops the key when the package it needs has no row in the
+list or no update of its own.
+
+Package details load after the list opens and can change its order. Until you
+select a row, the selection stays on the top row. After that it follows the
+package you selected.
+
 Guget makes one package change at a time. A press that arrives while a save
 or reload runs does nothing.
 

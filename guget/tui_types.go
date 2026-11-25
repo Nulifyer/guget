@@ -238,6 +238,12 @@ type packagePanel struct {
 	rows     []packageRow
 	sortMode packageSortMode
 	sortDir  bool
+	// atTop is set while the cursor is on the top row because the list was
+	// opened or re-sorted there, not because the user picked that row.
+	// Metadata arriving then re-sorts the rows under the cursor, which
+	// stays at the top. Once the user picks a row the cursor follows its
+	// package instead.
+	atTop bool
 }
 
 type detailPanel struct {

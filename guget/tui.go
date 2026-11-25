@@ -164,6 +164,7 @@ func NewApp(projectDir string, snapshot *workspaceSnapshot, initialLogLines []st
 		packages: packagePanel{
 			sortMode: sortMode,
 			sortDir:  sortDir,
+			atTop:    true,
 		},
 		detail: detailPanel{
 			sectionBase: sectionBase{baseWidth: 50, minWidth: 10},
@@ -272,8 +273,11 @@ func (m *App) HandleEvent(msg ui.Event) ui.Effect {
 		m.packageRefreshPending = false
 		selectedPackage := m.packageSelection().name
 		offset := m.detail.vp.YOffset()
+		m.packages.atTop = m.packages.atTop && m.packages.cursor == 0
 		m.rebuildPackageRows()
-		m.selectPackageByName(selectedPackage)
+		if !m.packages.atTop {
+			m.selectPackageByName(selectedPackage)
+		}
 		m.refreshDetail()
 		if strings.EqualFold(selectedPackage, m.packageSelection().name) {
 			m.detail.vp.SetYOffset(offset)

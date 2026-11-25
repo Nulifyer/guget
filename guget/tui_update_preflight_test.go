@@ -16,6 +16,8 @@ func preflightTestApp(t *testing.T) (*App, string) {
 		m.ctx.Results["A"].pkg.Versions[i].DependencyGroups = []dependencyGroup{{TargetFramework: "net8.0", Dependencies: []packageDependency{{ID: "B", Range: "[2.0.0, )"}}}}
 	}
 	m.rebuildPackageRows()
+	// The status sort lists B, which A's update waits for, above A.
+	m.selectPackageByName("A")
 	return m, path
 }
 

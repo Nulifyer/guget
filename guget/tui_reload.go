@@ -171,6 +171,7 @@ func (m *App) applyWorkspaceSnapshot(snapshot *workspaceSnapshot) {
 		m.packages.cursor = min(selection.origin.cursor, max(0, len(m.packages.rows)-1))
 		m.clampOffset()
 	} else if applySelection {
+		m.packages.atTop = false
 		m.selectPackageByName(selection.name)
 	} else {
 		m.selectPackageByName(selectedPackage)

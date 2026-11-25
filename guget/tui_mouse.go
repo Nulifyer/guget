@@ -405,6 +405,7 @@ func (m *App) selectProjectIndex(index int) {
 	}
 	m.packages.cursor = 0
 	m.packages.scroll = 0
+	m.packages.atTop = true
 	m.rebuildPackageRows()
 	m.refreshDetail()
 }
@@ -429,6 +430,7 @@ func (m *App) selectPackageIndex(index int) {
 	}
 	changed := index != m.packages.cursor
 	m.packages.cursor = index
+	m.packages.atTop = false
 	m.clampOffset()
 	if changed {
 		m.refreshDetail()
