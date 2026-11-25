@@ -101,7 +101,8 @@ func TestResolveWorkspaceSourcesRejectsInvalidConfigurationSafely(t *testing.T) 
 	} {
 		t.Run(fmt.Sprint(index), func(t *testing.T) {
 			root := t.TempDir()
-			config := filepath.Join(root, "nuget.config")
+			// NuGet.Config is the name reported on every file system.
+			config := filepath.Join(root, "NuGet.Config")
 			mustWriteFile(t, config, content)
 			project := filepath.Join(root, "App.csproj")
 			mustWriteFile(t, project, minimalProject)
