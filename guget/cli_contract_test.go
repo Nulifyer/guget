@@ -424,7 +424,8 @@ func TestExitCodeMapping(t *testing.T) {
 	})
 	t.Run("evaluation unavailable", func(t *testing.T) {
 		evaluated := t.TempDir()
-		path := writeCLIProject(t, evaluated, "Sdk", `<Project Sdk="Microsoft.NET.Sdk"><ItemGroup><PackageReference Include="Example" Version="1.0.0" /></ItemGroup></Project>`)
+		// A condition static evaluation cannot decide needs MSBuild evaluation.
+		path := writeCLIProject(t, evaluated, "Sdk", `<Project Sdk="Microsoft.NET.Sdk"><ItemGroup><PackageReference Include="Example" Version="1.0.0" Condition="'$(Configuration)' == 'Debug'" /></ItemGroup></Project>`)
 		code, _, stderr := runHermetic(t, "update", "Example", "--project", evaluated, "--file", path, "--version", "2.0.0")
 		if code != ExitWorkspace || !strings.Contains(stderr, "requires MSBuild evaluation") {
 			t.Fatalf("code=%d stderr=%s", code, stderr)

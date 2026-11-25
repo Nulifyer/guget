@@ -20,12 +20,11 @@ type mutationTarget struct {
 }
 
 type mutationOptions struct {
-	ctx               context.Context
-	skipLocked        bool // bulk updates leave exact [x.y.z] pins alone
-	refuseLocked      bool // explicit updates of an exact pin are refused
-	removeInherited   bool
-	allowDeclaredEdit bool                     // TUI only, after validating the loaded input revisions
-	runner            packageops.ProcessRunner // MSBuild runner; nil runs dotnet
+	ctx             context.Context
+	skipLocked      bool // bulk updates leave exact [x.y.z] pins alone
+	refuseLocked    bool // explicit updates of an exact pin are refused
+	removeInherited bool
+	runner          packageops.ProcessRunner // MSBuild runner; nil runs dotnet
 	// selectVersion, when set, chooses each update target's version instead
 	// of the plan's single version, from the project and its installed
 	// reference. ok=false leaves the reference unchanged (nothing newer).
@@ -95,7 +94,7 @@ func planPackageMutation(verb, packageID, version string, targets []mutationTarg
 				return editplan.Plan{}, nil, skipped, err
 			}
 		}
-		if project.RequiresEvaluation && !((verb == "update" || verb == "remove") && options.allowDeclaredEdit && canEditLiteralDeclaration(project, packageID)) {
+		if project.RequiresEvaluation && !((verb == "update" || verb == "remove") && canEditLiteralDeclaration(project, packageID)) {
 			ctx := options.ctx
 			if ctx == nil {
 				ctx = context.Background()

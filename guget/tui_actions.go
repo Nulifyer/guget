@@ -176,7 +176,7 @@ func (m *App) applyVersionWithSelection(pkgName, version string, targetProject *
 		projects = []*ParsedProject{targetProject}
 	}
 	targets := declaredPackageTargets(projects, pkgName)
-	return m.startMutation("update", pkgName, version, targets, mutationOptions{skipLocked: targetProject == nil, allowDeclaredEdit: true}, selection)
+	return m.startMutation("update", pkgName, version, targets, mutationOptions{skipLocked: targetProject == nil}, selection)
 }
 
 // TUI actions operate on the package references shown in the loaded view.
@@ -347,5 +347,5 @@ func (m *App) removePackage(pkgName string) ui.Effect {
 		projects = []*ParsedProject{selected}
 	}
 	targets := declaredPackageTargets(projects, pkgName)
-	return m.startMutation("remove", pkgName, "", targets, mutationOptions{removeInherited: selected == nil, allowDeclaredEdit: true}, m.rowReloadSelection())
+	return m.startMutation("remove", pkgName, "", targets, mutationOptions{removeInherited: selected == nil}, m.rowReloadSelection())
 }

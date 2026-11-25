@@ -13,17 +13,28 @@ import (
 	"github.com/nulifyer/guget/internal/projectedit"
 )
 
-// A TUI version edit or removal uses a unique owner in the recorded declarations
-// without starting the SDK. CPM requires one versionless reference and one
-// central version. Ambiguous declarations are not eligible for this shortcut.
-// Generated NuGet build imports can affect evaluation without preventing an edit to the
-// declared version shown in the TUI. This does not guarantee the evaluated version
-// or restore result. The caller still checks snapshot revisions before/after
-// planning and applies the normal transaction. CLI evaluation is unchanged.
+// canEditLiteralDeclaration decides, for the TUI and the CLI alike, whether a
+// version edit or removal can use the owner static evaluation found instead of
+// MSBuild evaluation. Static evaluation is the authority when it has no gaps and
+// every consumed file holds only unconditional, literal declarations it models:
+// one reference and one version owner. Without CPM the version is the
+// reference's Version; under CPM it is the central PackageVersion, or a
+// VersionOverride in the file that declares the reference, which wins over the
+// central version (NU1013 is refused before this check). Anything else, such as
+// a condition, Choose, Update, Remove, or a property-valued version, keeps MSBuild
+// evaluation. Generated NuGet build imports can affect evaluation without
+// changing which file declares the version, so they do not prevent the edit.
+// Callers still check that the consumed revisions are current and apply the
+// normal transaction.
 func canEditLiteralDeclaration(project *ParsedProject, packageID string) bool {
 	if len(project.InputRevisions) == 0 || len(project.DiscoveryErrors) != 0 {
 		return false
 	}
+	declaration, declared := project.Declarations[strings.ToLower(packageID)]
+	if !declared || declaration.Conditional || declaration.Duplicate {
+		return false
+	}
+	override := declaration.VersionSource == msbuildstatic.VersionOverride
 	// Static evaluation reads Directory.Build.targets and the other implicit
 	// imports. When it could not decide an import, switch, or condition, the
 	// recorded inputs may be incomplete, so require MSBuild evaluation.
@@ -92,7 +103,19 @@ func canEditLiteralDeclaration(project *ParsedProject, packageID string) bool {
 				}
 				references++
 				if ref.VersionOverride != "" || ref.OverrideChild != "" {
-					return false
+					// The override is the effective version in and out of CPM.
+					// Require it to be the only version on the reference.
+					if !override || (ref.VersionOverride != "") == (ref.OverrideChild != "") || ref.Version != "" || ref.VersionChild != "" {
+						return false
+					}
+					versions++
+					if mutationInputKey(path) != owner || projectedit.ValidateVersion(ref.versionExpression()) != nil {
+						return false
+					}
+					continue
+				}
+				if override {
+					return false // the override is on another reference
 				}
 				if centralOwner {
 					if ref.versionExpression() != "" {
@@ -119,6 +142,9 @@ func canEditLiteralDeclaration(project *ParsedProject, packageID string) bool {
 			for _, ref := range group.PackageVersions {
 				if !strings.EqualFold(ref.effectiveName(), packageID) {
 					continue
+				}
+				if override {
+					continue // shadowed by the VersionOverride; restore ignores it
 				}
 				versions++
 				if !centralOwner || mutationInputKey(path) != owner || projectedit.ValidateVersion(ref.versionExpression()) != nil {

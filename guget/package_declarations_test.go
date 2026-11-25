@@ -139,7 +139,7 @@ func TestUpdateRefusesVersionOnCentrallyManagedReference(t *testing.T) {
 	if !strings.HasPrefix(project.Declarations["pkg"].Problem, "NU1008") {
 		t.Fatalf("declaration = %+v", project.Declarations["pkg"])
 	}
-	for _, options := range []mutationOptions{{}, {allowDeclaredEdit: true}} {
+	for _, options := range []mutationOptions{{}} {
 		_, _, _, err := planPackageMutation("update", "Pkg", "2.0.0", []mutationTarget{{project: project}}, options)
 		if err == nil || !strings.Contains(err.Error(), "NU1008") || !strings.Contains(err.Error(), "VersionOverride") {
 			t.Fatalf("err = %v", err)

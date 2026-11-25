@@ -73,8 +73,9 @@ func TestReadySDKQuickUpdateNeedsNoSDKProcess(t *testing.T) {
 				if !found || m.ctx.Saving || m.ctx.Reloading {
 					t.Fatal("committed requested version did not reach the idle row")
 				}
-				if _, _, err := buildMutationPlan("update", "A", "3.0.0", m.ctx.ParsedProjects); err == nil || !strings.Contains(err.Error(), "requires MSBuild evaluation") {
-					t.Fatalf("CLI evaluation policy changed: %v", err)
+				// The CLI shares the decision, so it plans the same edit without the SDK.
+				if _, _, err := buildMutationPlan("update", "A", "3.0.0", m.ctx.ParsedProjects); err != nil {
+					t.Fatalf("CLI planning needed the SDK: %v", err)
 				}
 			})
 		}
@@ -90,8 +91,10 @@ func TestLiteralUpdateRetainsEvaluationForUncertainOwnership(t *testing.T) {
 		{"conditional metadata", `<ItemGroup><PackageReference Include="A"><Version Condition="false">1.0.0</Version></PackageReference></ItemGroup>`, "", ""},
 		{"implicit metadata", `<ItemGroup><PackageReference Include="A" Version="1.0.0"><IsImplicitlyDefined>true</IsImplicitlyDefined></PackageReference></ItemGroup>`, "", ""},
 		{"duplicate reference", reference + reference, "", ""},
-		{"override attribute", `<ItemGroup><PackageReference Include="A" VersionOverride="1.0.0"/></ItemGroup>`, "", ""},
-		{"override metadata", `<ItemGroup><PackageReference Include="A"><VersionOverride>1.0.0</VersionOverride></PackageReference></ItemGroup>`, "", ""},
+		{"override and version", `<ItemGroup><PackageReference Include="A" VersionOverride="1.0.0" Version="1.0.0"/></ItemGroup>`, "", ""},
+		{"override attribute and metadata", `<ItemGroup><PackageReference Include="A" VersionOverride="1.0.0"><VersionOverride>1.0.0</VersionOverride></PackageReference></ItemGroup>`, "", ""},
+		{"conditional override", `<ItemGroup><PackageReference Include="A"><VersionOverride Condition="false">1.0.0</VersionOverride></PackageReference></ItemGroup>`, "", ""},
+		{"property override", `<PropertyGroup><V>1.0.0</V></PropertyGroup><ItemGroup><PackageReference Include="A" VersionOverride="$(V)"/></ItemGroup>`, "", ""},
 		{"property version", `<PropertyGroup><V>1.0.0</V></PropertyGroup><ItemGroup><PackageReference Include="A" Version="$(V)"/></ItemGroup>`, "", ""},
 		{"conditional import", reference + `<Import Project="Shared.props" Condition="false"/>`, reference, ""},
 		{"competing imported owner", reference + `<Import Project="Shared.props"/>`, reference, ""},
@@ -122,7 +125,7 @@ func TestLiteralUpdateRetainsEvaluationForUncertainOwnership(t *testing.T) {
 				t.Fatal("uncertain ownership bypassed evaluation")
 			}
 			t.Setenv("PATH", t.TempDir())
-			_, _, _, err = planPackageMutation("update", "A", "2.0.0", []mutationTarget{{project: project}}, mutationOptions{allowDeclaredEdit: true})
+			_, _, _, err = planPackageMutation("update", "A", "2.0.0", []mutationTarget{{project: project}}, mutationOptions{})
 			if err == nil || !strings.Contains(err.Error(), "requires MSBuild evaluation") {
 				t.Fatalf("did not retain evaluation: %v", err)
 			}
@@ -237,4 +240,84 @@ func TestCentralLiteralUpdateRejectsAmbiguousDeclarations(t *testing.T) {
 			t.Fatalf("ambiguous CPM accepted: %s", extra)
 		}
 	}
+}
+
+// A VersionOverride is the effective version in the file that declares the
+// reference. Static evaluation establishes that owner, so the TUI and CLI edit
+// it without the SDK, leaving the central version alone.
+func TestVersionOverrideUsesTheStaticOwner(t *testing.T) {
+	const central = `<Project><PropertyGroup><ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally></PropertyGroup><ItemGroup><PackageVersion Include="A" Version="1.0.0"/><PackageVersion Include="B" Version="1.0.0"/></ItemGroup></Project>`
+	for _, test := range []struct {
+		name, project, imported, want string
+	}{
+		{name: "attribute", project: `<ItemGroup><PackageReference Include="A" VersionOverride="1.0.0"/><PackageReference Include="B"/></ItemGroup>`,
+			want: `VersionOverride="2.0.0"`},
+		{name: "child element", project: `<ItemGroup><PackageReference Include="A"><VersionOverride>1.0.0</VersionOverride></PackageReference></ItemGroup>`,
+			want: `<VersionOverride>2.0.0</VersionOverride>`},
+		{name: "imported file", project: `<Import Project="Overrides.props"/>`,
+			imported: `<Project><ItemGroup><PackageReference Include="A" VersionOverride="1.0.0"/></ItemGroup></Project>`, want: `VersionOverride="2.0.0"`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			m, _, path := newActionTestApp(t, "")
+			root := filepath.Dir(path)
+			mustWriteFile(t, filepath.Join(root, "Directory.Packages.props"), central)
+			mustWriteFile(t, path, `<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>`+test.project+`</Project>`)
+			owner := path
+			if test.imported != "" {
+				owner = filepath.Join(root, "Overrides.props")
+				mustWriteFile(t, owner, test.imported)
+			}
+			writeRestoredPackageImports(t, path)
+			snapshot, err := scanWorkspace(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			project := snapshot.ParsedProjects[0]
+			if !project.RequiresEvaluation || !canEditLiteralDeclaration(project, "A") {
+				t.Fatalf("requires=%v; static evaluation should decide the override edit", project.RequiresEvaluation)
+			}
+			m.applyWorkspaceSnapshot(snapshot)
+			m.selectProjectByPath(path)
+			m.rebuildPackageRows()
+			m.selectPackageByName("A")
+			t.Setenv("PATH", t.TempDir()) // no SDK: evaluation would fail
+			cmd := m.HandleEvent(ui.KeyPress(ui.Key{Code: 'u'}))
+			if cmd == nil {
+				t.Fatalf("update did not start: %s", m.ctx.StatusLine)
+			}
+			msg := cmd()
+			if reconciled, ok := msg.(mutationReconciledMsg); !ok || reconciled.err != nil || reconciled.written != 1 {
+				t.Fatalf("update did not reconcile one file: %+v", msg)
+			}
+			m.HandleEvent(msg)
+			if data := readFile(t, owner); !strings.Contains(data, test.want) {
+				t.Fatalf("owner not edited:\n%s", data)
+			}
+			if readFile(t, filepath.Join(root, "Directory.Packages.props")) != central {
+				t.Fatal("the central version changed")
+			}
+			// The CLI plans through the same decision.
+			parsed, err := ParseCsproj(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, _, _, err := planPackageMutation("update", "A", "3.0.0", []mutationTarget{{project: parsed}}, mutationOptions{runner: failingRunner{}}); err != nil {
+				t.Fatalf("CLI planning needed MSBuild: %v", err)
+			}
+		})
+	}
+	t.Run("disabled overrides are refused", func(t *testing.T) {
+		root := t.TempDir()
+		mustWriteFile(t, filepath.Join(root, "Directory.Packages.props"), strings.Replace(central, `</PropertyGroup>`, `<CentralPackageVersionOverrideEnabled>false</CentralPackageVersionOverrideEnabled></PropertyGroup>`, 1))
+		path := filepath.Join(root, "App.csproj")
+		mustWriteFile(t, path, `<Project Sdk="Microsoft.NET.Sdk"><ItemGroup><PackageReference Include="A" VersionOverride="1.0.0"/></ItemGroup></Project>`)
+		project, err := ParseCsproj(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _, _, err = planPackageMutation("update", "A", "2.0.0", []mutationTarget{{project: project}}, mutationOptions{runner: failingRunner{}})
+		if err == nil || !strings.Contains(err.Error(), "NU1013") {
+			t.Fatalf("err = %v", err)
+		}
+	})
 }
