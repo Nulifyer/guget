@@ -64,7 +64,9 @@ needs your confirmation), and rows that need a decision, such as `[deps]`
 rows. A skipped `[deps]` row is updated later in the same hold, once the
 dependency it waits for has been updated. When nothing is left to update, the
 selection rests on the first row in the list that still needs a decision. The
-status line gives that row's reason.
+status line gives that row's reason. Across projects, a package that only
+pinned references keep behind the target needs no decision there, so the hold
+passes it without resting on it.
 
 Every update starts from a key press, so releasing the key starts nothing
 more. Guget counts three or more presses less than 125 ms apart as a hold.
@@ -85,8 +87,9 @@ the status line says one of these:
 - An installed version is newer than the target.
 - No version qualifies, with `v to choose a version`.
 
-With All Projects selected, it can also report how many pinned references were
-skipped.
+Across projects, pinned references are skipped. When only pins are behind the
+target, the status line says so and how to change one, for example
+`Newtonsoft.Json: 1 pinned skipped; select a project to update a pin`.
 
 To see which setting is active, press `?`: the Settings section of the help
 names it and what it chooses. With All Projects selected, the footer also

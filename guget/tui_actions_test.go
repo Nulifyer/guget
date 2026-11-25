@@ -433,7 +433,7 @@ func TestQuickUpdateScopesAndAllLockedWarning(t *testing.T) {
 	})
 	t.Run("all locked", func(t *testing.T) {
 		m, _, _ := newActionTestApp(t, `<Project><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup><ItemGroup><PackageReference Include="A" Version="[1.0.0]"/></ItemGroup></Project>`)
-		if cmd := m.handleKey(ui.KeyPress(ui.Key{Code: 'U'})); cmd != nil || m.ctx.Saving || !strings.Contains(m.ctx.StatusLine, "1 skipped (pinned)") {
+		if cmd := m.handleKey(ui.KeyPress(ui.Key{Code: 'U'})); cmd != nil || m.ctx.Saving || !strings.Contains(m.ctx.StatusLine, "A: 1 pinned skipped; select a project to update a pin") {
 			t.Fatalf("status=%q saving=%v", m.ctx.StatusLine, m.ctx.Saving)
 		}
 	})

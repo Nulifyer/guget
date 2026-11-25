@@ -46,9 +46,9 @@ type quickUpdatePlan struct {
 	project *ParsedProject
 	refusal string // status text for a refused row
 	isErr   bool
-	// settled marks a refusal that leaves nothing to do: the row is at the
-	// target or beyond it. Other refusals leave an update the user must
-	// decide about.
+	// settled marks a refusal that leaves nothing this key can do: the row is
+	// at the target or beyond it, or only pins that this scope skips are
+	// behind. Other refusals leave an update the user must decide about.
 	settled bool
 }
 
@@ -82,9 +82,10 @@ func (m *App) planQuickUpdate(row packageRow, useStable bool, scope actionScope,
 	if useStable {
 		policy = UpdateTargetStable
 	}
-	var refs []PackageReference
+	var refs, pins []PackageReference
 	for _, ref := range m.scopeReferences(row.ref.Name, scope) {
 		if project == nil && ref.Locked {
+			pins = append(pins, ref)
 			continue
 		}
 		refs = append(refs, ref)
@@ -102,12 +103,25 @@ func (m *App) planQuickUpdate(row packageRow, useStable bool, scope actionScope,
 		}
 		return refuse("No "+kind+" version for "+row.ref.Name+"; v to choose a version", true)
 	}
+	// From All Projects no update key changes a pin. A row that only pins
+	// keep behind the target is settled, so a held sweep does not stop on it,
+	// and its status says what does change a pin.
+	pinsBehind := 0
+	for _, pin := range pins {
+		if target.SemVer.IsNewerThan(pin.Version) {
+			pinsBehind++
+		}
+	}
+	onlyPinsBehind := fmt.Sprintf("%s: %d pinned skipped; select a project to update a pin", row.ref.Name, pinsBehind)
 	if assessment.Target == nil {
 		plan.settled = true
 		for _, installed := range assessment.Installed {
 			if installed.IsNewerThan(target.SemVer) {
 				return refuse(row.ref.Name+" "+installed.String()+" is newer than "+target.SemVer.String()+"; v to choose a version", false)
 			}
+		}
+		if pinsBehind > 0 {
+			return refuse(onlyPinsBehind, false)
 		}
 		return refuse(row.ref.Name+" is already at "+target.SemVer.String(), false)
 	}
@@ -117,7 +131,6 @@ func (m *App) planQuickUpdate(row packageRow, useStable bool, scope actionScope,
 		projects = []*ParsedProject{project}
 	}
 	needsUpdate := false
-	skippedLocked := 0
 	for _, p := range projects {
 		for ref := range p.Packages {
 			requested := ref.Requested
@@ -128,7 +141,6 @@ func (m *App) planQuickUpdate(row packageRow, useStable bool, scope actionScope,
 				continue
 			}
 			if project == nil && ref.Locked {
-				skippedLocked++
 				continue
 			}
 			if !requestNamesVersion(requested, target.SemVer) {
@@ -137,10 +149,10 @@ func (m *App) planQuickUpdate(row packageRow, useStable bool, scope actionScope,
 		}
 	}
 	if !needsUpdate {
-		if skippedLocked > 0 {
-			return refuse(fmt.Sprintf("%d skipped (pinned)", skippedLocked), false)
-		}
 		plan.settled = true
+		if pinsBehind > 0 {
+			return refuse(onlyPinsBehind, false)
+		}
 		return refuse(row.ref.Name+" is already at "+version, false)
 	}
 	if !useStable {

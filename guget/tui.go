@@ -305,7 +305,7 @@ func (m *App) HandleEvent(msg ui.Event) ui.Effect {
 			if msg.written > 0 && msg.skipped > 0 {
 				status = fmt.Sprintf("✓ Saved %d, %d pinned skipped", msg.written, msg.skipped)
 			} else if msg.skipped > 0 {
-				status = fmt.Sprintf("%d skipped (pinned)", msg.skipped)
+				status = fmt.Sprintf("%d pinned skipped", msg.skipped)
 			}
 			if msg.summary != "" {
 				status = msg.summary
