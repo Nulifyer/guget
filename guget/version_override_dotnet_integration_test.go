@@ -130,7 +130,8 @@ func TestVersionOverrideEditsMatchDotnet(t *testing.T) {
 			project := filepath.Join(repo, "App", "App.csproj")
 			parsed := requireSameView(t, oracle, project)
 			wantOwner := filepath.Join(repo, filepath.FromSlash(test.owner))
-			if got := oracle.definingFile(t, project, "Oracle.A"); got != wantOwner {
+			// MSBuild expands a short (8.3) directory name such as RUNNER~1.
+			if got := oracle.definingFile(t, project, "Oracle.A"); outputPathIdentity(got) != outputPathIdentity(wantOwner) {
 				t.Fatalf("MSBuild defines Oracle.A in %s, want %s", got, wantOwner)
 			}
 			if got := parsed.SourceFileForPackage("Oracle.A"); got != wantOwner {
@@ -183,7 +184,7 @@ func TestVersionOverrideEditsMatchDotnet(t *testing.T) {
 			if output, err := oracle.run(t, dotnetRepo, "add", dotnetProject, "package", "Oracle.A", "--version", "3.0.0"); err != nil {
 				t.Fatalf("dotnet add: %v\n%s", err, output)
 			}
-			if got := oracle.definingFile(t, dotnetProject, "Oracle.A"); got != filepath.Join(dotnetRepo, filepath.FromSlash(test.owner)) {
+			if got := oracle.definingFile(t, dotnetProject, "Oracle.A"); outputPathIdentity(got) != outputPathIdentity(filepath.Join(dotnetRepo, filepath.FromSlash(test.owner))) {
 				t.Fatalf("dotnet moved the declaration to %s", got)
 			}
 			dotnetView, gugetView := oracle.evaluate(t, dotnetProject), oracle.evaluate(t, project)
