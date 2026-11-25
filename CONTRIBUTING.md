@@ -69,6 +69,23 @@ npm run package
 npm audit
 ```
 
+## Windows icon and version information
+
+Release builds embed the icon, version information, and an application
+manifest in `guget.exe`. GoReleaser runs `.scripts/winres.sh VERSION` before
+building, which writes `guget/rsrc_windows_amd64.syso` and
+`guget/rsrc_windows_arm64.syso`. Git ignores these files, so an ordinary
+`go build` for Windows has no icon. To check a Windows build locally:
+
+```bash
+bash .scripts/winres.sh 1.2.3
+GOOS=windows GOARCH=amd64 go -C guget build -o /tmp/guget.exe .
+go run .scripts/check-windows-resources.go 1.2.3 /tmp/guget.exe
+```
+
+The release workflow runs the same check before publishing. The icon comes
+from `vscode-guget/icon.png`.
+
 ## Check shell changes
 
 Run from the repository root:

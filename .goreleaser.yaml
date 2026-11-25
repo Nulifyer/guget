@@ -2,6 +2,11 @@ version: 2
 
 project_name: guget
 
+before:
+  hooks:
+    # Embed the icon, version information, and manifest in guget.exe.
+    - bash .scripts/winres.sh {{ .Version }}
+
 builds:
   - dir: guget
     binary: guget

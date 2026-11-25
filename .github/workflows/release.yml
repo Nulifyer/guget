@@ -81,6 +81,13 @@ jobs:
           go build -ldflags "-X main.version=$VERSION" -o /tmp/guget-release-check .
           test "$(/tmp/guget-release-check version)" = "guget $VERSION"
 
+      - name: Verify Windows resources
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          bash .scripts/winres.sh "$VERSION"
+          GOOS=windows GOARCH=amd64 go -C guget build -o /tmp/guget-windows-check.exe .
+          go run .scripts/check-windows-resources.go "$VERSION" /tmp/guget-windows-check.exe
+
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v7.2.3
         with:
