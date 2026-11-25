@@ -178,7 +178,9 @@ type dotnetOutdated struct {
 // TestUpdateTargetStableMatchesDotnet builds packages with dotnet pack,
 // serves them from two local HTTP feeds, and requires guget's stable update
 // target to match `dotnet list package --outdated` and `dotnet package
-// update` for a stable and a prerelease reference.
+// update` for a stable and a prerelease reference. No stable version newer
+// than the prerelease is listed; once one is, guget moves the reference to it
+// while dotnet keeps counting prereleases (update_target.go).
 func TestUpdateTargetStableMatchesDotnet(t *testing.T) {
 	requireIsolatedDotnet(t)
 	base := t.TempDir()

@@ -74,10 +74,13 @@ default, and the CLI's `list --outdated` and `update --latest`.
 | `compatible` | The newest version, prereleases included, that every target framework of the affected projects can use. |
 | `stable` | The newest stable version, whatever frameworks it supports. This is what `dotnet package update` writes. |
 
-Prereleases also count, under every value, when the reference's requested
-version, or the lower bound of its range, is itself a prerelease. This is the
-rule `dotnet package update` follows. A floating range such as `1.0.0-*` or
-`*-*` has a prerelease lower bound too.
+A reference on a prerelease is one whose requested version, or the lower bound
+of its range, is a prerelease. A floating range such as `1.0.0-*` or `*-*`
+counts too. Under `compatible-stable` and `stable`, such a reference is offered
+newer prereleases until a stable version newer than it is listed, and from
+then on the newest stable. Under `compatible`, it is offered the newest
+version, prereleases included. No value offers a version older than the one in
+use.
 
 For example, with `10.6.0`, `10.7.0`, `11.0.0-preview.6`, and
 `11.0.0-preview.7` on the feed:
@@ -86,6 +89,12 @@ For example, with `10.6.0`, `10.7.0`, `11.0.0-preview.6`, and
 | --- | --- | --- | --- |
 | `11.0.0-preview.6` | `11.0.0-preview.7` | `11.0.0-preview.7` | `11.0.0-preview.7` |
 | `10.6.0` | `10.7.0` | `11.0.0-preview.7` | `10.7.0` |
+
+Once `11.0.0` and `12.0.0-preview.1` are listed too, `11.0.0-preview.6` is
+offered `11.0.0` under `compatible-stable` and `stable`, and
+`12.0.0-preview.1` under `compatible`. `dotnet package update` would offer
+`12.0.0-preview.1`, because it counts every prerelease for a reference on a
+prerelease.
 
 A version counts as compatible when restore can use it for each framework,
 directly or through AssetTargetFallback, which restores with warning NU1701.

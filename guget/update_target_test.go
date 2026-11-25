@@ -48,6 +48,8 @@ func TestAssessPackageChoosesTheUpdateTarget(t *testing.T) {
 	// The issue #14 feed: a stable line, previews of the next major, and a
 	// newer major that only supports a newer framework.
 	issue := []string{"10.6.0", "10.7.0", "11.0.0-preview.6", "11.0.0-preview.7"}
+	// Later: 11.0.0 shipped, a patch followed, and the next major previews.
+	released := append(append([]string(nil), issue...), "11.0.0", "11.0.1", "12.0.0-preview.1")
 	cases := []struct {
 		name       string
 		versions   []string
@@ -79,6 +81,17 @@ func TestAssessPackageChoosesTheUpdateTarget(t *testing.T) {
 		{"diverged versions converge on the newest prerelease", []string{"1.0.0", "2.0.0", "3.0.0-beta"}, []string{"1.0.0", "3.0.0-beta"}, "net8.0", UpdateTargetCompatibleStable, "3.0.0-beta", "3.0.0-beta", FrameworkCompatible},
 		{"diverged prerelease rule follows the newest reference", []string{"1.0.0", "2.0.0", "3.0.0-beta", "3.0.0-rc"}, []string{"1.0.0", "3.0.0-beta"}, "net8.0", UpdateTargetCompatibleStable, "3.0.0-rc", "3.0.0-rc", FrameworkCompatible},
 		{"no reference: adding takes the candidate", issue, nil, "net8.0", UpdateTargetCompatibleStable, "10.7.0", "10.7.0", FrameworkCompatible},
+		// A prerelease reference follows prereleases until a newer stable is
+		// listed, then takes the newest stable, under compatible-stable and
+		// stable. compatible keeps following prereleases.
+		{"a prerelease moves to a newer stable", released, []string{"11.0.0-preview.6"}, "net8.0", UpdateTargetCompatibleStable, "11.0.1", "11.0.1", FrameworkCompatible},
+		{"stable moves a prerelease to a newer stable", released, []string{"11.0.0-preview.6"}, "net8.0", UpdateTargetStable, "11.0.1", "11.0.1", FrameworkCompatible},
+		{"compatible keeps following prereleases", released, []string{"11.0.0-preview.6"}, "net8.0", UpdateTargetCompatible, "12.0.0-preview.1", "12.0.0-preview.1", FrameworkCompatible},
+		{"the stable release of the same version replaces its preview", []string{"11.0.0-preview.6", "11.0.0-preview.7", "11.0.0"}, []string{"11.0.0-preview.7"}, "net8.0", UpdateTargetCompatibleStable, "11.0.0", "11.0.0", FrameworkCompatible},
+		{"an older stable never replaces a prerelease", issue, []string{"11.0.0-preview.7"}, "net8.0", UpdateTargetCompatibleStable, "-", "11.0.0-preview.7", FrameworkCompatible},
+		{"the newer stable must be compatible", []string{"11.0.0-preview.6", "11.0.0-preview.7", "11.0.0@net9.0"}, []string{"11.0.0-preview.6"}, "net8.0", UpdateTargetCompatibleStable, "11.0.0-preview.7", "11.0.0-preview.7", FrameworkCompatible},
+		{"stable takes an incompatible newer stable", []string{"11.0.0-preview.6", "11.0.0-preview.7", "11.0.0@net9.0"}, []string{"11.0.0-preview.6"}, "net8.0", UpdateTargetStable, "11.0.0", "11.0.0", FrameworkIncompatible},
+		{"diverged references move to a stable newer than the newest", []string{"1.0.0", "3.0.0-beta", "3.0.0", "4.0.0-alpha"}, []string{"1.0.0", "3.0.0-beta"}, "net8.0", UpdateTargetCompatibleStable, "3.0.0", "3.0.0", FrameworkCompatible},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
@@ -103,6 +116,24 @@ func TestAssessPackageReportsLatestVersions(t *testing.T) {
 	}
 	if a.Prerelease || a.Policy != UpdateTargetCompatibleStable {
 		t.Fatalf("assessment = %+v", a)
+	}
+}
+
+func TestAssessPackageReportsWhetherPrereleasesCounted(t *testing.T) {
+	info := testPackage("10.7.0", "11.0.0-preview.6", "11.0.0-preview.7", "11.0.0", "12.0.0-preview.1")
+	for _, test := range []struct {
+		ref        string
+		policy     UpdateTarget
+		prerelease bool
+	}{
+		{"11.0.0-preview.6", UpdateTargetCompatibleStable, false}, // 11.0.0 is listed
+		{"11.0.0", UpdateTargetCompatibleStable, false},
+		{"12.0.0-preview.1", UpdateTargetCompatibleStable, true}, // no newer stable
+		{"10.7.0", UpdateTargetCompatible, true},
+	} {
+		if a := assessPackage(info, testRefs(test.ref), targetsOf("net8.0"), test.policy); a.Prerelease != test.prerelease {
+			t.Errorf("%s under %s: prerelease = %v, want %v", test.ref, test.policy, a.Prerelease, test.prerelease)
+		}
 	}
 }
 

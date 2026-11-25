@@ -86,9 +86,11 @@ guget list --project ./src --outdated --update-target stable --format json
 ```
 
 With `--update-target stable`, `updateTarget` is the `Latest` version that
-`dotnet list package --outdated` reports for a stable reference, and that
-`dotnet list package --outdated --include-prerelease` reports for a prerelease
-reference. The default, `compatible-stable`, also requires a version that every
+`dotnet list package --outdated` reports for a stable reference. For a
+reference on a prerelease, it is the `Latest` that
+`dotnet list package --outdated --include-prerelease` reports until a stable
+version newer than the reference is listed, and then the newest stable. See
+[update target](settings.md#update-target). The default, `compatible-stable`, also requires a version that every
 target framework of the projects sharing the version can use. Those are all the
 projects whose version comes from the same file, such as a shared
 `Directory.Packages.props`, because one update changes them together.
@@ -229,7 +231,8 @@ setting or `--update-target`. It compares with the requested lower bound, as
 `dotnet package update` does, and never lowers a version. A project with
 nothing newer keeps its version; the plan lists it with the operation
 `unchanged`, and the command still exits 0. `--update-target stable` chooses
-what `dotnet package update` chooses.
+what `dotnet package update` chooses, except that a reference on a prerelease
+moves to a newer stable version once one is listed.
 
 With `--all`, each project gets its own target, as with `dotnet package
 update`, so projects can end on different versions. The TUI's `U` works

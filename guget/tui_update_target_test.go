@@ -113,3 +113,17 @@ func TestTUIPickerDefaultFollowsThePolicy(t *testing.T) {
 		t.Fatalf("picker default %v", v)
 	}
 }
+
+// A preview reference follows previews only until a newer stable ships; then
+// u offers the stable, never an older one and never the next major's preview.
+func TestTUIPreviewReferenceMovesToTheNewerStable(t *testing.T) {
+	m, _, path := newActionTestApp(t, `<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup><ItemGroup><PackageReference Include="A" Version="11.0.0-preview.6"/></ItemGroup></Project>`)
+	setTestPackage(m, "A", "10.7.0", "11.0.0-preview.6", "11.0.0-preview.7", "11.0.0", "12.0.0-preview.1")
+	if row := selectedRow(m); versionText(row.updateTarget) != "11.0.0" || row.statusIcon() != "↑" {
+		t.Fatalf("target %s icon %s", versionText(row.updateTarget), row.statusIcon())
+	}
+	executeActionCmd(t, m, m.updatePackage(false, scopeSelected))
+	if data, _ := os.ReadFile(path); !strings.Contains(string(data), `Include="A" Version="11.0.0"`) {
+		t.Fatalf("u did not take the newer stable: %s", data)
+	}
+}

@@ -8,21 +8,24 @@ import (
 // UpdateTarget is the update-target policy: which listed versions an update
 // may aim for. It is the single owner of that rule for the TUI and the CLI.
 //
-//   - compatible-stable (default): the newest listed version every affected
-//     target framework can use (directly or through AssetTargetFallback),
-//     stable only unless the requested lower bound is a prerelease.
+//   - compatible-stable (default): the newest listed stable version every
+//     affected target framework can use (directly or through
+//     AssetTargetFallback).
 //   - compatible: the same, with prereleases always counting.
-//   - stable: the newest listed stable version regardless of frameworks,
-//     prereleases counting when the requested lower bound is a prerelease.
-//     This is what `dotnet package update` writes and what
-//     `dotnet list package --outdated` reports as Latest.
+//   - stable: the newest listed stable version regardless of frameworks.
+//     For a stable reference this is what `dotnet package update` writes and
+//     what `dotnet list package --outdated` reports as Latest.
 //
-// The prerelease rule follows `dotnet package update`, which looks at
-// prereleases only when the reference's VersionRange.MinVersion is a
-// prerelease (NuGet.CommandLine.XPlat PackageUpdateCommandRunner.cs:553 and
-// :725). Candidates are listed versions only (PackageUpdateIO.cs:511-517,
-// includeUnlisted: false), and an update never goes below the requested lower
-// bound (PackageUpdateCommandRunner.cs:583).
+// A reference on a prerelease follows newer prereleases until a stable
+// version newer than it is listed, then the newest stable, under
+// compatible-stable and stable. `dotnet package update` looks at prereleases
+// whenever the reference's VersionRange.MinVersion is a prerelease
+// (NuGet.CommandLine.XPlat PackageUpdateCommandRunner.cs:553 and :725), and
+// would offer 12.0.0-preview.1 over a newer 11.0.0; guget offers 11.0.0, and
+// leaves following every prerelease to compatible. Candidates are listed
+// versions only (PackageUpdateIO.cs:511-517, includeUnlisted: false), and an
+// update never goes below the requested lower bound
+// (PackageUpdateCommandRunner.cs:583).
 type UpdateTarget string
 
 const (
@@ -69,7 +72,9 @@ type InstalledDeprecation struct {
 // project, or every project sharing a decision such as All Projects.
 type PackageAssessment struct {
 	Policy UpdateTarget
-	// Prerelease reports whether prereleases were candidates.
+	// Prerelease reports whether prereleases were candidates: always under
+	// compatible, otherwise while the reference is on a prerelease and no
+	// stable version newer than it qualifies.
 	Prerelease bool
 	// Candidate is the newest listed version the policy allows, whether or
 	// not it is newer than what is installed; nil when none qualifies.
@@ -170,8 +175,13 @@ func assessFloors(info *PackageInfo, computed packageFloors, frameworks Set[Targ
 		}
 	}
 
+	// A prerelease reference follows prereleases only until a qualifying
+	// stable version newer than it is listed.
+	untilStable := a.Prerelease && !policy.alwaysPrerelease() && haveNewest
+	var newerStable *PackageVersion
+	var newerStableCompatibility FrameworkCompatibility
 	for i := range info.Versions { // newest first
-		if a.Candidate != nil && a.LatestStable != nil {
+		if a.Candidate != nil && a.LatestStable != nil && (!untilStable || newerStable != nil || !a.Candidate.SemVer.IsNewerThan(newest)) {
 			break
 		}
 		v := &info.Versions[i]
@@ -184,14 +194,26 @@ func assessFloors(info *PackageInfo, computed packageFloors, frameworks Set[Targ
 		if a.LatestStable == nil && !v.SemVer.IsPreRelease() {
 			a.LatestStable = v
 		}
-		if a.Candidate != nil || (v.SemVer.IsPreRelease() && !a.Prerelease) {
+		if v.SemVer.IsPreRelease() && !a.Prerelease {
+			continue
+		}
+		needStable := untilStable && newerStable == nil && !v.SemVer.IsPreRelease() && v.SemVer.IsNewerThan(newest)
+		if a.Candidate != nil && !needStable {
 			continue
 		}
 		compatibility := v.compatibilityFor(frameworks)
 		if policy.checksCompatibility() && compatibility == FrameworkIncompatible {
 			continue
 		}
-		a.Candidate, a.CandidateCompatibility = v, compatibility
+		if needStable {
+			newerStable, newerStableCompatibility = v, compatibility
+		}
+		if a.Candidate == nil {
+			a.Candidate, a.CandidateCompatibility = v, compatibility
+		}
+	}
+	if newerStable != nil {
+		a.Candidate, a.CandidateCompatibility, a.Prerelease = newerStable, newerStableCompatibility, false
 	}
 
 	if a.Candidate != nil {
