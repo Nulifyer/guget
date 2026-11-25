@@ -71,7 +71,7 @@ the same hold. The hold continues with the other rows and can rest on that row
 with the failure. Release the key and press it again to retry.
 
 Every update starts from a key press, so releasing the key starts nothing
-more. Guget counts three or more presses less than 125 ms apart as a hold.
+more. Guget counts three or more presses at most 125 ms apart as a hold.
 Any other key or mouse action ends it. During a hold, a press that arrives
 while a save or reload runs is skipped, and the next press continues. Separate
 presses act on the selected row only: a row that cannot be updated reports

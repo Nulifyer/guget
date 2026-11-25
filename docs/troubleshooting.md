@@ -82,6 +82,25 @@ especially after changes to parent props or configuration files.
 For a controlled single-project change, use the CLI preview/apply steps in the
 [CLI guide](cli.md#preview-and-apply-an-update).
 
+## Saves are slow or refused after MSBuild customization
+
+In the TUI, a simple version change is normally written directly. Guget runs
+MSBuild evaluation for it instead, which takes about half a second per save,
+when MSBuild may import files Guget does not read:
+
+- An environment variable whose name starts with `CustomBeforeMicrosoft` or
+  `CustomAfterMicrosoft`, such as `CustomAfterMicrosoftCommonTargets`.
+- Files in a user `ImportBefore` or `ImportAfter` directory under the MSBuild
+  user extensions path, such as
+  `~/.local/share/Microsoft/MSBuild/Current/Microsoft.Common.targets/ImportAfter`.
+
+The log panel (`l`) names the reason once per session. If such a file sets a
+package version itself, for example with `PackageReference Update`, the save is
+refused because the project file does not control the version MSBuild uses.
+Change the version in that file, or remove the variable or file if it is not
+meant to apply. The CLI always evaluates SDK projects with MSBuild before an
+edit.
+
 ## Private feed authentication fails
 
 Inspect the source names and URLs:
