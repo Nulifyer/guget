@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -209,5 +210,19 @@ func write(t *testing.T, path, content string) {
 	}
 	if err := os.WriteFile(path, []byte(content+"\n"), 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestMatchSegmentAgreesWithPathMatch(t *testing.T) {
+	patterns := []string{"bin", "*.suo", "*", "*.", "*~", "[Bb]in", "*.[Cc]ache", "a*b", "?bj", `\#x`, "**", "*.user*", ""}
+	names := []string{"bin", "Bin", "x.suo", ".suo", "suo", "", "a.b", "a~", "obj", "#x", "x.user", "x.userprefs", "cache.Cache"}
+	for _, pattern := range patterns {
+		kind := kindOf(pattern)
+		for _, name := range names {
+			want, _ := path.Match(pattern, name)
+			if got := matchSegment(kind, pattern, name); got != want {
+				t.Errorf("matchSegment(%q, %q) = %v, path.Match = %v", pattern, name, got, want)
+			}
+		}
 	}
 }

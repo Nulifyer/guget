@@ -20,8 +20,10 @@ type Rule struct {
 	// foldedBase and folded are lower-cased copies for case-insensitive matching.
 	foldedBase string
 	folded     []string
-	negate     bool
-	dirOnly    bool
+	// kinds says how each segment matches, the same for both cases.
+	kinds   []segmentKind
+	negate  bool
+	dirOnly bool
 	// basename rules contain no slash and match the final path element at any
 	// depth below base.
 	basename bool
@@ -78,10 +80,47 @@ func parseLine(line, base string) (Rule, bool) {
 func (r Rule) withFolded() Rule {
 	r.foldedBase = strings.ToLower(r.base)
 	r.folded = make([]string, len(r.segments))
+	r.kinds = make([]segmentKind, len(r.segments))
 	for i, segment := range r.segments {
 		r.folded[i] = strings.ToLower(segment)
+		r.kinds[i] = kindOf(segment)
 	}
 	return r
+}
+
+// segmentKind lets the common literal and "*suffix" segments, such as bin
+// or *.suo, skip path.Match, which dominates walking a large repository.
+type segmentKind uint8
+
+const (
+	segmentGlob    segmentKind = iota // path.Match
+	segmentLiteral                    // equal names
+	segmentSuffix                     // "*" then a literal suffix
+)
+
+const globMeta = `*?[\`
+
+func kindOf(segment string) segmentKind {
+	switch {
+	case !strings.ContainsAny(segment, globMeta):
+		return segmentLiteral
+	case segment != "" && segment[0] == '*' && !strings.ContainsAny(segment[1:], globMeta):
+		return segmentSuffix
+	}
+	return segmentGlob
+}
+
+// matchSegment matches one slash-free path element. A segment never matches
+// across a slash, so the fast forms agree with path.Match.
+func matchSegment(kind segmentKind, pattern, name string) bool {
+	switch kind {
+	case segmentLiteral:
+		return pattern == name
+	case segmentSuffix:
+		return strings.HasSuffix(name, pattern[1:])
+	}
+	ok, _ := path.Match(pattern, name)
+	return ok
 }
 
 // trimTrailingSpaces removes unescaped trailing spaces, as git does.
@@ -125,13 +164,12 @@ func (r Rule) match(rel string, isDir, fold bool) bool {
 		local = rel[len(base)+1:]
 	}
 	if r.basename {
-		ok, _ := path.Match(segments[0], path.Base(local))
-		return ok
+		return matchSegment(r.kinds[0], segments[0], path.Base(local))
 	}
-	return matchSegments(segments, strings.Split(local, "/"), isDir)
+	return matchSegments(segments, r.kinds, strings.Split(local, "/"), isDir)
 }
 
-func matchSegments(pattern, parts []string, isDir bool) bool {
+func matchSegments(pattern []string, kinds []segmentKind, parts []string, isDir bool) bool {
 	for len(pattern) > 0 {
 		if pattern[0] == "**" {
 			rest := pattern[1:]
@@ -141,7 +179,7 @@ func matchSegments(pattern, parts []string, isDir bool) bool {
 				return len(parts) > 0 || isDir
 			}
 			for i := 0; i <= len(parts); i++ {
-				if matchSegments(rest, parts[i:], isDir) {
+				if matchSegments(rest, kinds[1:], parts[i:], isDir) {
 					return true
 				}
 			}
@@ -150,10 +188,10 @@ func matchSegments(pattern, parts []string, isDir bool) bool {
 		if len(parts) == 0 {
 			return false
 		}
-		if ok, _ := path.Match(pattern[0], parts[0]); !ok {
+		if !matchSegment(kinds[0], pattern[0], parts[0]) {
 			return false
 		}
-		pattern, parts = pattern[1:], parts[1:]
+		pattern, kinds, parts = pattern[1:], kinds[1:], parts[1:]
 	}
 	return len(parts) == 0
 }
