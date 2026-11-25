@@ -131,7 +131,15 @@ func (r *Runtime) Run() (err error) {
 	r.schedule(r.root.HandleEvent(ResizeEvent{terminal.Width, terminal.Height}))
 	r.schedule(r.root.Connect())
 	var frame Frame
-	draw := func() { output.Submit(r.root.Render(), terminal.Width, terminal.Height) }
+	// draw reports whether the frame differs from the one before it.
+	shown, drawn := "", false
+	draw := func() bool {
+		next := r.root.Render()
+		changed := !drawn || next.Content != shown
+		shown, drawn = next.Content, true
+		output.Submit(next, terminal.Width, terminal.Height)
+		return changed
+	}
 	draw()
 	// A frame is committed at most every 16ms while input and result events keep
 	// flowing. Continuous metadata or log events cannot starve keyboard handling.
@@ -141,7 +149,9 @@ func (r *Runtime) Run() (err error) {
 	defer frameTimer.Stop()
 	scheduleDraw := func() {
 		if ready, wait := pacer.next(time.Now()); ready {
-			draw()
+			if !draw() {
+				pacer.unchanged()
+			}
 		} else if wait > 0 {
 			frameTimer.Reset(wait)
 		}
@@ -206,11 +216,19 @@ func (r *Runtime) Run() (err error) {
 // framePacer draws at most one frame per interval. A change after an idle
 // interval draws at once, so a key press does not wait for a ticker phase;
 // changes within the interval share one frame at its end.
+//
+// A draw that showed nothing new does not hold back the next one. A key press
+// often changes nothing itself and its result arrives a few milliseconds
+// later; that result must not wait out an interval behind an identical frame.
+// Only one such draw is free, so events that change nothing still cause at
+// most two renders per interval.
 type framePacer struct {
 	interval time.Duration
 	last     time.Time // when the last frame was drawn
 	dirty    bool      // a change is not yet drawn
 	armed    bool      // a wait for the end of the interval is pending
+	free     bool      // the next draw need not wait: the last one showed nothing new
+	wasFree  bool      // the last draw was a free one
 }
 
 // next reports whether to draw at now. Otherwise wait is how long until the
@@ -219,13 +237,17 @@ func (p *framePacer) next(now time.Time) (draw bool, wait time.Duration) {
 	if !p.dirty || p.armed {
 		return false, 0
 	}
-	if wait := p.interval - now.Sub(p.last); wait > 0 {
+	if wait := p.interval - now.Sub(p.last); wait > 0 && !p.free {
 		p.armed = true
 		return false, wait
 	}
-	p.last, p.dirty = now, false
+	p.last, p.dirty, p.wasFree, p.free = now, false, p.free, false
 	return true, 0
 }
+
+// unchanged records that the draw next just allowed showed the same frame as
+// the one before it.
+func (p *framePacer) unchanged() { p.free = !p.wasFree }
 
 func dispatchCommittedMouse(frame *Frame, commits <-chan outputCommit, event MouseEvent) (Effect, error) {
 	// A select may choose input while a newer visible frame acknowledgement is

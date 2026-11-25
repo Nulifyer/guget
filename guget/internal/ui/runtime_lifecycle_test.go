@@ -90,6 +90,38 @@ func TestShutdownDiscardsUnstartedBatchChildren(t *testing.T) {
 	}
 }
 
+func TestFramePacerDoesNotDelayTheResultOfAnUnchangedFrame(t *testing.T) {
+	start := time.Unix(0, 0)
+	at := func(ms int) time.Time { return start.Add(time.Duration(ms) * time.Millisecond) }
+	p := framePacer{interval: 16 * time.Millisecond, last: start}
+	// A key press draws at once, but the frame shows nothing new.
+	p.dirty = true
+	if draw, _ := p.next(at(30)); !draw {
+		t.Fatal("a change after an idle interval did not draw at once")
+	}
+	p.unchanged()
+	// Its result arrives 4 ms later and is drawn without waiting.
+	p.dirty = true
+	if draw, wait := p.next(at(34)); !draw {
+		t.Fatalf("the result waited %v behind an unchanged frame", wait)
+	}
+	// Only one draw is free: further events that change nothing are paced.
+	p.unchanged()
+	p.dirty = true
+	if draw, wait := p.next(at(35)); draw || wait != 15*time.Millisecond {
+		t.Fatalf("second unchanged frame was not paced: draw=%v wait=%v", draw, wait)
+	}
+	p.armed = false // the timer fired
+	if draw, _ := p.next(at(50)); !draw {
+		t.Fatal("paced change was not drawn at the end of the interval")
+	}
+	// A frame that changed leaves the next one paced as before.
+	p.dirty = true
+	if draw, wait := p.next(at(52)); draw || wait != 14*time.Millisecond {
+		t.Fatalf("change after a changed frame: draw=%v wait=%v", draw, wait)
+	}
+}
+
 func TestFramePacerDrawsIdleChangesAtOnceAndCoalescesBursts(t *testing.T) {
 	start := time.Unix(0, 0)
 	at := func(ms int) time.Time { return start.Add(time.Duration(ms) * time.Millisecond) }
