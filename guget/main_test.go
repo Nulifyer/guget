@@ -52,5 +52,9 @@ func runIsolated(m *testing.M) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
+	if err := quietDotnetFirstRun(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
 	return m.Run()
 }
