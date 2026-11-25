@@ -29,6 +29,7 @@ type workspaceSources struct {
 func resolveWorkspaceSources(projects []*ParsedProject) (workspaceSources, error) {
 	result := workspaceSources{InputRevisions: make(map[string][sha256.Size]byte)}
 	settingsByDir := make(map[string]*nugetconfig.Settings)
+	configs := nugetconfig.NewCache() // one read of each shared file per resolution
 	scopes := make(map[string]int)
 	projectScopes := make(map[string]int)
 	importers := make(map[string][]int)
@@ -51,7 +52,7 @@ func resolveWorkspaceSources(projects []*ParsedProject) (workspaceSources, error
 		dir := filepath.Dir(projectPath)
 		settings, known := settingsByDir[dir]
 		if !known {
-			loaded, err := nugetconfig.Load(dir, nugetconfig.Environment{})
+			loaded, err := nugetconfig.LoadCached(dir, nugetconfig.Environment{}, configs)
 			for _, file := range loaded.Files {
 				if previous, seen := result.InputRevisions[file.Path]; seen && previous != file.Digest {
 					return workspaceSources{}, fmt.Errorf("%w: source configuration %s", errWorkspaceInputsChanged, file.Path)

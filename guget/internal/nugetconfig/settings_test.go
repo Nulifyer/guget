@@ -559,3 +559,43 @@ func TestProjectSources(t *testing.T) {
 		t.Fatal("Clear combined with sources must be rejected")
 	}
 }
+
+func TestLoadCachedKeepsPerRootChainsAndOneRevision(t *testing.T) {
+	f := newFixture(t)
+	repoConfig := f.write(filepath.Join(f.repo, "NuGet.Config"), sources(add("repo", "https://repo.test/index.json")))
+	other := filepath.Join(f.repo, "src", "Other")
+	f.write(filepath.Join(other, "NuGet.Config"), sources(add("other", "https://other.test/index.json")))
+	cache := NewCache()
+	first, err := LoadCached(f.project, f.env(), cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if uncached := f.load(); !reflect.DeepEqual(first, uncached) {
+		t.Fatalf("cached settings differ:\n%+v\n%+v", first, uncached)
+	}
+	// A change after the first read must not give later loads of the same
+	// resolution a second revision; the caller validates the consumed one.
+	f.write(repoConfig, sources(add("changed", "https://changed.test/index.json")))
+	second, err := LoadCached(other, f.env(), cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := sourceNames(second); !reflect.DeepEqual(got, []string{"other", "repo"}) {
+		t.Fatalf("other root sources = %v, want its own chain", got)
+	}
+	digest := func(settings *Settings) [32]byte {
+		for _, file := range settings.Files {
+			if file.Path == repoConfig {
+				return file.Digest
+			}
+		}
+		t.Fatalf("%s not consumed: %+v", repoConfig, settings.Files)
+		return [32]byte{}
+	}
+	if digest(first) != digest(second) {
+		t.Fatal("loads sharing a cache consumed different revisions")
+	}
+	if fresh := f.load(); sourceNamed(t, fresh, "changed").URL == "" {
+		t.Fatal("a new load did not see the change")
+	}
+}

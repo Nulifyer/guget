@@ -79,11 +79,100 @@ type Settings struct {
 // the returned Settings is non-nil and reports only the consumed Files, so
 // callers can tell a stable invalid file from one that changed while read.
 func Load(root string, env Environment) (*Settings, error) {
+	return LoadCached(root, env, nil)
+}
+
+// Cache shares file system reads between the Load calls of one resolution,
+// such as one per project directory of a workspace, whose configuration
+// chains share ancestor, user, and machine files. Each file is inspected,
+// read, and parsed once; every Load that shares the cache consumes that one
+// revision and still reports it in Settings.Files. Use a new Cache for each
+// resolution so later calls see later changes. A Cache is not safe for
+// concurrent use.
+type Cache struct {
+	stats map[string]statResult
+	files map[string]readResult
+	dirs  map[string]dirResult
+}
+
+type dirResult struct {
+	entries []os.DirEntry
+	err     error
+}
+
+type statResult struct {
+	info os.FileInfo
+	err  error
+}
+
+type readResult struct {
+	read   bool // the bytes were read, so their digest was consumed
+	digest [sha256.Size]byte
+	file   *configFile
+	err    error
+}
+
+// NewCache returns an empty Cache.
+func NewCache() *Cache {
+	return &Cache{stats: make(map[string]statResult), files: make(map[string]readResult), dirs: make(map[string]dirResult)}
+}
+
+func (c *Cache) stat(path string) (os.FileInfo, error) {
+	if c == nil {
+		return os.Stat(path)
+	}
+	if cached, ok := c.stats[path]; ok {
+		return cached.info, cached.err
+	}
+	info, err := os.Stat(path)
+	c.stats[path] = statResult{info: info, err: err}
+	return info, err
+}
+
+// read returns the digest and parsed form of path. A parse error keeps the
+// digest of the bytes read.
+func (c *Cache) read(path string) readResult {
+	if c != nil {
+		if cached, ok := c.files[path]; ok {
+			return cached
+		}
+	}
+	var result readResult
+	data, err := os.ReadFile(path)
+	if err != nil {
+		result.err = fmt.Errorf("read NuGet configuration %s: %w", path, err)
+	} else {
+		result.read, result.digest = true, sha256.Sum256(data)
+		if result.file, err = parseConfigFile(path, data); err != nil {
+			result.err = fmt.Errorf("invalid NuGet configuration %s: %w", path, err)
+		}
+	}
+	if c != nil {
+		c.files[path] = result
+	}
+	return result
+}
+
+func (c *Cache) readDir(dir string) ([]os.DirEntry, error) {
+	if c == nil {
+		return os.ReadDir(dir)
+	}
+	if cached, ok := c.dirs[dir]; ok {
+		return cached.entries, cached.err
+	}
+	entries, err := os.ReadDir(dir)
+	c.dirs[dir] = dirResult{entries: entries, err: err}
+	return entries, err
+}
+
+// LoadCached is Load with reads shared through cache. A nil cache reads the
+// file system on every call, as Load does.
+func LoadCached(root string, env Environment, cache *Cache) (*Settings, error) {
 	root, err := filepath.Abs(root)
 	if err != nil {
 		return &Settings{}, fmt.Errorf("resolve configuration root %s: %w", root, err)
 	}
-	loader := fileLoader{}
+	loader := fileLoader{cache: cache}
 	var files []*configFile
 	var errs []error
 	add := func(path string) bool {
@@ -111,13 +200,13 @@ func Load(root string, env Environment) (*Settings, error) {
 			// NuGet creates a missing user config containing nuget.org.
 			files = append(files, defaultUserConfig(userConfig))
 		}
-		for _, path := range configsInDir(filepath.Join(userDir, "config"), "NuGet.Config", env) {
+		for _, path := range configsInDir(cache, filepath.Join(userDir, "config"), "NuGet.Config", env) {
 			add(path)
 		}
 	}
 	userFiles := len(files)
 	machineDir := machineSettingsDir(env)
-	for _, path := range configsInDir(filepath.Join(machineDir, "Config"), "", env) {
+	for _, path := range configsInDir(cache, filepath.Join(machineDir, "Config"), "", env) {
 		add(path)
 	}
 	var defaults *configFile
@@ -209,8 +298,8 @@ func machineSettingsDir(env Environment) string {
 // configsInDir lists the configuration files directly inside dir in priority
 // order. Linux matches *.config and *.Config and the excluded name exactly;
 // case-insensitive platforms compare names without case.
-func configsInDir(dir, exclude string, env Environment) []string {
-	entries, err := os.ReadDir(dir)
+func configsInDir(cache *Cache, dir, exclude string, env Environment) []string {
+	entries, err := cache.readDir(dir)
 	if err != nil {
 		return nil
 	}
@@ -248,6 +337,7 @@ func defaultUserConfig(path string) *configFile {
 // fileLoader reads each file identity once, so aliases on case-insensitive
 // filesystems and symlinked configs are consumed and diagnosed once.
 type fileLoader struct {
+	cache    *Cache
 	seen     []os.FileInfo
 	consumed []File
 }
@@ -255,7 +345,7 @@ type fileLoader struct {
 // load reports found for an existing path even when its identity was already
 // consumed; the file is nil then.
 func (l *fileLoader) load(path string) (*configFile, bool, error) {
-	info, err := os.Stat(path)
+	info, err := l.cache.stat(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, false, nil
 	}
@@ -271,16 +361,15 @@ func (l *fileLoader) load(path string) (*configFile, bool, error) {
 	if !info.Mode().IsRegular() {
 		return nil, false, fmt.Errorf("NuGet configuration is not a regular file: %s", path)
 	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, false, fmt.Errorf("read NuGet configuration %s: %w", path, err)
+	read := l.cache.read(path)
+	if !read.read {
+		return nil, false, read.err
 	}
-	l.consumed = append(l.consumed, File{Path: path, Digest: sha256.Sum256(data)})
-	file, err := parseConfigFile(path, data)
-	if err != nil {
-		return nil, false, fmt.Errorf("invalid NuGet configuration %s: %w", path, err)
+	l.consumed = append(l.consumed, File{Path: path, Digest: read.digest})
+	if read.err != nil {
+		return nil, false, read.err
 	}
-	return file, true, nil
+	return read.file, true, nil
 }
 
 func isHTTP(value string) bool {
