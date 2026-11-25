@@ -121,3 +121,50 @@ func TestWriteFileCreatesDestinationWithFallbackMode(t *testing.T) {
 		t.Fatalf("mode = %o, want %o", got, want)
 	}
 }
+
+func TestOnlyFlushedWritesFlush(t *testing.T) {
+	files, dirs := 0, 0
+	syncFile = func(f *os.File) error { files++; return f.Sync() }
+	syncDir = func(string) error { dirs++; return nil }
+	t.Cleanup(func() { syncFile, syncDir = (*os.File).Sync, syncDirectory })
+	path := filepath.Join(t.TempDir(), "project.csproj")
+	if err := WriteFileCheckedWith(path, []byte("buffered"), 0o600, nil, Buffered); err != nil || files != 0 || dirs != 0 {
+		t.Fatalf("buffered write: error %v, file syncs %d, directory syncs %d", err, files, dirs)
+	}
+	if err := WriteFileCheckedWith(path, []byte("flushed"), 0o600, nil, Flushed); err != nil || files != 1 || dirs != 1 {
+		t.Fatalf("flushed write: error %v, file syncs %d, directory syncs %d", err, files, dirs)
+	}
+}
+
+func TestBufferedWriteReplacesAtomicallyAndHonorsTheCheck(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "project.csproj")
+	if err := os.WriteFile(path, []byte("old"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conflict := errors.New("stale")
+	if err := WriteFileCheckedWith(path, []byte("refused"), 0o600, func() error { return conflict }, Buffered); !errors.Is(err, conflict) {
+		t.Fatalf("failed check error = %v", err)
+	}
+	if err := WriteFileCheckedWith(path, []byte("new"), 0o600, func() error { return nil }, Buffered); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || string(data) != "new" {
+		t.Fatalf("contents = %q, error %v", data, err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := info.Mode().Perm(), before.Mode().Perm(); got != want {
+		t.Fatalf("mode = %o, want %o", got, want)
+	}
+	temps, _ := filepath.Glob(filepath.Join(filepath.Dir(path), ".project.csproj.tmp-*"))
+	if len(temps) != 0 {
+		t.Fatalf("temporary files leaked: %v", temps)
+	}
+}

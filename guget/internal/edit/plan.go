@@ -115,6 +115,16 @@ func (p Plan) ApplyContext(ctx context.Context) (Result, error) {
 	return p.applyChecked(ctx, atomicfile.WriteFileChecked)
 }
 
+// ApplyContextBuffered is ApplyContext without waiting for the new contents
+// to reach the disk; see atomicfile.Buffered. A rollback is buffered too. It
+// suits interactive saves, where a flush per file makes every change wait for
+// the disk.
+func (p Plan) ApplyContextBuffered(ctx context.Context) (Result, error) {
+	return p.applyChecked(ctx, func(path string, data []byte, mode os.FileMode, check func() error) error {
+		return atomicfile.WriteFileCheckedWith(path, data, mode, check, atomicfile.Buffered)
+	})
+}
+
 func (p Plan) apply(write writeFunc) (Result, error) {
 	return p.applyChecked(context.Background(), func(path string, data []byte, mode os.FileMode, check func() error) error {
 		if err := check(); err != nil {

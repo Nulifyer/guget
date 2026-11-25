@@ -336,3 +336,25 @@ func TestNewPlanRejectsDuplicateTargets(t *testing.T) {
 		t.Fatal("expected duplicate-target error")
 	}
 }
+
+func TestApplyContextBufferedWritesAndRefusesStaleFiles(t *testing.T) {
+	plan, first, second := planPair(t)
+	if result, err := plan.ApplyContextBuffered(context.Background()); err != nil || len(result.Changed) != 2 {
+		t.Fatalf("result = %+v, error = %v", result, err)
+	}
+	for _, path := range []string{first, second} {
+		if data, err := os.ReadFile(path); err != nil || string(data) != "guget" {
+			t.Fatalf("%s contents = %q, error = %v", path, data, err)
+		}
+	}
+	stale, first, _ := planPair(t)
+	if err := os.WriteFile(first, []byte("external"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := stale.ApplyContextBuffered(context.Background()); !errors.Is(err, ErrStale) {
+		t.Fatalf("error = %v, want ErrStale", err)
+	}
+	if data, _ := os.ReadFile(first); string(data) != "external" {
+		t.Fatalf("external edit overwritten: %q", data)
+	}
+}

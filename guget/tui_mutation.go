@@ -196,7 +196,9 @@ func (m *App) startMutation(verb, packageID, version string, targets []mutationT
 		if err := validateMutationSnapshotInputs(expected); err != nil {
 			return writeResultMsg{err: err, packageID: packageID, reload: true}
 		}
-		result, err := plan.ApplyContext(options.ctx)
+		// The TUI saves while keys repeat, so it does not wait for each file to
+		// be flushed to disk; the CLI does.
+		result, err := plan.ApplyContextBuffered(options.ctx)
 		if len(result.Unrecovered) > 0 {
 			err = fmt.Errorf("%w; inspect unrecovered files before retrying: %s", err, strings.Join(result.Unrecovered, ", "))
 		}
