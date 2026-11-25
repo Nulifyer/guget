@@ -281,7 +281,7 @@ func (m *App) renderFooter() string {
 	statusStr := ""
 	if m.ctx.Restoring {
 		statusStr = m.ctx.Spinner.View() + styleAccent.Render(restoringStatus(m.restoringProjects))
-	} else if m.ctx.Saving {
+	} else if m.ctx.Saving && m.timeNow().Sub(m.savingSince) >= savingNoticeDelay {
 		statusStr = m.ctx.Spinner.View() + styleAccent.Render(" saving...")
 	} else if m.ctx.Reloading {
 		statusStr = m.ctx.Spinner.View() + styleAccent.Render(" reloading...")

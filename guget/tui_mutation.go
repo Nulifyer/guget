@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	ui "github.com/nulifyer/guget/internal/ui"
 	style "github.com/nulifyer/guget/internal/ui/style"
@@ -121,6 +122,18 @@ func (m *App) rowReloadSelection() *reloadSelection {
 	return &reloadSelection{origin: m.packageSelection(), keepRow: true}
 }
 
+// savingNoticeDelay is how long a save runs before the footer says so. A
+// shorter save shows only its result, so the status row does not alternate
+// between "saving..." and the result when updates follow one another.
+const savingNoticeDelay = 80 * time.Millisecond
+
+func (m *App) timeNow() time.Time {
+	if m.clock != nil {
+		return m.clock()
+	}
+	return time.Now()
+}
+
 func (m *App) canMutate() bool {
 	return !m.ctx.Saving && !m.ctx.Reloading && !m.workspaceStale
 }
@@ -143,8 +156,10 @@ func (m *App) startMutation(verb, packageID, version string, targets []mutationT
 			return m.refusalStatus("Not updated", problem)
 		}
 	}
+	// The status row keeps its text: the footer announces a save only once
+	// it has run for savingNoticeDelay, and the result replaces it.
 	m.ctx.Saving = true
-	m.setStatus("Saving "+packageID, false)
+	m.savingSince = m.timeNow()
 	if options.ctx == nil {
 		options.ctx = m.lifecycle
 	}

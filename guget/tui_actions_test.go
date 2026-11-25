@@ -729,3 +729,20 @@ func TestRestoreWaitsForPendingPackageWrite(t *testing.T) {
 		t.Fatal("restore did not follow the reconciled write")
 	}
 }
+
+func TestShortSaveDoesNotShowSavingIndicator(t *testing.T) {
+	m, _, _ := newActionTestApp(t, "")
+	now := time.Unix(1_700_000_000, 0)
+	m.clock = func() time.Time { return now }
+	m.ctx.StatusLine = "previous result"
+	if m.handleKey(ui.KeyPress(ui.Key{Code: 'u'})) == nil || !m.ctx.Saving {
+		t.Fatal("update did not start")
+	}
+	if footer := m.renderFooter(); strings.Contains(footer, "saving...") || !strings.Contains(footer, "previous result") {
+		t.Fatalf("footer announced a save that had just started:\n%s", footer)
+	}
+	now = now.Add(savingNoticeDelay)
+	if footer := m.renderFooter(); !strings.Contains(footer, "saving...") {
+		t.Fatalf("footer does not announce a long save:\n%s", footer)
+	}
+}

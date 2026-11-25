@@ -88,6 +88,10 @@ type App struct {
 	pendingRestoreChanges []string
 	// restoringProjects is how many projects the running restore covers.
 	restoringProjects int
+	// savingSince is when the latest save started.
+	savingSince time.Time
+	// clock replaces time.Now in tests of time-dependent behavior.
+	clock func() time.Time
 }
 
 func (m *App) nextRequestID() int {

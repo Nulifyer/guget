@@ -134,6 +134,8 @@ A requested version marked `pin` is an explicit exact-version pin such as
 pins beside each affected project's version in the detail panel.
 
 The saved package state refreshes before the next change becomes available.
+The footer shows `saving...` only for a save that takes longer than 80 ms; a
+shorter save shows just its result.
 You can continue navigating while saving, reloading, or fetching package information.
 
 ## Add a package
