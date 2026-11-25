@@ -10,10 +10,21 @@ permissions:
 
 jobs:
   nuget-and-projects:
-    name: NuGet and public repository fixtures
-    runs-on: ubuntu-latest
+    name: NuGet and public repository fixtures (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        # The dotnet comparison tests skip on macOS, where NuGet's
+        # machine-wide folder cannot be moved.
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+      DOTNET_NOLOGO: "1"
     defaults:
       run:
+        shell: bash
         working-directory: guget
     steps:
       - name: Checkout
