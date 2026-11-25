@@ -1538,7 +1538,6 @@ func (r *cliRuntime) restoreProjects(ctx context.Context, steps []restoreStep, i
 	return rows, code
 }
 
-// workspaceOutputInputs lists the files an --output path must never replace.
 // workspaceOutputInputs lists the files an --output file must not replace:
 // the workspace inputs, each project's lock file under any name NuGet may
 // use, the solution files found, and global.json in the workspace or project
