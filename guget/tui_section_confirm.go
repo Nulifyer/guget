@@ -75,16 +75,26 @@ func (m *App) applyOrConfirmUpdateWithSelection(pkgName, newVersion string, proj
 	if !m.canMutate() {
 		return nil
 	}
-	if project != nil {
-		for _, row := range m.packages.rows {
-			if strings.EqualFold(row.ref.Name, pkgName) && row.ref.Locked {
-				m.confirmUpdate = newConfirmUpdate(m, pkgName, newVersion, project)
-				m.confirmUpdate.selection = selection
-				return nil
-			}
-		}
+	if m.updateNeedsConfirmation(pkgName, project) {
+		m.confirmUpdate = newConfirmUpdate(m, pkgName, newVersion, project)
+		m.confirmUpdate.selection = selection
+		return nil
 	}
 	return m.applyVersionWithSelection(pkgName, newVersion, project, selection)
+}
+
+// updateNeedsConfirmation reports whether updating pkgName in one project
+// would replace an exact-version pin, which the user must confirm.
+func (m *App) updateNeedsConfirmation(pkgName string, project *ParsedProject) bool {
+	if project == nil {
+		return false
+	}
+	for _, row := range m.packages.rows {
+		if strings.EqualFold(row.ref.Name, pkgName) && row.ref.Locked {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *confirmRemove) Render() string {

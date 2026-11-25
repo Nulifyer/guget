@@ -29,7 +29,10 @@ func (m *App) quickUpdateDependencyConflict(packageID string, candidate *Package
 	if len(requirements) == 0 {
 		return ""
 	}
-	r := requirements[0]
+	return updateDependencyConflict(requirements[0])
+}
+
+func updateDependencyConflict(r updateDependencyRequirement) string {
 	return fmt.Sprintf("Update %s first: %s -> %s (%s)", r.packageID, r.requested, r.requiredVersion(), r.project.FileName)
 }
 
