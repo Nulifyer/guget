@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -111,6 +113,63 @@ func TestRestorePlanForceEvaluateFollowsLockedMode(t *testing.T) {
 				t.Fatalf("steps = %+v", steps)
 			}
 		})
+	}
+}
+
+// A lock file created after the project was read, such as by a restore, is
+// found by the restore worker just before it runs, so the affected
+// locked-mode project regenerates it instead of failing with NU1004. Planning
+// itself still uses the existence recorded by the scan.
+func TestRestoreWorkersRecheckLockFilesCreatedAfterTheScan(t *testing.T) {
+	root, projects := restoreWorkspace(t)
+	tool := projects["Tool"]
+	if tool.LockFile.Exists {
+		t.Fatal("Tool must have no lock file when read")
+	}
+	mustWriteFile(t, filepath.Join(root, "Tool", "packages.lock.json"), `{}`)
+	workspace := []*ParsedProject{projects["App"], projects["Lib"], tool}
+	changed := []string{filepath.Join(root, "Directory.Packages.props")}
+	steps := planRestore(workspace, nil, changed)
+	if got := stepNames(steps); !slices.Equal(got, []string{"Lib!", "App!", "Tool"}) {
+		t.Fatalf("planning consulted the disk: %v", got)
+	}
+
+	t.Run("CLI", func(t *testing.T) {
+		var stderr bytes.Buffer
+		var commands []string
+		runtime := cliRuntime{stdout: io.Discard, stderr: &stderr, runCommand: func(_ context.Context, _ string, args []string, _ io.Reader, _, _ io.Writer) error {
+			commands = append(commands, strings.Join(args, " "))
+			return nil
+		}}
+		if _, code := runtime.restoreProjects(context.Background(), steps, false); code != ExitSuccess {
+			t.Fatalf("code = %d", code)
+		}
+		if len(commands) != 3 || commands[2] != "restore "+tool.FilePath+" --force-evaluate" {
+			t.Fatalf("commands = %q", commands)
+		}
+		if !strings.Contains(stderr.String(), tool.FilePath+": locked-mode lock file is regenerated") {
+			t.Fatalf("stderr = %s", stderr.String())
+		}
+	})
+	t.Run("TUI", func(t *testing.T) {
+		t.Setenv("PATH", t.TempDir()) // the restores fail; the arguments are counted first
+		result, ok := runDotnetRestore(context.Background(), steps, changed)().(restoreResultMsg)
+		if !ok || result.projects != 3 || result.regenerated != 3 {
+			t.Fatalf("result = %+v", result)
+		}
+	})
+	if steps[2].ForceEvaluate || slices.Contains(steps[2].Args, "--force-evaluate") {
+		t.Fatal("the worker changed the planned step")
+	}
+	// Not in locked mode, or not affected by an edit: no change.
+	unaffected := restoreStep{Project: tool, Args: []string{"restore", tool.FilePath}}
+	if got := unaffected.withCurrentLockFile(); got.ForceEvaluate {
+		t.Fatal("an unaffected project regenerated its lock file")
+	}
+	unlocked := *tool
+	unlocked.LockFile.LockedMode = LockSettingFalse
+	if got := (restoreStep{Project: &unlocked, Args: []string{"restore"}, Reason: "changed"}).withCurrentLockFile(); got.ForceEvaluate {
+		t.Fatal("a project outside locked mode regenerated its lock file")
 	}
 }
 

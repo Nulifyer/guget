@@ -1506,10 +1506,14 @@ func (r *cliRuntime) restoreProjects(ctx context.Context, steps []restoreStep, i
 	rows := make([]restoreRow, 0, len(steps))
 	code := ExitSuccess
 	for _, step := range steps {
-		project := step.Project
 		if ctx.Err() != nil {
 			return rows, ExitInterrupted
 		}
+		if current := step.withCurrentLockFile(); current.ForceEvaluate != step.ForceEvaluate {
+			step = current
+			fmt.Fprintf(r.stderr, "guget: restore %s: locked-mode lock file is regenerated with --force-evaluate\n", step.Project.FilePath)
+		}
+		project := step.Project
 		row := restoreRow{Project: project.FileName, ProjectPath: project.FilePath, Status: "succeeded"}
 		if row.Project == "" {
 			row.Project = filepath.Base(project.FilePath)

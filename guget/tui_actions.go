@@ -321,6 +321,7 @@ func runDotnetRestore(ctx context.Context, steps []restoreStep, covered []string
 			if p.FilePath == "" {
 				continue
 			}
+			step = step.withCurrentLockFile()
 			result.projects++
 			result.only = p.FileName
 			if !step.Requested {

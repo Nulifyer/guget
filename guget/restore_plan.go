@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"io"
+	"os"
 	"slices"
 	"strings"
 )
@@ -149,9 +150,27 @@ func planRestore(workspace, requested []*ParsedProject, changed []string) []rest
 // lockedLockFile reports whether restore may be in locked mode with an
 // existing lock file, so an invalidated lock file would fail with NU1004.
 // Existence comes from when the project was read: the TUI plans restores on
-// its event loop, which must not touch the file system.
+// its event loop, which must not touch the file system. The restore worker
+// checks again with withCurrentLockFile.
 func lockedLockFile(project *ParsedProject) bool {
 	return project.LockFile.LockedMode != LockSettingFalse && project.LockFile.Exists
+}
+
+// withCurrentLockFile checks, just before the step runs and off the event
+// loop, whether a lock file missing when the project was read exists now, such
+// as one an earlier restore created. An affected project in locked mode then
+// needs --force-evaluate too, or restore fails with NU1004 instead of
+// regenerating the lock file.
+func (s restoreStep) withCurrentLockFile() restoreStep {
+	lock := s.Project.LockFile
+	if s.ForceEvaluate || s.Reason == "" || lock.LockedMode == LockSettingFalse || lock.Path == "" {
+		return s
+	}
+	if info, err := os.Stat(lock.Path); err == nil && info.Mode().IsRegular() {
+		s.ForceEvaluate = true
+		s.Args = append(append([]string(nil), s.Args...), "--force-evaluate")
+	}
+	return s
 }
 
 // describeRestorePlan explains projects restored beyond the request and the
