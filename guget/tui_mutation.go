@@ -255,15 +255,18 @@ func (m *App) handleMutationReconciled(msg mutationReconciledMsg) ui.Effect {
 // rather than publishing a mixed local result. The parser seam controls this race
 // in tests without adding sleeps or changing production filesystem semantics.
 func reconcileMutationSnapshot(previous *workspaceSnapshot, changed []string, parse func(string) (*ParsedProject, error)) (*workspaceSnapshot, map[string]watchedFileState, error) {
+	// Every project's inputs are compared with the changed owners; resolve
+	// each path's symlinks once per reconciliation.
+	inputKey := memoizedMutationInputKey()
 	owners := make(map[string]bool, len(changed))
 	for _, path := range changed {
-		owners[mutationInputKey(path)] = true
+		owners[inputKey(path)] = true
 	}
 	affected := make(map[string]bool)
 	inputs := make(map[string]struct{})
 	for _, project := range previous.ParsedProjects {
 		for _, path := range projectInputPaths(project) {
-			if owners[mutationInputKey(path)] {
+			if owners[inputKey(path)] {
 				affected[project.FilePath] = true
 				break
 			}
@@ -279,7 +282,7 @@ func reconcileMutationSnapshot(previous *workspaceSnapshot, changed []string, pa
 	}
 	refreshSources := false
 	for path := range previous.InputRevisions {
-		if owners[mutationInputKey(path)] {
+		if owners[inputKey(path)] {
 			refreshSources = true
 			break
 		}
@@ -326,13 +329,13 @@ func reconcileMutationSnapshot(previous *workspaceSnapshot, changed []string, pa
 	// package owners together with all their project consumers.
 	props := make(map[string]*ParsedProject)
 	for _, project := range previous.PropsProjects {
-		props[mutationInputKey(project.FilePath)] = project
+		props[inputKey(project.FilePath)] = project
 	}
 	paths := make(map[string]string)
 	for _, project := range next.ParsedProjects {
 		for _, source := range project.PackageSources {
 			if strings.EqualFold(filepath.Ext(source), ".props") {
-				paths[mutationInputKey(source)] = source
+				paths[inputKey(source)] = source
 			}
 		}
 	}
@@ -389,6 +392,18 @@ func reconcileMutationSnapshot(previous *workspaceSnapshot, changed []string, pa
 		return nil, nil, fmt.Errorf("project inputs appeared during local reconciliation")
 	}
 	return &next, after, nil
+}
+
+func memoizedMutationInputKey() func(string) string {
+	keys := make(map[string]string)
+	return func(path string) string {
+		key, known := keys[path]
+		if !known {
+			key = mutationInputKey(path)
+			keys[path] = key
+		}
+		return key
+	}
 }
 
 func mutationInputKey(path string) string {
