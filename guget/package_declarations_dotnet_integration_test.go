@@ -114,8 +114,9 @@ func (o *packageOracle) evaluate(t *testing.T, project string) msbuildView {
 	view := msbuildView{CPM: strings.EqualFold(result.Properties["_CentralPackageVersionsEnabled"], "true"), Versions: map[string]string{}}
 	if view.CPM {
 		// MSBuild keeps the separators of the property text, such as
-		// repo\eng/Versions.props on Windows.
-		view.Central = filepath.Clean(result.Properties["DirectoryPackagesPropsPath"])
+		// repo\eng/Versions.props on Windows, and expands a short (8.3)
+		// directory name such as RUNNER~1 that guget keeps as given.
+		view.Central = outputPathIdentity(filepath.Clean(result.Properties["DirectoryPackagesPropsPath"]))
 	}
 	central := map[string]string{}
 	for _, item := range result.Items["PackageVersion"] {
@@ -156,6 +157,9 @@ func gugetView(t *testing.T, project string) (msbuildView, *ParsedProject) {
 	}
 	view := msbuildView{Central: projectCPMTarget(parsed), Versions: map[string]string{}}
 	view.CPM = view.Central != ""
+	if view.CPM {
+		view.Central = outputPathIdentity(view.Central)
+	}
 	for ref := range parsed.Packages {
 		view.Versions[strings.ToLower(ref.Name)] = ref.Requested
 	}

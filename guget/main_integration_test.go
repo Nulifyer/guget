@@ -27,7 +27,7 @@ func runWithIsolatedSettings(m *testing.M) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	if err := quietDotnetFirstRun(); err != nil {
+	if err := isolateDotnet(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
