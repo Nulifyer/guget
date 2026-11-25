@@ -333,6 +333,9 @@ func (e *evaluator) finish(lists map[string][]*item) {
 			if result.CentralPackageManagement && overrideDisabled == isTrue {
 				pkg.Problem = "NU1013: VersionOverride is set while CentralPackageVersionOverrideEnabled is false"
 			}
+			if result.CentralPackageManagement && overrideDisabled == unknown {
+				e.gap("CentralPackageVersionOverrideEnabled needs MSBuild evaluation for the VersionOverride of %s", reference.id)
+			}
 		case version.Text != "":
 			pkg.Version, pkg.VersionKnown, pkg.VersionOwner, pkg.VersionSource = version.Text, version.Known, version.owner, VersionReference
 			pkg.Conditional = pkg.Conditional || version.conditional

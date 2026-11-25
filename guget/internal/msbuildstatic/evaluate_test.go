@@ -431,3 +431,27 @@ func TestParseCacheReusesOnlyIdenticalBytes(t *testing.T) {
 		t.Fatal("evaluations did not record the revision each consumed")
 	}
 }
+
+func TestUndecidableVersionOverrideSwitchIsAGap(t *testing.T) {
+	for _, test := range []struct {
+		value string
+		gap   bool
+	}{{"", false}, {"true", false}, {"false", false}, {"$(FromSdk)", true}} {
+		props := `<Project><PropertyGroup><ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>`
+		if test.value != "" {
+			props += `<CentralPackageVersionOverrideEnabled>` + test.value + `</CentralPackageVersionOverrideEnabled>`
+		}
+		root := writeTree(t, map[string]string{
+			"Directory.Packages.props": props + `</PropertyGroup><ItemGroup><PackageVersion Include="A" Version="1.0.0"/></ItemGroup></Project>`,
+			"App/App.csproj":           sdkProject(`<PackageReference Include="A" VersionOverride="2.0.0"/>`),
+		})
+		result := evaluate(t, root, "App/App.csproj")
+		gap := strings.Contains(strings.Join(result.Gaps, "\n"), "CentralPackageVersionOverrideEnabled")
+		if gap != test.gap {
+			t.Errorf("CentralPackageVersionOverrideEnabled=%q: gap=%v, want %v (%v)", test.value, gap, test.gap, result.Gaps)
+		}
+		if owner := reference(t, result, "A").VersionOwner; owner != path(root, "App/App.csproj") {
+			t.Errorf("override owner = %s", owner)
+		}
+	}
+}
