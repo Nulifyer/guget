@@ -24,12 +24,55 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 )
 
 type Options struct {
 	// LookupEnv reads environment variables, which MSBuild exposes as
 	// properties. It defaults to os.LookupEnv.
 	LookupEnv func(string) (string, bool)
+	// Cache, when set, shares parsed files between evaluations, such as the
+	// projects of one workspace scan that import the same props files.
+	Cache *ParseCache
+}
+
+// ParseCache keeps parsed project files by path and content digest. Every
+// evaluation still reads each file and records the bytes it consumed; the
+// cache only skips parsing identical bytes again. It is safe for concurrent
+// use. Parsed trees are never modified after parsing.
+type ParseCache struct {
+	mu    sync.Mutex
+	files map[string]cachedFile
+}
+
+type cachedFile struct {
+	digest [sha256.Size]byte
+	root   *node
+}
+
+// NewParseCache returns an empty cache.
+func NewParseCache() *ParseCache {
+	return &ParseCache{files: make(map[string]cachedFile)}
+}
+
+func (c *ParseCache) parse(path string, data []byte, digest [sha256.Size]byte) (*node, error) {
+	if c == nil {
+		return parseProjectXML(data)
+	}
+	c.mu.Lock()
+	cached, ok := c.files[path]
+	c.mu.Unlock()
+	if ok && cached.digest == digest {
+		return cached.root, nil
+	}
+	root, err := parseProjectXML(data)
+	if err != nil {
+		return nil, err
+	}
+	c.mu.Lock()
+	c.files[path] = cachedFile{digest: digest, root: root}
+	c.mu.Unlock()
+	return root, nil
 }
 
 type ImportKind int
@@ -179,6 +222,7 @@ type evaluator struct {
 	result      *Evaluation
 	props       map[string]*property
 	files       map[string]*node
+	cache       *ParseCache
 	imported    map[string]bool
 	items       []itemElement
 	uncertain   int
@@ -204,6 +248,7 @@ func Evaluate(projectPath string, options Options) (*Evaluation, error) {
 		result:      &Evaluation{ProjectPath: abs, Inputs: map[string][sha256.Size]byte{}},
 		props:       map[string]*property{},
 		files:       map[string]*node{},
+		cache:       options.Cache,
 		imported:    map[string]bool{abs: true},
 	}
 	if e.lookup == nil {
@@ -253,8 +298,9 @@ func (e *evaluator) load(path string) (*node, error) {
 	if err != nil {
 		return nil, err
 	}
-	e.result.Inputs[path] = sha256.Sum256(data)
-	root, err := parseProjectXML(data)
+	digest := sha256.Sum256(data)
+	e.result.Inputs[path] = digest
+	root, err := e.cache.parse(path, data, digest)
 	if err != nil {
 		return nil, err
 	}

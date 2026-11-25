@@ -396,3 +396,38 @@ func TestInputsRecordEveryFileRead(t *testing.T) {
 		}
 	}
 }
+
+func TestParseCacheReusesOnlyIdenticalBytes(t *testing.T) {
+	root := writeTree(t, map[string]string{
+		"Directory.Build.props": `<Project><ItemGroup><PackageReference Include="Shared" Version="1.0.0"/></ItemGroup></Project>`,
+		"A/A.csproj":            sdkProject(``),
+		"B/B.csproj":            sdkProject(``),
+	})
+	cache := NewParseCache()
+	run := func(project string) *Evaluation {
+		t.Helper()
+		result, err := Evaluate(path(root, project), Options{LookupEnv: noEnv, Cache: cache})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+	props := path(root, "Directory.Build.props")
+	first := run("A/A.csproj")
+	if got := reference(t, first, "Shared").Version; got != "1.0.0" {
+		t.Fatalf("first version %q", got)
+	}
+	if again := run("A/A.csproj"); reference(t, again, "Shared") != reference(t, evaluate(t, root, "A/A.csproj"), "Shared") {
+		t.Fatal("cached evaluation differs from an uncached one")
+	}
+	if err := os.WriteFile(props, []byte(`<Project><ItemGroup><PackageReference Include="Shared" Version="2.0.0"/></ItemGroup></Project>`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	second := run("B/B.csproj")
+	if got := reference(t, second, "Shared").Version; got != "2.0.0" {
+		t.Fatalf("changed import served from the cache: version %q", got)
+	}
+	if first.Inputs[props] == second.Inputs[props] {
+		t.Fatal("evaluations did not record the revision each consumed")
+	}
+}

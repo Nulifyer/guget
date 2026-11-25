@@ -284,7 +284,19 @@ func (pp *ParsedProject) ReferenceFileForPackage(pkgName string) string {
 // ParseCsproj statically evaluates a project's package declarations. See
 // internal/msbuildstatic for the MSBuild and NuGet rules it applies.
 func ParseCsproj(filePath string) (*ParsedProject, error) {
-	evaluation, err := msbuildstatic.Evaluate(filePath, msbuildstatic.Options{})
+	return parseCsprojCached(filePath, nil)
+}
+
+// newProjectParser returns a ParseCsproj for one scan or reconciliation. Its
+// projects share parsed imports whose bytes are identical; each parse still
+// reads and records every file it consumes.
+func newProjectParser() func(string) (*ParsedProject, error) {
+	cache := msbuildstatic.NewParseCache()
+	return func(filePath string) (*ParsedProject, error) { return parseCsprojCached(filePath, cache) }
+}
+
+func parseCsprojCached(filePath string, cache *msbuildstatic.ParseCache) (*ParsedProject, error) {
+	evaluation, err := msbuildstatic.Evaluate(filePath, msbuildstatic.Options{Cache: cache})
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse %s: %w", filePath, err)
 	}

@@ -84,7 +84,7 @@ func scanWorkspace(projectDir string) (*workspaceSnapshot, error) {
 }
 
 func scanWorkspaceWith(projectDir string, opts workspaceScanOptions) (*workspaceSnapshot, error) {
-	return scanWorkspaceWithParser(projectDir, opts, ParseCsproj)
+	return scanWorkspaceWithParser(projectDir, opts, newProjectParser())
 }
 
 // Validate a whole disk view, including external owners discovered during parsing.

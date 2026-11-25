@@ -188,7 +188,7 @@ func (m *App) startMutation(verb, packageID, version string, targets []mutationT
 		if err != nil || len(result.Changed) == 0 {
 			return completion
 		}
-		snapshot, revisions, reconcileErr := reconcileMutationSnapshot(previous, result.Changed, ParseCsproj)
+		snapshot, revisions, reconcileErr := reconcileMutationSnapshot(previous, result.Changed, newProjectParser())
 		if reconcileErr != nil {
 			logWarn("Saved package files; full reconciliation required: %v", reconcileErr)
 			return completion
