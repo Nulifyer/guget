@@ -356,7 +356,10 @@ func (s *Screen) Draw(frame Frame, w, h int) error {
 		if i < len(s.prev) && next[i] == s.prev[i] {
 			continue
 		}
-		fmt.Fprintf(&b, "\x1b[%d;1H\x1b[0m%s\x1b[0m\x1b]8;;\x1b\\\x1b[K", i+1, next[i])
+		// Erase the old row before drawing. Erasing after a full row would
+		// run with the cursor on the last column and a wrap pending, and the
+		// Windows console then erases that column.
+		fmt.Fprintf(&b, "\x1b[%d;1H\x1b[0m\x1b[K%s\x1b[0m\x1b]8;;\x1b\\", i+1, next[i])
 	}
 	b.WriteString("\x1b[?2026l")
 	if _, err := io.WriteString(s.out, b.String()); err != nil {

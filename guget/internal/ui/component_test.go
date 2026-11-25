@@ -64,6 +64,30 @@ func TestScreenClearsShorterRowsAndInvalidatesOnResize(t *testing.T) {
 		t.Fatal("resize did not invalidate all rows")
 	}
 }
+func TestScreenErasesEachRowBeforeDrawingIt(t *testing.T) {
+	var out bytes.Buffer
+	s := NewScreen(&out)
+	frames := []struct{ content, want string }{
+		{"\x1b[1m╭──╮\x1b[0m", "\x1b[1;1H\x1b[0m\x1b[K\x1b[1m╭──╮\x1b[0m"},
+		{"ab", "\x1b[1;1H\x1b[0m\x1b[Kab"},     // a full row replaced by a short one
+		{"wxyz", "\x1b[1;1H\x1b[0m\x1b[Kwxyz"}, // and by another full row
+		{"abc界", "\x1b[1;1H\x1b[0m\x1b[Kabc"},  // a wide character that does not fit
+	}
+	for _, frame := range frames {
+		out.Reset()
+		if err := s.Draw(NewFrame(frame.content), 4, 1); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(out.String(), frame.want) {
+			t.Fatalf("%q drew %q, want %q", frame.content, out.String(), frame.want)
+		}
+		// A full row leaves a wrap pending on the last column, and the
+		// Windows console erases that column on EL.
+		if _, after, _ := strings.Cut(out.String(), frame.want); strings.Contains(after, "\x1b[K") {
+			t.Fatalf("%q erased after drawing: %q", frame.content, out.String())
+		}
+	}
+}
 func TestEffectsRunIndependentlyAndCanceledSendReturns(t *testing.T) {
 	r := NewRuntime(context.Background(), nil)
 	defer r.cancel()
