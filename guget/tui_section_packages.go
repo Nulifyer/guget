@@ -370,10 +370,11 @@ func (m *App) assessRow(row *packageRow, refs []PackageReference, targets Set[Ta
 	if row.info == nil {
 		return
 	}
-	assessment := assessPackage(row.info, refs, targets, m.updateTarget)
+	floors := floorsOf(row.info, refs) // shared by both policies
+	assessment := assessFloors(row.info, floors, targets, m.updateTarget)
 	stable := assessment
 	if m.updateTarget != UpdateTargetStable {
-		stable = assessPackage(row.info, refs, targets, UpdateTargetStable)
+		stable = assessFloors(row.info, floors, targets, UpdateTargetStable)
 	}
 	row.latestCompatible = assessment.Candidate
 	row.latestStable = stable.Candidate

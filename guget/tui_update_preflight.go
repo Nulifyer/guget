@@ -99,6 +99,23 @@ func (m *App) indexedUpdateDependencyRequirements(packageID string, candidate *P
 	}
 	consumers := append(changing, snapshotAffectedProjects(m.ctx.ParsedProjects, changing, packageID)...)
 	slices.SortFunc(consumers, func(a, b *ParsedProject) int { return strings.Compare(a.FilePath, b.FilePath) })
+	// Consumers usually share requests and always share the candidate's
+	// groups, so parse each request and group minimum once per call.
+	type request struct {
+		version SemVer
+		known   bool
+	}
+	requests := make(map[string]request)
+	type minimumKey struct {
+		group *dependencyGroup
+		id    string
+	}
+	type groupMinimum struct {
+		version   SemVer
+		inclusive bool
+		found     bool
+	}
+	minimums := make(map[minimumKey]groupMinimum)
 	for i, consumer := range consumers {
 		if i > 0 && consumer.FilePath == consumers[i-1].FilePath {
 			continue
@@ -115,7 +132,12 @@ func (m *App) indexedUpdateDependencyRequirements(packageID string, candidate *P
 			if requested == "" {
 				requested = reference.Version.String()
 			}
-			current, known := literalDependencyRequest(requested)
+			parsed, seen := requests[requested]
+			if !seen {
+				parsed.version, parsed.known = literalDependencyRequest(requested)
+				requests[requested] = parsed
+			}
+			current, known := parsed.version, parsed.known
 			if !known {
 				continue
 			}
@@ -130,8 +152,14 @@ func (m *App) indexedUpdateDependencyRequirements(packageID string, candidate *P
 				}
 				var required SemVer
 				requiredInclusive, conflict := false, false
-				for _, group := range groups {
-					minimum, inclusive, found := dependencyGroupMinimum(group, reference.Name)
+				for g := range groups {
+					key := minimumKey{group: &groups[g], id: id}
+					result, seen := minimums[key]
+					if !seen {
+						result.version, result.inclusive, result.found = dependencyGroupMinimum(groups[g], reference.Name)
+						minimums[key] = result
+					}
+					minimum, inclusive, found := result.version, result.inclusive, result.found
 					if !found || current.IsNewerThan(minimum) || (!minimum.IsNewerThan(current) && inclusive) {
 						conflict = false
 						break

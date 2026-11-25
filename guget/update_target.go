@@ -110,6 +110,47 @@ func (a PackageAssessment) Deprecated() bool { return len(a.Deprecations) > 0 }
 // prerelease rule follows the references at the newest installed version.
 // It does no I/O.
 func assessPackage(info *PackageInfo, refs []PackageReference, frameworks Set[TargetFramework], policy UpdateTarget) PackageAssessment {
+	if info == nil {
+		return assessFloors(nil, packageFloors{}, frameworks, policy)
+	}
+	return assessFloors(info, floorsOf(info, refs), frameworks, policy)
+}
+
+// packageFloors holds each reference's floor: the version in use, else its
+// lower bound. It depends only on the references and info, so a caller that
+// assesses several policies computes it once.
+type packageFloors struct {
+	floors     []packageFloor
+	newest     SemVer
+	haveNewest bool
+}
+
+type packageFloor struct {
+	version    SemVer
+	known      bool // version is set
+	installed  bool // version is the one in use, not only the lower bound
+	preRelease bool // the requested lower bound is a prerelease
+}
+
+func floorsOf(info *PackageInfo, refs []PackageReference) packageFloors {
+	result := packageFloors{floors: make([]packageFloor, 0, len(refs))}
+	for _, ref := range refs {
+		r, parsed := ref.RequestedRange()
+		f := packageFloor{preRelease: parsed && r.LowerBoundIsPreRelease()}
+		if installed := rowVersion(ref, info); installed.IsValid() {
+			f.version, f.known, f.installed = installed, true, true
+		} else if lower, ok := r.LowerBound(); parsed && ok && lower.IsValid() {
+			f.version, f.known = lower, true
+		}
+		if f.known && (!result.haveNewest || f.version.IsNewerThan(result.newest)) {
+			result.newest, result.haveNewest = f.version, true
+		}
+		result.floors = append(result.floors, f)
+	}
+	return result
+}
+
+func assessFloors(info *PackageInfo, computed packageFloors, frameworks Set[TargetFramework], policy UpdateTarget) PackageAssessment {
 	if _, ok := parseUpdateTarget(string(policy)); !ok {
 		policy = UpdateTargetCompatibleStable
 	}
@@ -117,30 +158,7 @@ func assessPackage(info *PackageInfo, refs []PackageReference, frameworks Set[Ta
 	if info == nil {
 		return a
 	}
-
-	// Each reference's floor: the version in use, else its lower bound.
-	type floor struct {
-		version    SemVer
-		known      bool // version is set
-		installed  bool // version is the one in use, not only the lower bound
-		preRelease bool // the requested lower bound is a prerelease
-	}
-	floors := make([]floor, 0, len(refs))
-	var newest SemVer
-	haveNewest := false
-	for _, ref := range refs {
-		r, parsed := ref.RequestedRange()
-		f := floor{preRelease: parsed && r.LowerBoundIsPreRelease()}
-		if installed := rowVersion(ref, info); installed.IsValid() {
-			f.version, f.known, f.installed = installed, true, true
-		} else if lower, ok := r.LowerBound(); parsed && ok && lower.IsValid() {
-			f.version, f.known = lower, true
-		}
-		if f.known && (!haveNewest || f.version.IsNewerThan(newest)) {
-			newest, haveNewest = f.version, true
-		}
-		floors = append(floors, f)
-	}
+	floors, newest, haveNewest := computed.floors, computed.newest, computed.haveNewest
 
 	a.Prerelease = policy.alwaysPrerelease()
 	if !a.Prerelease {

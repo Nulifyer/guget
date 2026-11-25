@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/xml"
-	"fmt"
 	"strconv"
 	"strings"
 	"unicode"
@@ -317,14 +316,26 @@ func (v SemVer) Normalized() string {
 	if v.invalid {
 		return v.Raw
 	}
-	s := fmt.Sprintf("%d.%d.%d", v.Major, v.Minor, v.Patch)
+	return string(v.appendNormalized(make([]byte, 0, 24)))
+}
+
+// appendNormalized appends Normalized without fmt, which row assessment
+// calls for every reference on each refresh.
+func (v SemVer) appendNormalized(b []byte) []byte {
+	b = strconv.AppendInt(b, int64(v.Major), 10)
+	b = append(b, '.')
+	b = strconv.AppendInt(b, int64(v.Minor), 10)
+	b = append(b, '.')
+	b = strconv.AppendInt(b, int64(v.Patch), 10)
 	if v.Revision > 0 {
-		s += "." + strconv.Itoa(v.Revision)
+		b = append(b, '.')
+		b = strconv.AppendInt(b, int64(v.Revision), 10)
 	}
 	if v.PreRelease != "" {
-		s += "-" + v.PreRelease
+		b = append(b, '-')
+		b = append(b, v.PreRelease...)
 	}
-	return s
+	return b
 }
 
 // versionKey identifies a version for maps and sets: versions NuGet treats as
@@ -333,7 +344,15 @@ func (v SemVer) versionKey() string {
 	if v.invalid {
 		return "\x00" + v.Raw
 	}
-	return strings.ToLower(v.Normalized())
+	b := v.appendNormalized(make([]byte, 0, 24))
+	for i, c := range b {
+		if 'A' <= c && c <= 'Z' {
+			b[i] = c + ('a' - 'A')
+		} else if c >= 0x80 {
+			return strings.ToLower(string(b))
+		}
+	}
+	return string(b)
 }
 
 func (s *SemVer) UnmarshalXMLAttr(attr xml.Attr) error {
