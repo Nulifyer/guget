@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 )
 
 // unmodeledMSBuildImports names an MSBuild import that static evaluation
@@ -134,4 +135,22 @@ func environValue(environ []string, name string, fold bool) string {
 		}
 	}
 	return value
+}
+
+var (
+	reportedImportsMu sync.Mutex
+	reportedImports   = make(map[string]bool)
+)
+
+// reportUnmodeledImports warns once per reason, so the log explains why saves
+// that are normally instant run MSBuild and may be refused, without repeating
+// on every save of a held update key.
+func reportUnmodeledImports(reason string) {
+	reportedImportsMu.Lock()
+	defer reportedImportsMu.Unlock()
+	if reportedImports[reason] {
+		return
+	}
+	reportedImports[reason] = true
+	logWarn("Package edits use MSBuild evaluation because %s; saves are slower and follow MSBuild's ownership", reason)
 }

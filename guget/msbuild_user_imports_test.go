@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -147,5 +148,20 @@ func TestTUIStaticOwnershipYieldsToUnmodeledImports(t *testing.T) {
 				t.Fatal("refused update changed the project")
 			}
 		})
+	}
+}
+
+func TestReportUnmodeledImportsWarnsOncePerReason(t *testing.T) {
+	oldLevel, oldOut, oldErr := logLevel, logOutWriter, logErrWriter
+	t.Cleanup(func() { logLevel, logOutWriter, logErrWriter = oldLevel, oldOut, oldErr })
+	var buffer bytes.Buffer
+	logSetLevel(LogLevelWarn)
+	logSetOutput(&buffer)
+	reason := "the environment sets CustomAfterMicrosoftCommonTargets (" + t.Name() + ")"
+	for range 3 {
+		reportUnmodeledImports(reason)
+	}
+	if got := strings.Count(buffer.String(), "Package edits use MSBuild evaluation because "+reason); got != 1 {
+		t.Fatalf("warned %d times, want once:\n%s", got, buffer.String())
 	}
 }

@@ -95,6 +95,7 @@ func planPackageMutation(verb, packageID, version string, targets []mutationTarg
 		if !checkedImports {
 			checkedImports = true
 			if reason := unmodeledMSBuildImports(); reason != "" {
+				reportUnmodeledImports(reason)
 				logDebug("%s %s uses MSBuild evaluation: %s", verb, packageID, reason)
 				staticOwnership = false
 				return false
