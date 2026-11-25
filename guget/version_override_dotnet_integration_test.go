@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"maps"
 	"os"
@@ -86,9 +87,10 @@ func snapshotFiles(t *testing.T, repo string) map[string]string {
 // TestVersionOverrideEditsMatchDotnet checks the static edit decision for
 // VersionOverride declarations against MSBuild, dotnet add package, and
 // restore: the owner static evaluation chooses is the file MSBuild reports,
-// guget edits it without starting the SDK, and the result restores the same
-// version as dotnet's own edit. Declarations static evaluation must not decide
-// keep MSBuild evaluation or are refused like restore refuses them.
+// the TUI's static path edits it without starting the SDK, the CLI, which
+// evaluates with MSBuild, makes the same edit, and the result restores the
+// same version as dotnet's own edit. Declarations static evaluation must not
+// decide keep MSBuild evaluation or are refused like restore refuses them.
 func TestVersionOverrideEditsMatchDotnet(t *testing.T) {
 	oracle := newPackageOracle(t)
 	const central = `<ItemGroup><PackageVersion Include="Oracle.A" Version="1.0.0" /><PackageVersion Include="Oracle.B" Version="1.0.0" /></ItemGroup>`
@@ -140,13 +142,24 @@ func TestVersionOverrideEditsMatchDotnet(t *testing.T) {
 			if version, output, err := oracle.restoredVersion(t, repo, project, "Oracle.A"); err != nil || version != "2.0.0" {
 				t.Fatalf("restore before the edit resolved %q: %v\n%s", version, err, output)
 			}
+			cliRepo := oracle.workspace(t, test.files)
 			before := snapshotFiles(t, repo)
 			withoutDotnet(t, func() {
-				if code, output := gugetIn(t, repo, "update", "Oracle.A", "--version", "3.0.0", "--file", project); code != ExitSuccess {
-					t.Fatalf("guget update without the SDK: %d\n%s", code, output)
+				plan, _, _, err := planPackageMutation("update", "Oracle.A", "3.0.0", []mutationTarget{{project: parsed}}, mutationOptions{staticOwnership: true})
+				if err != nil {
+					t.Fatalf("TUI plan without the SDK: %v", err)
+				}
+				if _, err := plan.ApplyContext(context.Background()); err != nil {
+					t.Fatal(err)
 				}
 			})
 			after := snapshotFiles(t, repo)
+			if code, output := gugetIn(t, cliRepo, "update", "Oracle.A", "--version", "3.0.0", "--file", filepath.Join(cliRepo, "App", "App.csproj")); code != ExitSuccess {
+				t.Fatalf("CLI update with MSBuild evaluation: %d\n%s", code, output)
+			}
+			if cliAfter := snapshotFiles(t, cliRepo); !maps.Equal(cliAfter, after) {
+				t.Fatalf("CLI edit %v differs from the static edit %v", cliAfter, after)
+			}
 			for name, content := range before {
 				owned := name == test.owner
 				if changed := after[name] != content; changed != owned {

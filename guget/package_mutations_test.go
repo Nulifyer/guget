@@ -39,7 +39,7 @@ func (failingRunner) Run(context.Context, string, ...string) ([]byte, error) {
 
 func TestMutationPlanReportsEvaluationFailureSeparately(t *testing.T) {
 	root := t.TempDir()
-	path := writeCLIProject(t, root, "Sdk", `<Project Sdk="Microsoft.NET.Sdk"><ItemGroup><PackageReference Include="Example" Version="1.0.0" Condition="'$(Configuration)' == 'Debug'" /></ItemGroup></Project>`)
+	path := writeCLIProject(t, root, "Sdk", `<Project Sdk="Microsoft.NET.Sdk"><ItemGroup><PackageReference Include="Example" Version="1.0.0" /></ItemGroup></Project>`)
 	project, err := ParseCsproj(path)
 	if err != nil {
 		t.Fatal(err)

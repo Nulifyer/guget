@@ -13,19 +13,21 @@ import (
 	"github.com/nulifyer/guget/internal/projectedit"
 )
 
-// canEditLiteralDeclaration decides, for the TUI and the CLI alike, whether a
-// version edit or removal can use the owner static evaluation found instead of
-// MSBuild evaluation. Static evaluation is the authority when it has no gaps and
-// every consumed file holds only unconditional, literal declarations it models:
-// one reference and one version owner. Without CPM the version is the
-// reference's Version; under CPM it is the central PackageVersion, or a
-// VersionOverride in the file that declares the reference, which wins over the
-// central version (NU1013 is refused before this check). Anything else, such as
-// a condition, Choose, Update, Remove, or a property-valued version, keeps MSBuild
-// evaluation. Generated NuGet build imports can affect evaluation without
-// changing which file declares the version, so they do not prevent the edit.
-// Callers still check that the consumed revisions are current and apply the
-// normal transaction.
+// canEditLiteralDeclaration decides whether a TUI version edit or removal can
+// use the owner static evaluation found instead of MSBuild evaluation
+// (mutationOptions.staticOwnership; the CLI always evaluates). Static
+// evaluation is the authority when it has no gaps and every consumed file
+// holds only unconditional, literal declarations it models: one reference and
+// one version owner. Without CPM the version is the reference's Version; under
+// CPM it is the central PackageVersion, or a VersionOverride in the file that
+// declares the reference, which wins over the central version (NU1013 is
+// refused before this check). Anything else, such as a condition, Choose,
+// Update, Remove, or a property-valued version, keeps MSBuild evaluation.
+// Generated NuGet build imports can affect evaluation without changing which
+// file declares the version, so they do not prevent the edit. Imports outside
+// the workspace that static evaluation cannot see are checked separately, once
+// per plan (unmodeledMSBuildImports). Callers still check that the consumed
+// revisions are current and apply the normal transaction.
 func canEditLiteralDeclaration(project *ParsedProject, packageID string) bool {
 	if len(project.InputRevisions) == 0 || len(project.DiscoveryErrors) != 0 {
 		return false

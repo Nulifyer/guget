@@ -24,6 +24,13 @@ type mutationOptions struct {
 	skipLocked      bool // bulk updates leave exact [x.y.z] pins alone
 	refuseLocked    bool // explicit updates of an exact pin are refused
 	removeInherited bool
+	// staticOwnership lets an update or removal use the owner static
+	// evaluation found (canEditLiteralDeclaration) instead of MSBuild
+	// evaluation. Only the TUI sets it, after validating the loaded input
+	// revisions; the CLI keeps MSBuild evaluation as the authority. It is
+	// ignored while an MSBuild import outside the workspace is configured
+	// (unmodeledMSBuildImports).
+	staticOwnership bool
 	runner          packageops.ProcessRunner // MSBuild runner; nil runs dotnet
 	// selectVersion, when set, chooses each update target's version instead
 	// of the plan's single version, from the project and its installed
@@ -78,6 +85,23 @@ func planPackageMutation(verb, packageID, version string, targets []mutationTarg
 			return editplan.Plan{}, nil, 0, err
 		}
 	}
+	// The imports outside the workspace are checked once per plan, off the
+	// TUI event loop, and only when a project would otherwise need MSBuild.
+	staticOwnership, checkedImports := options.staticOwnership && (verb == "update" || verb == "remove"), false
+	staticOwner := func(project *ParsedProject) bool {
+		if !staticOwnership {
+			return false
+		}
+		if !checkedImports {
+			checkedImports = true
+			if reason := unmodeledMSBuildImports(); reason != "" {
+				logDebug("%s %s uses MSBuild evaluation: %s", verb, packageID, reason)
+				staticOwnership = false
+				return false
+			}
+		}
+		return canEditLiteralDeclaration(project, packageID)
+	}
 	var operations []projectedit.Operation
 	var rows []planRow
 	var skippedRows []planRow
@@ -94,7 +118,7 @@ func planPackageMutation(verb, packageID, version string, targets []mutationTarg
 				return editplan.Plan{}, nil, skipped, err
 			}
 		}
-		if project.RequiresEvaluation && !((verb == "update" || verb == "remove") && canEditLiteralDeclaration(project, packageID)) {
+		if project.RequiresEvaluation && !staticOwner(project) {
 			ctx := options.ctx
 			if ctx == nil {
 				ctx = context.Background()

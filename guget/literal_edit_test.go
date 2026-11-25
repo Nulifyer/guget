@@ -73,9 +73,8 @@ func TestReadySDKQuickUpdateNeedsNoSDKProcess(t *testing.T) {
 				if !found || m.ctx.Saving || m.ctx.Reloading {
 					t.Fatal("committed requested version did not reach the idle row")
 				}
-				// The CLI shares the decision, so it plans the same edit without the SDK.
-				if _, _, err := buildMutationPlan("update", "A", "3.0.0", m.ctx.ParsedProjects); err != nil {
-					t.Fatalf("CLI planning needed the SDK: %v", err)
+				if _, _, err := buildMutationPlan("update", "A", "3.0.0", m.ctx.ParsedProjects); err == nil || !strings.Contains(err.Error(), "requires MSBuild evaluation") {
+					t.Fatalf("CLI evaluation policy changed: %v", err)
 				}
 			})
 		}
@@ -125,7 +124,7 @@ func TestLiteralUpdateRetainsEvaluationForUncertainOwnership(t *testing.T) {
 				t.Fatal("uncertain ownership bypassed evaluation")
 			}
 			t.Setenv("PATH", t.TempDir())
-			_, _, _, err = planPackageMutation("update", "A", "2.0.0", []mutationTarget{{project: project}}, mutationOptions{})
+			_, _, _, err = planPackageMutation("update", "A", "2.0.0", []mutationTarget{{project: project}}, mutationOptions{staticOwnership: true})
 			if err == nil || !strings.Contains(err.Error(), "requires MSBuild evaluation") {
 				t.Fatalf("did not retain evaluation: %v", err)
 			}
@@ -243,8 +242,8 @@ func TestCentralLiteralUpdateRejectsAmbiguousDeclarations(t *testing.T) {
 }
 
 // A VersionOverride is the effective version in the file that declares the
-// reference. Static evaluation establishes that owner, so the TUI and CLI edit
-// it without the SDK, leaving the central version alone.
+// reference. Static evaluation establishes that owner, so the TUI edits it
+// without the SDK, leaving the central version alone.
 func TestVersionOverrideUsesTheStaticOwner(t *testing.T) {
 	const central = `<Project><PropertyGroup><ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally></PropertyGroup><ItemGroup><PackageVersion Include="A" Version="1.0.0"/><PackageVersion Include="B" Version="1.0.0"/></ItemGroup></Project>`
 	for _, test := range []struct {
@@ -296,13 +295,13 @@ func TestVersionOverrideUsesTheStaticOwner(t *testing.T) {
 			if readFile(t, filepath.Join(root, "Directory.Packages.props")) != central {
 				t.Fatal("the central version changed")
 			}
-			// The CLI plans through the same decision.
+			// The CLI keeps MSBuild evaluation as the authority.
 			parsed, err := ParseCsproj(path)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, _, _, err := planPackageMutation("update", "A", "3.0.0", []mutationTarget{{project: parsed}}, mutationOptions{runner: failingRunner{}}); err != nil {
-				t.Fatalf("CLI planning needed MSBuild: %v", err)
+			if _, _, _, err := planPackageMutation("update", "A", "3.0.0", []mutationTarget{{project: parsed}}, mutationOptions{runner: failingRunner{}}); err == nil || !strings.Contains(err.Error(), "requires MSBuild evaluation") {
+				t.Fatalf("CLI planning skipped MSBuild: %v", err)
 			}
 		})
 	}
