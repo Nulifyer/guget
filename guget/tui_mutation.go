@@ -180,21 +180,21 @@ func (m *App) startMutation(verb, packageID, version string, targets []mutationT
 	}
 	return func() ui.Event {
 		if err := options.ctx.Err(); err != nil {
-			return writeResultMsg{err: err, packageID: packageID}
+			return writeResultMsg{err: err}
 		}
 		expected, err := mutationSnapshotInputs(previous, targets, packageID)
 		if err == nil {
 			err = validateMutationSnapshotInputs(expected)
 		}
 		if err != nil {
-			return writeResultMsg{err: err, packageID: packageID, reload: true}
+			return writeResultMsg{err: err, reload: true}
 		}
 		plan, _, skipped, err := planPackageMutation(verb, packageID, version, targets, options)
 		if err != nil {
-			return writeResultMsg{err: err, packageID: packageID}
+			return writeResultMsg{err: err}
 		}
 		if err := validateMutationSnapshotInputs(expected); err != nil {
-			return writeResultMsg{err: err, packageID: packageID, reload: true}
+			return writeResultMsg{err: err, reload: true}
 		}
 		// The TUI saves while keys repeat, so it does not wait for each file to
 		// be flushed to disk; the CLI does.
@@ -202,7 +202,7 @@ func (m *App) startMutation(verb, packageID, version string, targets []mutationT
 		if len(result.Unrecovered) > 0 {
 			err = fmt.Errorf("%w; inspect unrecovered files before retrying: %s", err, strings.Join(result.Unrecovered, ", "))
 		}
-		completion := writeResultMsg{err: err, packageID: packageID, summary: mutationSummary(verb, packageID, version, len(result.Changed), skipped), changed: result.Changed, written: len(result.Changed), skipped: skipped, reload: len(result.Changed) > 0, selection: selection}
+		completion := writeResultMsg{err: err, summary: mutationSummary(verb, packageID, version, len(result.Changed), skipped), changed: result.Changed, written: len(result.Changed), skipped: skipped, reload: len(result.Changed) > 0, selection: selection}
 		if err != nil || len(result.Changed) == 0 {
 			return completion
 		}

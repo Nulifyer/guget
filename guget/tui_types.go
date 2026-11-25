@@ -122,7 +122,6 @@ type workspaceReloadedMsg struct {
 
 type writeResultMsg struct {
 	err       error
-	packageID string // the package the save was for
 	summary   string
 	changed   []string // files the transaction changed
 	written   int      // number of changed files in the completed transaction
@@ -387,6 +386,13 @@ func (r packageRow) effectiveVersion() SemVer {
 		return r.oldest
 	}
 	return r.ref.Version
+}
+
+// olderThanInUse reports whether v is older than the version the row uses
+// (the oldest one when its projects differ). Such a version is never offered
+// or shown as available.
+func (r packageRow) olderThanInUse(v *PackageVersion) bool {
+	return v != nil && r.effectiveVersion().IsNewerThan(v.SemVer)
 }
 
 // skippedStable returns the stable policy's choice when the update target

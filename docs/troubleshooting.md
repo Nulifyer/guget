@@ -70,14 +70,13 @@ package actions.
 ## Updating another package does nothing yet
 
 Guget makes one package change at a time. While a save or reload runs, an
-update key is refused, and the status line says `Saving package changes; wait
-before updating again` or `Loading projects; wait before updating`. The footer
-shows `saving...` only for a save that takes longer than 80 ms, so a quick save
-can finish before you see it. Retry the key when the save or reload finishes.
+update key does nothing and the status line keeps its text. The footer shows
+`reloading...` during a reload, and `saving...` for a save that takes longer
+than 80 ms, so a quick save can finish before you see it. Press the key again
+when the save or reload finishes.
 
-A held update key skips the presses that arrive during a save or reload and
-continues with the next press. Use `Ctrl+R` if an external edit has not appeared,
-especially after changes to parent props or configuration files.
+Use `Ctrl+R` if an external edit has not appeared, especially after changes to
+parent props or configuration files.
 
 For a controlled single-project change, use the CLI preview/apply steps in the
 [CLI guide](cli.md#preview-and-apply-an-update).

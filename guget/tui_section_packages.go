@@ -26,21 +26,32 @@ func currentVersionText(row packageRow) string {
 	return row.ref.Version.String()
 }
 
+// availableVersions returns what the Available column shows for row: the
+// update-target policy's choice and, when it differs, the stable policy's
+// (the a key's). A version older than the one in use is never shown, so
+// either can be nil: a reference on a preview is not offered the older stable.
+func availableVersions(row packageRow) (target, stable *PackageVersion) {
+	if !row.olderThanInUse(row.latestCompatible) {
+		target = row.latestCompatible
+	}
+	if row.latestStable != nil && !row.olderThanInUse(row.latestStable) &&
+		(target == nil || row.latestStable.SemVer.String() != target.SemVer.String()) {
+		stable = row.latestStable
+	}
+	return target, stable
+}
+
 // availableVersionText returns the plain text for the merged available column.
 func availableVersionText(row packageRow) string {
-	if row.latestCompatible == nil {
-		// No version qualifies as the update target; the a key's choice still
-		// follows in parentheses.
-		if row.latestStable != nil {
-			return "- (" + row.latestStable.SemVer.String() + ")"
-		}
-		return "-"
+	target, stable := availableVersions(row)
+	available := "-"
+	if target != nil {
+		available = target.SemVer.String() + availableDependencyMarker(row)
 	}
-	compat := row.latestCompatible.SemVer.String()
-	if row.latestStable != nil && row.latestStable.SemVer.String() != compat {
-		return compat + availableDependencyMarker(row) + " (" + row.latestStable.SemVer.String() + ")"
+	if stable != nil {
+		available += " (" + stable.SemVer.String() + ")"
 	}
-	return compat + availableDependencyMarker(row)
+	return available
 }
 
 func availableDependencyMarker(row packageRow) string {
@@ -53,38 +64,26 @@ func availableDependencyMarker(row packageRow) string {
 // availableVersionParts returns the styled update target and, when the stable
 // policy chooses differently, that choice in parentheses (empty otherwise).
 func availableVersionParts(row packageRow) (target, stable string) {
-	stableStyle := func() style.Style {
+	// Yellow or purple is an update, green is the version in use. Muted is a
+	// version between the versions of a row whose projects differ.
+	versionStyle := func(v SemVer, update style.Style) style.Style {
 		switch {
-		case row.latestStable.SemVer.IsNewerThan(row.ref.Version):
-			return stylePurple
-		case row.ref.Version.IsNewerThan(row.latestStable.SemVer):
+		case v.IsNewerThan(row.ref.Version):
+			return update
+		case row.ref.Version.IsNewerThan(v):
 			return styleMuted
 		default:
 			return styleGreen
 		}
 	}
-	parenthesized := func() string {
-		return styleMuted.Render("(") + stableStyle().Render(row.latestStable.SemVer.String()) + styleMuted.Render(")")
+	targetVersion, stableVersion := availableVersions(row)
+	target = styleSubtle.Render("-")
+	if targetVersion != nil {
+		target = versionStyle(targetVersion.SemVer, styleYellow).Render(targetVersion.SemVer.String()) +
+			styleYellow.Render(availableDependencyMarker(row))
 	}
-	if row.latestCompatible == nil {
-		if row.latestStable != nil {
-			return styleSubtle.Render("-"), parenthesized()
-		}
-		return styleSubtle.Render("-"), ""
-	}
-	compat := row.latestCompatible.SemVer.String()
-	var compStyle style.Style
-	switch {
-	case row.latestCompatible.SemVer.IsNewerThan(row.ref.Version):
-		compStyle = styleYellow
-	case row.ref.Version.IsNewerThan(row.latestCompatible.SemVer):
-		compStyle = styleMuted
-	default:
-		compStyle = styleGreen
-	}
-	target = compStyle.Render(compat) + styleYellow.Render(availableDependencyMarker(row))
-	if row.latestStable != nil && row.latestStable.SemVer.String() != compat {
-		stable = parenthesized()
+	if stableVersion != nil {
+		stable = styleMuted.Render("(") + versionStyle(stableVersion.SemVer, stylePurple).Render(stableVersion.SemVer.String()) + styleMuted.Render(")")
 	}
 	return target, stable
 }
@@ -524,7 +523,7 @@ func (m *App) rebuildPackageRows() {
 	var dependencyReferences updateDependencyReferences
 	for i := range rows {
 		row := &rows[i]
-		if !row.loading && row.err == nil && row.latestCompatible != nil && len(row.latestCompatible.DependencyGroups) > 0 {
+		if !row.loading && row.err == nil && row.latestCompatible != nil && len(row.latestCompatible.DependencyGroups) > 0 && !row.olderThanInUse(row.latestCompatible) {
 			if dependencyReferences == nil {
 				dependencyReferences = indexUpdateDependencyReferences(m.ctx.ParsedProjects)
 			}

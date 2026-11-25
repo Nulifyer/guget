@@ -396,8 +396,10 @@ func (m *App) renderDetailVersionList(row packageRow, w int) string {
 		vStyle := styleMuted
 
 		isCurrent := isInstalled(v.SemVer)
-		isCompat := row.latestCompatible != nil && v.SemVer.Equal(row.latestCompatible.SemVer)
-		isLatest := row.latestStable != nil && v.SemVer.Equal(row.latestStable.SemVer)
+		// A policy's choice older than the version in use is not an update,
+		// so it gets no marker here either.
+		isCompat := row.latestCompatible != nil && !row.olderThanInUse(row.latestCompatible) && v.SemVer.Equal(row.latestCompatible.SemVer)
+		isLatest := row.latestStable != nil && !row.olderThanInUse(row.latestStable) && v.SemVer.Equal(row.latestStable.SemVer)
 		isHighlighted := isCurrent || isCompat || isLatest
 
 		switch {

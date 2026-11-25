@@ -80,7 +80,7 @@ func finishActionReload(t *testing.T, m *App, messages <-chan ui.Event) {
 
 func selectedActionPackage(m *App) string { return m.packageSelection().name }
 
-func TestHeldQuickUpdatesProcessEveryPackage(t *testing.T) {
+func TestRepeatedQuickUpdatesProcessEveryPackage(t *testing.T) {
 	for _, key := range []rune{'u', 'U', 'a', 'A'} {
 		t.Run(string(key), func(t *testing.T) {
 			m, messages, path := newActionTestApp(t, "")
@@ -527,8 +527,6 @@ func TestQuickUpdateExplainsUnavailableActions(t *testing.T) {
 		want    string
 		isErr   bool
 	}{
-		{"saving", func(m *App) { m.ctx.Saving = true }, "Saving package changes", false},
-		{"reloading", func(m *App) { m.ctx.Reloading = true }, "Loading projects", false},
 		{"stale", func(m *App) { m.workspaceStale = true }, "Workspace is out of date", true},
 		{"empty", func(m *App) { m.packages.rows = nil }, "Select a package", false},
 		{"loading", func(m *App) { m.packages.rows[0].loading = true }, "Loading metadata for A", false},

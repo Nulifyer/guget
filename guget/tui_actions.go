@@ -11,31 +11,28 @@ import (
 	ui "github.com/nulifyer/guget/internal/ui"
 )
 
+// updatePackage handles u, U, a, and A: it updates the selected row. Every
+// press is handled alike, so a key the user keeps pressed updates one row per
+// repeat. After an update the cursor keeps its list position; when the list
+// re-sorts, the next package moves under it and the next repeat updates that.
 func (m *App) updatePackage(useStable bool, scope actionScope) ui.Effect {
-	if effect, refused := m.updateRefusedEverywhere(); refused {
-		return effect
+	switch {
+	case m.ctx.Saving || m.ctx.Reloading:
+		// One package change runs at a time. The press does nothing and the
+		// status row keeps its text: the footer shows "saving..." or
+		// "reloading..." in its place, and a message set here would replace
+		// the result of the update before, on every key repeat.
+		return nil
+	case m.workspaceStale:
+		return m.setStatus("Workspace is out of date; fix files and Ctrl+R before updating", true)
+	case m.packages.cursor < 0 || m.packages.cursor >= len(m.packages.rows):
+		return m.setStatus("Select a package to update", false)
 	}
-	plan := m.planQuickUpdate(m.packages.rows[m.packages.cursor], useStable, scope, nil)
+	plan := m.planQuickUpdate(m.packages.rows[m.packages.cursor], useStable, scope)
 	if plan.version == "" {
 		return m.setStatus(plan.refusal, plan.isErr)
 	}
 	return m.applyOrConfirmUpdateWithSelection(plan.name, plan.version, plan.project, m.rowReloadSelection())
-}
-
-// updateRefusedEverywhere reports the reasons no row can be updated now: a
-// save or reload is running, the workspace is stale, or nothing is selected.
-func (m *App) updateRefusedEverywhere() (ui.Effect, bool) {
-	switch {
-	case m.ctx.Saving:
-		return m.setStatus("Saving package changes; wait before updating again", false), true
-	case m.ctx.Reloading:
-		return m.setStatus("Loading projects; wait before updating", false), true
-	case m.workspaceStale:
-		return m.setStatus("Workspace is out of date; fix files and Ctrl+R before updating", true), true
-	case m.packages.cursor < 0 || m.packages.cursor >= len(m.packages.rows):
-		return m.setStatus("Select a package to update", false), true
-	}
-	return nil, false
 }
 
 // quickUpdatePlan is what u, U, a, or A would do to one row. It is decided
@@ -46,16 +43,11 @@ type quickUpdatePlan struct {
 	project *ParsedProject
 	refusal string // status text for a refused row
 	isErr   bool
-	// settled marks a refusal that leaves nothing this key can do: the row is
-	// at the target or beyond it, or only pins that this scope skips are
-	// behind. Other refusals leave an update the user must decide about.
-	settled bool
 }
 
 // planQuickUpdate decides the quick update for row without changing any
-// state. index may be nil; a caller planning many rows passes one index so
-// the dependency check does not rebuild it per row.
-func (m *App) planQuickUpdate(row packageRow, useStable bool, scope actionScope, index updateDependencyReferences) quickUpdatePlan {
+// state.
+func (m *App) planQuickUpdate(row packageRow, useStable bool, scope actionScope) quickUpdatePlan {
 	plan := quickUpdatePlan{name: row.ref.Name}
 	refuse := func(text string, isErr bool) quickUpdatePlan {
 		plan.refusal, plan.isErr = text, isErr
@@ -104,8 +96,7 @@ func (m *App) planQuickUpdate(row packageRow, useStable bool, scope actionScope,
 		return refuse("No "+kind+" version for "+row.ref.Name+"; v to choose a version", true)
 	}
 	// From All Projects no update key changes a pin. A row that only pins
-	// keep behind the target is settled, so a held sweep does not stop on it,
-	// and its status says what does change a pin.
+	// keep behind the target says what does change a pin.
 	pinsBehind := 0
 	for _, pin := range pins {
 		if target.SemVer.IsNewerThan(pin.Version) {
@@ -114,7 +105,6 @@ func (m *App) planQuickUpdate(row packageRow, useStable bool, scope actionScope,
 	}
 	onlyPinsBehind := fmt.Sprintf("%s: %d pinned skipped; select a project to update a pin", row.ref.Name, pinsBehind)
 	if assessment.Target == nil {
-		plan.settled = true
 		for _, installed := range assessment.Installed {
 			if installed.IsNewerThan(target.SemVer) {
 				return refuse(row.ref.Name+" "+installed.String()+" is newer than "+target.SemVer.String()+"; v to choose a version", false)
@@ -149,17 +139,13 @@ func (m *App) planQuickUpdate(row packageRow, useStable bool, scope actionScope,
 		}
 	}
 	if !needsUpdate {
-		plan.settled = true
 		if pinsBehind > 0 {
 			return refuse(onlyPinsBehind, false)
 		}
 		return refuse(row.ref.Name+" is already at "+version, false)
 	}
 	if !useStable {
-		if index == nil {
-			index = indexUpdateDependencyReferences(m.ctx.ParsedProjects)
-		}
-		if requirements := m.indexedUpdateDependencyRequirements(row.ref.Name, target, scope, index); len(requirements) > 0 {
+		if requirements := m.quickUpdateDependencyRequirements(row.ref.Name, target, scope); len(requirements) > 0 {
 			return refuse(updateDependencyConflict(requirements[0]), true)
 		}
 	}

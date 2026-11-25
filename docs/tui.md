@@ -57,33 +57,31 @@ For quick updates from the package panel:
 | `a` | The `stable` target for the selected project: the newest stable version, whatever its frameworks. |
 | `A` | Apply the selected package's `stable` target across projects. |
 
-Hold one of these keys to update the whole list. Each key repeat updates one
-package and moves the selection to it. The hold skips rows it cannot update:
-packages already at the target, a selected project's pinned reference (it
-needs your confirmation), and rows that need a decision, such as `[deps]`
-rows. A skipped `[deps]` row is updated later in the same hold, once the
-dependency it waits for has been updated. When nothing is left to update, the
-selection rests on the first row in the list that still needs a decision. The
-status line gives that row's reason. Across projects, a package that only
-pinned references keep behind the target needs no decision there, so the hold
-passes it without resting on it. A row whose save fails is not saved again in
-the same hold. The hold continues with the other rows and can rest on that row
-with the failure. Release the key and press it again to retry.
+Each press updates the selected row, and the selection stays at the same
+list position. With the default sort, an updated row moves down and the next
+outdated package takes its place. Holding `u` therefore updates the list row
+after row. A row the key cannot update stops this: a pinned reference asks for
+confirmation, and a `[deps]` row or a failed save reports why in the status
+line. Move past that row to continue.
 
-Every update starts from a key press, so releasing the key starts nothing
-more. Guget counts three or more presses at most 125 ms apart as a hold.
-Any other key or mouse action ends it. During a hold, a press that arrives
-while a save or reload runs is skipped, and the next press continues. Separate
-presses act on the selected row only: a row that cannot be updated reports
-why, and the selection stays at the same list position after an update.
+Guget makes one package change at a time. A press that arrives while a save
+or reload runs does nothing.
 
 The update target follows the [`update-target` setting](settings.md#update-target).
 The default, `compatible-stable`, is the newest stable version every affected
 framework can use. `a` and `A` always choose what `dotnet package update`
-would, the `stable` setting. Under every setting, a reference whose requested
-version is a prerelease, such as `11.0.0-preview.6`, is offered newer
-prereleases. No quick update lowers a version. When nothing newer qualifies,
-the status line says one of these:
+would, the `stable` setting.
+
+A reference on a prerelease, such as `11.0.0-preview.6`, follows these rules:
+
+- Under `compatible-stable` and `stable`, it is offered newer prereleases
+  until a stable version newer than it is listed. From then on it is offered
+  the newest stable version.
+- Under `compatible`, it is offered the newest version, prereleases included.
+
+No update goes below the version in use, and the Available column never shows
+an older version. When nothing newer qualifies, the status line says one of
+these:
 
 - The package is already at the target.
 - An installed version is newer than the target.
@@ -130,7 +128,9 @@ For example, `11.12.0 (12.2.0)` under `compatible-stable` means `u` goes to
 11.12.0 and `a` goes to 12.2.0, which a target framework cannot use. When the
 package is already at 11.12.0, its marker is `✓` and the detail panel adds
 **Newer version not offered** to explain the parenthesized version.
-`- (12.2.0)` means no version qualifies as the update target. In a narrow
+`- (12.2.0)` means no version qualifies as the update target. A version older
+than the one in use is never shown: its place holds `-`, or the parentheses
+are left out. In a narrow
 column the parenthesized version shortens to `(...)`; select the row to read
 it in the detail panel.
 
