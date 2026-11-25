@@ -131,7 +131,7 @@ func TestScanWorkspaceSourcesMalformedSaveThenRepair(t *testing.T) {
 	if err != nil || len(first.Sources) != 1 || first.Sources[0].URL != filepath.Join(root, "packages") {
 		t.Fatalf("initial scan: %+v, %v", first, err)
 	}
-	if first.InputRevisions[config] != sha256.Sum256([]byte(valid)) {
+	if digest, ok := revisionFor(first.InputRevisions, config); !ok || digest != sha256.Sum256([]byte(valid)) {
 		t.Fatal("consumed configuration revision missing")
 	}
 	mustWriteFile(t, config, `<configuration><packageSources>`)
@@ -143,6 +143,22 @@ func TestScanWorkspaceSourcesMalformedSaveThenRepair(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(repaired.Sources, first.Sources) {
 		t.Fatalf("repaired scan: %+v, %v", repaired, err)
 	}
+}
+
+// revisionFor finds the consumed revision of the file at path. On a
+// case-insensitive filesystem the key is the first configuration name NuGet
+// probes, which can differ in case from the name the test wrote.
+func revisionFor(revisions map[string][sha256.Size]byte, path string) ([sha256.Size]byte, bool) {
+	want, err := os.Stat(path)
+	if err != nil {
+		return [sha256.Size]byte{}, false
+	}
+	for key, digest := range revisions {
+		if info, err := os.Stat(key); err == nil && os.SameFile(info, want) {
+			return digest, true
+		}
+	}
+	return [sha256.Size]byte{}, false
 }
 
 func TestResolveWorkspaceSourcesHonorsExplicitlyEmptySources(t *testing.T) {

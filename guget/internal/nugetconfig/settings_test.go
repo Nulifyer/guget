@@ -583,9 +583,15 @@ func TestLoadCachedKeepsPerRootChainsAndOneRevision(t *testing.T) {
 	if got := sourceNames(second); !reflect.DeepEqual(got, []string{"other", "repo"}) {
 		t.Fatalf("other root sources = %v, want its own chain", got)
 	}
+	// A case-insensitive filesystem reports the first name NuGet probes,
+	// which can differ in case from the name written.
+	want, err := os.Stat(repoConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
 	digest := func(settings *Settings) [32]byte {
 		for _, file := range settings.Files {
-			if file.Path == repoConfig {
+			if info, err := os.Stat(file.Path); err == nil && os.SameFile(info, want) {
 				return file.Digest
 			}
 		}
