@@ -148,7 +148,9 @@ guget update Newtonsoft.Json --version 13.0.4 --all --project /path/to/src
 ```
 
 After that update, repeat the add. The central version now matches, so Guget
-adds only the reference.
+adds only the reference. If no project references the package yet, `update`
+has nothing to change and exits 4. Edit the `PackageVersion` in the central
+file instead, as the message says, then repeat the add.
 
 `dotnet add package` behaves differently. When the central version comes from
 an imported file, it refuses the add. Otherwise it changes the shared version

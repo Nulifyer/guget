@@ -153,10 +153,17 @@ func TestCPMAddRefusesExistingDifferentCentralVersion(t *testing.T) {
 	if err == nil {
 		t.Fatal("accepted central version mismatch")
 	}
-	// The project does not reference the package yet, so the hint must update
-	// every consumer of the central file, which works from any directory.
-	if hint := "guget update Example --version 2.0.0 --all --project " + quoteShellArg(root) + ", then repeat the add"; !strings.Contains(err.Error(), hint) {
-		t.Fatalf("refusal %q does not contain %q", err, hint)
+	// The hint updates every consumer of the central file from any directory,
+	// and covers a central version no project references yet, where update
+	// has nothing to change.
+	for _, hint := range []string{
+		"guget update Example --version 2.0.0 --all --project " + quoteShellArg(root),
+		"if no project references Example yet, edit its PackageVersion in " + central + " instead",
+		"then repeat the add",
+	} {
+		if !strings.Contains(err.Error(), hint) {
+			t.Fatalf("refusal %q does not contain %q", err, hint)
+		}
 	}
 	after, _ := os.ReadFile(central)
 	if string(after) != before {

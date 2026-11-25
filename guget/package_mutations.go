@@ -315,8 +315,8 @@ func planCentralAdd(project *ParsedProject, central, packageID, version string) 
 		case entry.Global:
 			return false, fmt.Errorf("package %q is a GlobalPackageReference in %s; every project that imports it already references it", packageID, owner)
 		case entry.Version != version:
-			return false, fmt.Errorf("central version for %q is %s in %s, which every project using it shares; to change it for all of them, first run: guget update %s --version %s --all --project %s, then repeat the add",
-				packageID, entry.Version, owner, packageID, version, quoteShellArg(filepath.Dir(owner)))
+			return false, fmt.Errorf("central version for %q is %s in %s, which every project using it shares; to change it for all of them, first run: guget update %s --version %s --all --project %s (if no project references %s yet, edit its PackageVersion in %s instead), then repeat the add",
+				packageID, entry.Version, owner, packageID, version, quoteShellArg(filepath.Dir(owner)), packageID, owner)
 		}
 		return false, nil
 	}

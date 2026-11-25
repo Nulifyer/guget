@@ -318,7 +318,8 @@ In a CPM workspace, `add` writes a reference without a version, and a new
 already has a central version, request that version and `add` writes only the
 reference. A different version exits 4. The message shows an `update --all`
 command that changes the shared version for every project, and tells you to
-repeat the add after it. See
+repeat the add after it. If no project references the package yet, the message
+says to edit the central `PackageVersion` instead. See
 [add a package under CPM](project-support.md#add-a-package-under-cpm).
 The CLI does not offer the TUI's choice of add locations.
 
