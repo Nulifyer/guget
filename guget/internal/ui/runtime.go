@@ -16,6 +16,9 @@ import (
 	text "github.com/nulifyer/guget/internal/ui/text"
 )
 
+// frameInterval is the shortest time between two drawn frames.
+const frameInterval = 16 * time.Millisecond
+
 // Runtime serializes component mutations, runs effects asynchronously, and
 // commits bounded frames. Send applies backpressure without spawning goroutines.
 type Runtime struct {
@@ -132,9 +135,17 @@ func (r *Runtime) Run() (err error) {
 	draw()
 	// A frame is committed at most every 16ms while input and result events keep
 	// flowing. Continuous metadata or log events cannot starve keyboard handling.
-	tick := time.NewTicker(16 * time.Millisecond)
-	defer tick.Stop()
-	dirty := false
+	pacer := framePacer{interval: frameInterval, last: time.Now()}
+	frameTimer := time.NewTimer(frameInterval)
+	frameTimer.Stop()
+	defer frameTimer.Stop()
+	scheduleDraw := func() {
+		if ready, wait := pacer.next(time.Now()); ready {
+			draw()
+		} else if wait > 0 {
+			frameTimer.Reset(wait)
+		}
+	}
 	resizePending := false
 	for {
 		select {
@@ -183,14 +194,37 @@ func (r *Runtime) Run() (err error) {
 			default:
 				r.schedule(r.root.HandleEvent(e))
 			}
-			dirty = true
-		case <-tick.C:
-			if dirty {
-				draw()
-				dirty = false
-			}
+			pacer.dirty = true
+			scheduleDraw()
+		case <-frameTimer.C:
+			pacer.armed = false
+			scheduleDraw()
 		}
 	}
+}
+
+// framePacer draws at most one frame per interval. A change after an idle
+// interval draws at once, so a key press does not wait for a ticker phase;
+// changes within the interval share one frame at its end.
+type framePacer struct {
+	interval time.Duration
+	last     time.Time // when the last frame was drawn
+	dirty    bool      // a change is not yet drawn
+	armed    bool      // a wait for the end of the interval is pending
+}
+
+// next reports whether to draw at now. Otherwise wait is how long until the
+// interval ends; it is zero when nothing changed or a wait is pending.
+func (p *framePacer) next(now time.Time) (draw bool, wait time.Duration) {
+	if !p.dirty || p.armed {
+		return false, 0
+	}
+	if wait := p.interval - now.Sub(p.last); wait > 0 {
+		p.armed = true
+		return false, wait
+	}
+	p.last, p.dirty = now, false
+	return true, 0
 }
 
 func dispatchCommittedMouse(frame *Frame, commits <-chan outputCommit, event MouseEvent) (Effect, error) {

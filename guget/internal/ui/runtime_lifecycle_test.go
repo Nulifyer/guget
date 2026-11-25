@@ -89,3 +89,31 @@ func TestShutdownDiscardsUnstartedBatchChildren(t *testing.T) {
 	default:
 	}
 }
+
+func TestFramePacerDrawsIdleChangesAtOnceAndCoalescesBursts(t *testing.T) {
+	start := time.Unix(0, 0)
+	at := func(ms int) time.Time { return start.Add(time.Duration(ms) * time.Millisecond) }
+	p := framePacer{interval: 16 * time.Millisecond, last: start}
+	if draw, wait := p.next(at(30)); draw || wait != 0 {
+		t.Fatalf("nothing changed: draw=%v wait=%v", draw, wait)
+	}
+	p.dirty = true
+	if draw, _ := p.next(at(30)); !draw {
+		t.Fatal("a change after an idle interval did not draw at once")
+	}
+	p.dirty = true
+	if draw, wait := p.next(at(35)); draw || wait != 11*time.Millisecond {
+		t.Fatalf("change within the interval: draw=%v wait=%v, want a wait of 11ms", draw, wait)
+	}
+	p.dirty = true
+	if draw, wait := p.next(at(40)); draw || wait != 0 {
+		t.Fatalf("pending wait was not shared: draw=%v wait=%v", draw, wait)
+	}
+	p.armed = false // the timer fired
+	if draw, _ := p.next(at(46)); !draw {
+		t.Fatal("the burst was not drawn at the end of the interval")
+	}
+	if draw, wait := p.next(at(47)); draw || wait != 0 {
+		t.Fatalf("drawn change drew again: draw=%v wait=%v", draw, wait)
+	}
+}
