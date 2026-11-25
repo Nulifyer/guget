@@ -161,7 +161,10 @@ sources list can differ from `dotnet nuget list source` run elsewhere:
 
 - It searches from the project's directory up to the filesystem root and reads
   one file per directory: the first of `nuget.config`, `NuGet.config`, and
-  `NuGet.Config`. A `.nuget/NuGet.Config` folder file is not read.
+  `NuGet.Config`. On Linux other spellings, such as `nuGet.config` or
+  `NUGET.CONFIG`, are ignored, as `dotnet` ignores them. On Windows and macOS
+  any spelling is read, because their filesystems ignore case by default. A
+  `.nuget/NuGet.Config` folder file is not read.
 - It then reads the user configuration (`~/.nuget/NuGet/NuGet.Config`, or
   `%APPDATA%\NuGet\NuGet.Config` on Windows, with `DOTNET_CLI_HOME` replacing
   the home directory), additional `*.config` files in the `config` folder next

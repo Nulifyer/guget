@@ -42,8 +42,10 @@ func newFixture(t *testing.T) *fixture {
 	return f
 }
 
+// env simulates Linux, including its case-sensitive file system rule, so tests
+// probe the same names on every host.
 func (f *fixture) env() Environment {
-	return Environment{GOOS: "linux", LookupEnv: func(name string) (string, bool) {
+	return Environment{GOOS: "linux", CaseInsensitive: func() bool { return false }, LookupEnv: func(name string) (string, bool) {
 		value, ok := f.vars[name]
 		return value, ok
 	}}

@@ -170,6 +170,12 @@ func TestNuGetConfigurationMatchesDotnetRestore(t *testing.T) {
 			"repo/src/NuGet.config":    oracleConfig(`<packageSources>` + oracleSource("nestedmixed", "nestedmixed") + `</packageSources>`),
 			"repo/src/NuGet.Config":    oracleConfig(`<packageSources>` + oracleSource("nestedupper", "nestedupper") + `</packageSources>`),
 		}},
+		// Linux ignores spellings NuGet does not probe; Windows reads them.
+		{name: "unprobed config spellings", files: map[string]string{
+			"repo/nuget.config":         oracleConfig(`<packageSources>` + oracleSource("repo", "repo") + `</packageSources>`),
+			"repo/src/nuGet.config":     oracleConfig(`<packageSources>` + oracleSource("camel", "camel") + `</packageSources>`),
+			"repo/src/App/NUGET.CONFIG": oracleConfig(`<packageSources>` + oracleSource("shout", "shout") + `</packageSources>`),
+		}},
 		{name: "additional user configuration directory", files: map[string]string{
 			"repo/nuget.config":                     oracleConfig(`<packageSources>` + oracleSource("repo", "repo") + `</packageSources>`),
 			"home/.nuget/NuGet/config/extra.config": oracleConfig(`<packageSources>` + oracleSource("extra", "extra") + `</packageSources>`),

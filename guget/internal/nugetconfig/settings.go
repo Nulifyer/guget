@@ -22,6 +22,10 @@ const DefaultSourceURL = "https://api.nuget.org/v3/index.json"
 type Environment struct {
 	LookupEnv func(string) (string, bool) // nil uses os.LookupEnv
 	GOOS      string                      // empty uses runtime.GOOS
+	// CaseInsensitive reports whether NuGet treats the file system as
+	// case-insensitive. Nil detects it the way NuGet does; see
+	// detectCaseInsensitive.
+	CaseInsensitive func() bool
 }
 
 func (e Environment) lookup(name string) (string, bool) {
@@ -90,9 +94,10 @@ func Load(root string, env Environment) (*Settings, error) {
 // resolution so later calls see later changes. A Cache is not safe for
 // concurrent use.
 type Cache struct {
-	stats map[string]statResult
-	files map[string]readResult
-	dirs  map[string]dirResult
+	ignoreCase *bool
+	stats      map[string]statResult
+	files      map[string]readResult
+	dirs       map[string]dirResult
 }
 
 type dirResult struct {
@@ -173,6 +178,7 @@ func LoadCached(root string, env Environment, cache *Cache) (*Settings, error) {
 		return &Settings{}, fmt.Errorf("resolve configuration root %s: %w", root, err)
 	}
 	loader := fileLoader{cache: cache}
+	ignoreCase := cache.caseInsensitive(env)
 	var files []*configFile
 	var errs []error
 	add := func(path string) bool {
@@ -187,7 +193,7 @@ func LoadCached(root string, env Environment, cache *Cache) (*Settings, error) {
 	}
 
 	for _, dir := range ancestorDirs(root) {
-		for _, name := range configFileNames {
+		for _, name := range configFileNames(ignoreCase) {
 			// NuGet uses the first existing name in each directory.
 			if add(filepath.Join(dir, name)) {
 				break
@@ -200,13 +206,13 @@ func LoadCached(root string, env Environment, cache *Cache) (*Settings, error) {
 			// NuGet creates a missing user config containing nuget.org.
 			files = append(files, defaultUserConfig(userConfig))
 		}
-		for _, path := range configsInDir(cache, filepath.Join(userDir, "config"), "NuGet.Config", env) {
+		for _, path := range configsInDir(cache, filepath.Join(userDir, "config"), "NuGet.Config", env, ignoreCase) {
 			add(path)
 		}
 	}
 	userFiles := len(files)
 	machineDir := machineSettingsDir(env)
-	for _, path := range configsInDir(cache, filepath.Join(machineDir, "Config"), "", env) {
+	for _, path := range configsInDir(cache, filepath.Join(machineDir, "Config"), "", env, ignoreCase) {
 		add(path)
 	}
 	var defaults *configFile
@@ -228,9 +234,10 @@ func LoadCached(root string, env Environment, cache *Cache) (*Settings, error) {
 // reported through Settings.Files instead.
 func CandidatePaths(root string, env Environment) []string {
 	var paths []string
+	names := configFileNames(caseInsensitive(env))
 	if absolute, err := filepath.Abs(root); err == nil {
 		for _, dir := range ancestorDirs(absolute) {
-			for _, name := range configFileNames {
+			for _, name := range names {
 				paths = append(paths, filepath.Join(dir, name))
 			}
 		}
@@ -241,9 +248,72 @@ func CandidatePaths(root string, env Environment) []string {
 	return append(paths, filepath.Join(machineSettingsDir(env), "NuGetDefaults.config"))
 }
 
-// NuGet probes these names in order on case-sensitive filesystems. A
-// case-insensitive filesystem matches the first probe for any spelling.
-var configFileNames = []string{"nuget.config", "NuGet.config", "NuGet.Config"}
+// configFileNames lists the names NuGet probes, in order, in each directory
+// from the project up. On a file system NuGet treats as case-insensitive it
+// probes only NuGet.Config, which the file system matches to any spelling.
+// Otherwise it probes three exact spellings and ignores all others.
+func configFileNames(caseInsensitive bool) []string {
+	if caseInsensitive {
+		return []string{"NuGet.Config"}
+	}
+	return []string{"nuget.config", "NuGet.config", "NuGet.Config"}
+}
+
+// caseInsensitive reports whether NuGet treats the file system as
+// case-insensitive, reusing the cached answer of this resolution.
+func (c *Cache) caseInsensitive(env Environment) bool {
+	if c == nil {
+		return caseInsensitive(env)
+	}
+	if c.ignoreCase == nil {
+		value := caseInsensitive(env)
+		c.ignoreCase = &value
+	}
+	return *c.ignoreCase
+}
+
+func caseInsensitive(env Environment) bool {
+	if env.CaseInsensitive != nil {
+		return env.CaseInsensitive()
+	}
+	if env.goos() == "windows" {
+		return true
+	}
+	var paths []string
+	if userDir := userSettingsDir(env); userDir != "" {
+		paths = append(paths, filepath.Dir(userDir)) // the NuGet home, ~/.nuget
+	}
+	if wd, err := os.Getwd(); err == nil {
+		paths = append(paths, wd)
+	}
+	return detectCaseInsensitive(paths, dirExists)
+}
+
+// detectCaseInsensitive follows NuGet's PathUtility: Windows always counts as
+// case-insensitive, and elsewhere the NuGet home and the working directory
+// must both be. A path counts when its first existing ancestor can be found
+// under both its lower- and upper-case spelling.
+func detectCaseInsensitive(paths []string, exists func(string) bool) bool {
+	for _, path := range paths {
+		for dir := path; ; dir = filepath.Dir(dir) {
+			if exists(dir) {
+				if !exists(strings.ToLower(dir)) || !exists(strings.ToUpper(dir)) {
+					return false
+				}
+				break
+			}
+			if filepath.Dir(dir) == dir {
+				break
+			}
+		}
+	}
+	return true
+}
+
+func dirExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
+}
 
 func ancestorDirs(root string) []string {
 	var dirs []string
@@ -296,29 +366,34 @@ func machineSettingsDir(env Environment) string {
 }
 
 // configsInDir lists the configuration files directly inside dir in priority
-// order. Linux matches *.config and *.Config and the excluded name exactly;
-// case-insensitive platforms compare names without case.
-func configsInDir(cache *Cache, dir, exclude string, env Environment) []string {
+// order. The *.config extension is matched the way .NET file patterns match:
+// without case on Windows and macOS, exactly elsewhere. The excluded name and
+// the order follow NuGet's case rule for the file system.
+func configsInDir(cache *Cache, dir, exclude string, env Environment, ignoreCase bool) []string {
 	entries, err := cache.readDir(dir)
 	if err != nil {
 		return nil
 	}
-	caseSensitive := env.goos() == "linux"
-	same := func(a, b string) bool { return a == b || !caseSensitive && strings.EqualFold(a, b) }
+	goos := env.goos()
+	patternIgnoresCase := goos == "windows" || goos == "darwin"
 	var names []string
 	for _, entry := range entries {
 		name := entry.Name()
 		ext := filepath.Ext(name)
-		if entry.IsDir() || !(same(ext, ".config") || same(ext, ".Config")) || (exclude != "" && same(name, exclude)) {
+		if entry.IsDir() || !(ext == ".config" || ext == ".Config" || patternIgnoresCase && strings.EqualFold(ext, ".config")) {
+			continue
+		}
+		if exclude != "" && (name == exclude || ignoreCase && strings.EqualFold(name, exclude)) {
 			continue
 		}
 		names = append(names, name)
 	}
 	sort.Slice(names, func(i, j int) bool {
-		if caseSensitive {
-			return names[i] < names[j]
+		if ignoreCase {
+			// StringComparer.OrdinalIgnoreCase compares upper-cased text.
+			return strings.ToUpper(names[i]) < strings.ToUpper(names[j])
 		}
-		return strings.ToLower(names[i]) < strings.ToLower(names[j])
+		return names[i] < names[j]
 	})
 	paths := make([]string, len(names))
 	for i, name := range names {
