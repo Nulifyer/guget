@@ -397,6 +397,36 @@ func TestInputsRecordEveryFileRead(t *testing.T) {
 	}
 }
 
+// A path evaluation checked and found missing is an input too: creating it
+// would change the result. Each is recorded as AbsentInput, never as a file.
+func TestInputsRecordPathsFoundMissing(t *testing.T) {
+	root := writeTree(t, map[string]string{
+		"Directory.Build.props": `<Project><Import Project="Optional.props" Condition="Exists('Optional.props')" /><Import Project="Missing.props" Condition="false" /></Project>`,
+		"App/App.csproj":        `<Project Sdk="Microsoft.NET.Sdk"><Import Project="Local.props" Condition="Exists('Local.props')" /></Project>`,
+	})
+	result := evaluate(t, root, "App/App.csproj")
+	for _, name := range []string{
+		"App/Directory.Build.props",    // nearer candidate than the one found
+		"App/Directory.Packages.props", // no central file anywhere up to the root
+		"Directory.Packages.props",
+		"App/Directory.Build.targets",
+		"Optional.props", // Exists() in an imported file
+		"App/Local.props",
+	} {
+		if digest, ok := result.Inputs[path(root, name)]; !ok || digest != AbsentInput {
+			t.Errorf("%s: recorded=%v absent=%v", name, ok, digest == AbsentInput)
+		}
+	}
+	for _, name := range []string{"Directory.Build.props", "App/App.csproj"} {
+		if digest := result.Inputs[path(root, name)]; digest == AbsentInput {
+			t.Errorf("%s was read but recorded as missing", name)
+		}
+	}
+	if _, ok := result.Inputs[path(root, "Missing.props")]; ok {
+		t.Error("an import its condition skips was checked")
+	}
+}
+
 func TestParseCacheReusesOnlyIdenticalBytes(t *testing.T) {
 	root := writeTree(t, map[string]string{
 		"Directory.Build.props": `<Project><ItemGroup><PackageReference Include="Shared" Version="1.0.0"/></ItemGroup></Project>`,

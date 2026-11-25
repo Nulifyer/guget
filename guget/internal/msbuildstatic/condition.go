@@ -277,7 +277,11 @@ func (p *conditionParser) parseFunction(name string) (truth, bool) {
 		if path == "" {
 			return isFalse, true
 		}
-		_, err := os.Stat(absoluteFrom(p.baseDir, path))
+		location := absoluteFrom(p.baseDir, path)
+		_, err := os.Stat(location)
+		if err != nil {
+			p.scope.eval.absent(location)
+		}
 		return truthOf(err == nil), true
 	case "hastrailingslash":
 		text := args[0].Text

@@ -2,14 +2,18 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/nulifyer/guget/internal/msbuildstatic"
 )
 
 func sharedCoherenceFixture(t *testing.T) (string, string) {
@@ -130,12 +134,151 @@ func TestConsistentWorkspaceInputRevisions(t *testing.T) {
 		{"discovered then changed", map[string]watchedFileState{"p": state(1), "i": state(4)}, workspaceRevisionLedger{"i": {3}}, false},
 		{"discovered then removed", map[string]watchedFileState{"p": state(1)}, workspaceRevisionLedger{"i": {3}}, false},
 		{"new input nothing consumed", map[string]watchedFileState{"p": state(1), "n": state(5)}, nil, false},
+		{"missing and still missing", map[string]watchedFileState{"p": state(1)}, workspaceRevisionLedger{"m": msbuildstatic.AbsentInput}, true},
+		{"missing then created", map[string]watchedFileState{"p": state(1), "m": state(6)}, workspaceRevisionLedger{"m": msbuildstatic.AbsentInput}, false},
+		{"missing but present before", map[string]watchedFileState{"p": state(1)}, workspaceRevisionLedger{"p": msbuildstatic.AbsentInput}, false},
 	}
 	for _, c := range cases {
 		if got := consistentWorkspaceInputRevisions(known, c.after, c.consumed); got != c.want {
 			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
 		}
 	}
+}
+
+func TestWorkspaceRevisionLedgerTreatsMissingAndPresentAsAConflict(t *testing.T) {
+	for _, order := range [][2][32]byte{{msbuildstatic.AbsentInput, {1}}, {{1}, msbuildstatic.AbsentInput}} {
+		ledger := workspaceRevisionLedger{}
+		if err := ledger.record("p", order[0]); err != nil {
+			t.Fatal(err)
+		}
+		if err := ledger.record("p", order[1]); !errors.Is(err, errWorkspaceInputsChanged) {
+			t.Fatalf("err = %v", err)
+		}
+	}
+	ledger := workspaceRevisionLedger{}
+	for range 2 {
+		if err := ledger.record("m", msbuildstatic.AbsentInput); err != nil {
+			t.Fatalf("two parses that found the same path missing agree: %v", err)
+		}
+	}
+}
+
+// The first project is parsed before Directory.Build.props exists and the
+// second after it is created. One parse found the file missing and the other
+// read it, so the attempt is retried and the snapshot shows the props in both
+// projects.
+func TestWorkspaceScanRetriesImportCreatedBetweenProjectParses(t *testing.T) {
+	root := t.TempDir()
+	mustWriteFile(t, filepath.Join(root, "A", "A.csproj"), `<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup></Project>`)
+	mustWriteFile(t, filepath.Join(root, "B", "B.csproj"), `<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup></Project>`)
+	props := filepath.Join(root, "Directory.Build.props")
+	parses := 0
+	snapshot, err := scanWorkspaceWithParser(root, workspaceScanOptions{}, func(file string) (*ParsedProject, error) {
+		parsed, err := ParseCsproj(file)
+		parses++
+		if parses == 1 {
+			mustWriteFile(t, props, `<Project><ItemGroup><PackageReference Include="Shared" Version="1.0.0"/></ItemGroup></Project>`)
+		}
+		return parsed, err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parses != 4 {
+		t.Fatalf("parses = %d, want 4: the mixed attempt must be retried once", parses)
+	}
+	for _, project := range snapshot.ParsedProjects {
+		if !project.Packages.Contains(PackageReference{Name: "Shared", Version: requestedVersion("1.0.0"), Requested: "1.0.0"}) {
+			t.Fatalf("mixed snapshot: %s has %v", project.FilePath, project.Packages.ToSlice())
+		}
+	}
+	if _, tracked := snapshot.FileRevisions[props]; !tracked {
+		t.Fatal("the created props file is not tracked")
+	}
+	assertNoAbsentRevisions(t, snapshot)
+}
+
+// A props file created after the only project was parsed, but before the
+// scan's closing read, also needs another attempt.
+func TestWorkspaceScanRetriesImportCreatedAfterParsing(t *testing.T) {
+	root := t.TempDir()
+	project := filepath.Join(root, "App", "App.csproj")
+	mustWriteFile(t, project, `<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup></Project>`)
+	props := filepath.Join(root, "App", "Directory.Build.props")
+	parses := 0
+	snapshot, err := scanWorkspaceWithParser(root, workspaceScanOptions{}, func(file string) (*ParsedProject, error) {
+		parsed, err := ParseCsproj(file)
+		parses++
+		if parses == 1 {
+			mustWriteFile(t, props, `<Project><ItemGroup><PackageReference Include="Shared" Version="1.0.0"/></ItemGroup></Project>`)
+		}
+		return parsed, err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parses != 2 || snapshot.ParsedProjects[0].Packages.Len() != 1 {
+		t.Fatalf("parses = %d, packages = %v", parses, snapshot.ParsedProjects[0].Packages.ToSlice())
+	}
+	assertNoAbsentRevisions(t, snapshot)
+}
+
+// Paths found missing are validated, never tracked: no revision or watched
+// path stands for a file that does not exist.
+func assertNoAbsentRevisions(t *testing.T, snapshot *workspaceSnapshot) {
+	t.Helper()
+	for path := range snapshot.FileRevisions {
+		if _, err := os.Stat(path); err != nil {
+			t.Errorf("FileRevisions tracks a missing path %s", path)
+		}
+	}
+	for _, project := range snapshot.ParsedProjects {
+		if len(project.AbsentInputs) == 0 {
+			t.Errorf("%s recorded no missing paths", project.FilePath)
+		}
+		for path, digest := range project.InputRevisions {
+			if digest == msbuildstatic.AbsentInput {
+				t.Errorf("%s records missing %s as a revision", project.FilePath, path)
+			}
+		}
+	}
+	// The watcher already lists the Directory files of the root and its
+	// ancestors, which may be created later; nothing else may be missing.
+	expected := map[string]bool{}
+	for dir := snapshot.ProjectDir; ; dir = filepath.Dir(dir) {
+		for _, name := range []string{"Directory.Packages.props", "Directory.Build.props", "Directory.Build.targets"} {
+			expected[filepath.Join(dir, name)] = true
+		}
+		if filepath.Dir(dir) == dir {
+			break
+		}
+	}
+	watched := workspaceInputPaths(snapshot.ProjectDir, snapshot)
+	for _, project := range snapshot.ParsedProjects {
+		for _, path := range project.AbsentInputs {
+			if slices.Contains(watched, path) && !expected[path] {
+				t.Errorf("watcher input %s comes from a missing path", path)
+			}
+		}
+	}
+}
+
+// A scan where nothing changes still takes a single pass, though every parse
+// now records the paths it found missing.
+func TestWorkspaceScanWithMissingCandidatesTakesOnePass(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"A", "B"} {
+		mustWriteFile(t, filepath.Join(root, name, name+".csproj"), `<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup><Import Project="Optional.props" Condition="Exists('Optional.props')"/></Project>`)
+	}
+	parses := 0
+	snapshot, err := scanWorkspaceWithParser(root, workspaceScanOptions{}, func(file string) (*ParsedProject, error) { parses++; return ParseCsproj(file) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parses != 2 {
+		t.Fatalf("parses = %d, want 2", parses)
+	}
+	assertNoAbsentRevisions(t, snapshot)
 }
 
 func TestWorkspaceScanContinuousExternalChangesReturnUnstableError(t *testing.T) {

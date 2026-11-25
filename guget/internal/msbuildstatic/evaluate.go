@@ -149,9 +149,18 @@ type Download struct {
 	Conditional bool
 }
 
+// AbsentInput is the Inputs digest of a path evaluation checked and found
+// missing, such as a Directory.Build.props candidate or an import skipped by
+// its Exists() condition. Creating that file would change the result, so it
+// is an input as much as a file that was read. No file has this digest.
+var AbsentInput = [sha256.Size]byte{'a', 'b', 's', 'e', 'n', 't'}
+
 type Evaluation struct {
 	ProjectPath string
-	// Inputs holds the digest of the exact bytes of every file read.
+	// Inputs holds the digest of the exact bytes of every file read, and
+	// AbsentInput for every path checked and found missing. A path keeps the
+	// first state evaluation saw, so a file that appears or disappears during
+	// evaluation still differs from what is on disk afterwards.
 	Inputs  map[string][sha256.Size]byte
 	Imports []Import
 	// The implicitly imported files, or "" when not imported.
@@ -299,13 +308,25 @@ func (e *evaluator) load(path string) (*node, error) {
 		return nil, err
 	}
 	digest := sha256.Sum256(data)
-	e.result.Inputs[path] = digest
+	if _, seen := e.result.Inputs[path]; !seen {
+		e.result.Inputs[path] = digest
+	}
 	root, err := e.cache.parse(path, data, digest)
 	if err != nil {
 		return nil, err
 	}
 	e.files[path] = root
 	return root, nil
+}
+
+// absent records that path was checked and is not a file.
+func (e *evaluator) absent(path string) {
+	if e.result == nil {
+		return // ImportPath expands a single value and records nothing
+	}
+	if _, seen := e.result.Inputs[path]; !seen {
+		e.result.Inputs[path] = AbsentInput
+	}
 }
 
 func (e *evaluator) scope(file string) scope { return scope{eval: e, thisFile: file} }
@@ -317,6 +338,7 @@ func (e *evaluator) pathOfFileAbove(file, start string) string {
 		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
 			return candidate
 		}
+		e.absent(candidate)
 		if filepath.Dir(dir) == dir {
 			return ""
 		}
@@ -541,6 +563,7 @@ func (e *evaluator) importFile(path, importer string, kind ImportKind, condition
 		return // MSBuild skips files that are already imported (MSB4011, MSB4210)
 	}
 	if info, err := os.Stat(path); err != nil || info.IsDir() {
+		e.absent(path)
 		if condition == isTrue {
 			e.result.Errors = append(e.result.Errors, fmt.Errorf("import %s: file not found", path))
 		}
@@ -608,6 +631,7 @@ func (e *evaluator) implicitImport(name string, kind ImportKind, enabled truth) 
 	location = filepath.Clean(location)
 	// These imports are conditioned on Exists(), so a missing file is skipped.
 	if info, err := os.Stat(location); err != nil || info.IsDir() {
+		e.absent(location)
 		return ""
 	}
 	before := len(e.result.Imports)

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/nulifyer/guget/internal/msbuildstatic"
 	ui "github.com/nulifyer/guget/internal/ui"
 )
 
@@ -116,7 +117,10 @@ func scanWorkspaceWithParser(projectDir string, opts workspaceScanOptions, parse
 		if err != nil {
 			return nil, err
 		}
+		// Paths a parse found missing are read again too, so one created
+		// meanwhile is seen. Missing paths never enter FileRevisions.
 		inputs = mergeWorkspaceInputPaths(inputs, workspaceInputPaths(fullProjectPath, snapshot))
+		inputs = mergeWorkspaceInputPaths(inputs, consumed.absentPaths())
 		after, err := readWatchedFileStates(tree.WatchedFiles, inputs)
 		if err != nil {
 			return nil, fmt.Errorf("validating workspace input revisions: %w", err)
@@ -132,8 +136,9 @@ func scanWorkspaceWithParser(projectDir string, opts workspaceScanOptions, parse
 // consistentWorkspaceInputRevisions reports whether the inputs read after
 // parsing prove one disk view. Inputs known before parsing must be unchanged.
 // An input that parsing discovered, such as an import outside the walked
-// tree, must still hold the exact revision parsing consumed. A new input that
-// nothing consumed has no proven revision, so it needs another attempt.
+// tree, must still hold the exact revision parsing consumed, and a path
+// parsing found missing must still be missing. A new input that nothing
+// consumed has no proven revision, so it needs another attempt.
 func consistentWorkspaceInputRevisions(before, after map[string]watchedFileState, consumed map[string][sha256.Size]byte) bool {
 	for path, prior := range before {
 		current, ok := after[path]
@@ -150,9 +155,16 @@ func consistentWorkspaceInputRevisions(before, after map[string]watchedFileState
 			return false
 		}
 	}
-	for path := range consumed {
+	for path, digest := range consumed {
 		_, known := before[path]
-		if _, exists := after[path]; !known && !exists {
+		_, exists := after[path]
+		if digest == msbuildstatic.AbsentInput {
+			if known || exists {
+				return false // missing when parsed, present before or after
+			}
+			continue
+		}
+		if !known && !exists {
 			return false // consumed, then removed
 		}
 	}
@@ -160,16 +172,33 @@ func consistentWorkspaceInputRevisions(before, after map[string]watchedFileState
 }
 
 // workspaceRevisionLedger collects the revisions every project, props view,
-// and NuGet configuration consumed in one scan attempt. Two parses that read
-// different bytes of the same file prove the file changed during the scan.
+// and NuGet configuration consumed in one scan attempt, with
+// msbuildstatic.AbsentInput for paths a parse found missing. Two parses that
+// read different bytes of the same file, or where one found the file and
+// another did not, prove the file changed during the scan.
 type workspaceRevisionLedger map[string][sha256.Size]byte
 
 func (l workspaceRevisionLedger) record(path string, digest [sha256.Size]byte) error {
 	if prior, seen := l[path]; seen && prior != digest {
+		if prior == msbuildstatic.AbsentInput || digest == msbuildstatic.AbsentInput {
+			return fmt.Errorf("%w: %s was missing for one parse and present for another", errWorkspaceInputsChanged, path)
+		}
 		return fmt.Errorf("%w: %s was read at different revisions", errWorkspaceInputsChanged, path)
 	}
 	l[path] = digest
 	return nil
+}
+
+// absentPaths lists the paths a parse found missing.
+func (l workspaceRevisionLedger) absentPaths() []string {
+	var paths []string
+	for path, digest := range l {
+		if digest == msbuildstatic.AbsentInput {
+			paths = append(paths, path)
+		}
+	}
+	slices.Sort(paths)
+	return paths
 }
 
 func (l workspaceRevisionLedger) recordAll(revisions map[string][sha256.Size]byte) error {
@@ -301,6 +330,14 @@ func validateConsumedInputRevisions(project *ParsedProject, baseline map[string]
 	for path, actual := range project.InputRevisions {
 		if expected, known := baseline[path]; known && expected.Hash != actual {
 			return fmt.Errorf("%w: %s consumed a different revision", errWorkspaceInputsChanged, path)
+		}
+	}
+	for _, path := range project.AbsentInputs {
+		if _, known := baseline[path]; known {
+			return fmt.Errorf("%w: %s was missing when parsed", errWorkspaceInputsChanged, path)
+		}
+		if err := consumed.record(path, msbuildstatic.AbsentInput); err != nil {
+			return err
 		}
 	}
 	return consumed.recordAll(project.InputRevisions)

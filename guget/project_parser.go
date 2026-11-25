@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/nulifyer/guget/internal/msbuildstatic"
@@ -245,6 +246,12 @@ type ParsedProject struct {
 	PackageOwnerIdentities map[string]string            // recorded owner path → canonical file identity, resolved during discovery
 	AddTargets             []AddTarget                  // possible locations for adding new packages
 
+	// AbsentInputs are the paths static evaluation checked and found missing,
+	// such as Directory.Build.props candidates. A scan validates that they
+	// stayed missing; they are not files, so they are never watched or
+	// compared as revisions.
+	AbsentInputs []string
+
 	// Declarations holds reference and version owners by lowercase package ID.
 	Declarations map[string]PackageDeclaration
 	// CentralVersions holds the effective PackageVersion entries (first
@@ -318,11 +325,19 @@ func parseCsprojCached(filePath string, cache *msbuildstatic.ParseCache) (*Parse
 		TargetFrameworks:   NewSet[TargetFramework](),
 		Packages:           NewSet[PackageReference](),
 		PackageSources:     make(map[string]string),
-		InputRevisions:     evaluation.Inputs,
+		InputRevisions:     make(map[string][sha256.Size]byte, len(evaluation.Inputs)),
 		Declarations:       make(map[string]PackageDeclaration),
 		CentralVersions:    make(map[string]msbuildstatic.CentralVersion),
 		ProjectReferences:  evaluation.ProjectReferences,
 	}
+	for path, digest := range evaluation.Inputs {
+		if digest == msbuildstatic.AbsentInput {
+			result.AbsentInputs = append(result.AbsentInputs, path)
+		} else {
+			result.InputRevisions[path] = digest
+		}
+	}
+	slices.Sort(result.AbsentInputs)
 	for _, reason := range evaluation.Reasons {
 		logDebug("%s: static evaluation: %s", filePath, reason)
 	}
