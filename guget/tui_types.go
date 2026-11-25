@@ -122,6 +122,7 @@ type workspaceReloadedMsg struct {
 
 type writeResultMsg struct {
 	err       error
+	packageID string // the package the save was for
 	summary   string
 	changed   []string // files the transaction changed
 	written   int      // number of changed files in the completed transaction

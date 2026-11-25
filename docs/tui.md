@@ -66,7 +66,9 @@ dependency it waits for has been updated. When nothing is left to update, the
 selection rests on the first row in the list that still needs a decision. The
 status line gives that row's reason. Across projects, a package that only
 pinned references keep behind the target needs no decision there, so the hold
-passes it without resting on it.
+passes it without resting on it. A row whose save fails is not saved again in
+the same hold. The hold continues with the other rows and can rest on that row
+with the failure. Release the key and press it again to retry.
 
 Every update starts from a key press, so releasing the key starts nothing
 more. Guget counts three or more presses less than 125 ms apart as a hold.

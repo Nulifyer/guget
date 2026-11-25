@@ -298,7 +298,9 @@ func (m *App) HandleEvent(msg ui.Event) ui.Effect {
 		if msg.err != nil {
 			m.queuedRestore = nil
 			msg.selection = nil
-			cmds = append(cmds, m.setStatus(m.saveFailureStatus(msg.err), true))
+			status := m.saveFailureStatus(msg.err)
+			m.held.noteFailedSave(msg.packageID, status)
+			cmds = append(cmds, m.setStatus(status, true))
 		} else {
 			m.pendingRestoreChanges = append(m.pendingRestoreChanges, msg.changed...)
 			status := "✓ Saved"

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"time"
 
 	ui "github.com/nulifyer/guget/internal/ui"
@@ -28,6 +29,22 @@ type heldUpdate struct {
 	key  string
 	last time.Time // when the latest press arrived
 	run  int       // presses in a row no further apart than heldKeyWindow
+	// failed holds the status of each package whose save failed during this
+	// hold, by lower-case name. The hold passes those rows instead of saving
+	// them again on every press, and a new hold tries them again.
+	failed map[string]string
+}
+
+// noteFailedSave records that the save of packageID failed while the key was
+// held, so the rest of the hold passes the row.
+func (h *heldUpdate) noteFailedSave(packageID, status string) {
+	if h.run < heldKeyRun || packageID == "" {
+		return
+	}
+	if h.failed == nil {
+		h.failed = make(map[string]string)
+	}
+	h.failed[strings.ToLower(packageID)] = status
 }
 
 // pressUpdateKey handles u, U, a, or A in the package panel.
@@ -64,7 +81,8 @@ func (m *App) endHeldUpdate() { m.held = heldUpdate{} }
 
 // sweepUpdate updates the first row at or after the cursor that the held key
 // can update, wrapping to the top, and moves the cursor there. A row that
-// needs a confirmation or a decision is never written by a sweep. When no row
+// needs a confirmation or a decision is never written by a sweep, and a row
+// whose save failed is not saved again in the same hold. When no row
 // can be updated, the cursor moves to the first row that still has an update
 // to decide about and the status row gives that row's reason.
 func (m *App) sweepUpdate(useStable bool, scope actionScope) ui.Effect {
@@ -91,6 +109,11 @@ func (m *App) sweepUpdate(useStable bool, scope actionScope) ui.Effect {
 			if !plan.settled {
 				note(at, plan.refusal, plan.isErr)
 			}
+			continue
+		case m.held.failed[strings.ToLower(plan.name)] != "":
+			// The save already failed in this hold; saving again on every
+			// press would repeat the failure and never reach the next row.
+			note(at, m.held.failed[strings.ToLower(plan.name)], true)
 			continue
 		case m.updateNeedsConfirmation(plan.name, plan.project):
 			note(at, plan.name+" is pinned; release the key and press it again to confirm", false)
