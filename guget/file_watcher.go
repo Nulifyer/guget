@@ -94,15 +94,36 @@ func (w *workspaceWatchInputs) acknowledge(states map[string]watchedFileState) {
 	}
 }
 
+// isAcknowledged reports whether a disk state needs no reload: it is either
+// the exact revision guget committed or the revision the displayed snapshot
+// consumed. Any other content, including an external revert, still reloads.
 func (w *workspaceWatchInputs) isAcknowledged(path string, state watchedFileState, exists bool) bool {
 	if w == nil || !exists {
 		return false
 	}
 	w.mu.RLock()
 	defer w.mu.RUnlock()
-	prior, ok := w.acknowledged[path]
 	// A metadata-only touch of the exact committed bytes needs no rescan.
-	return ok && prior.Hash == state.Hash && prior.Owner == state.Owner
+	if prior, ok := w.acknowledged[path]; ok && prior.Hash == state.Hash && prior.Owner == state.Owner {
+		return true
+	}
+	baseline, ok := w.baselines[path]
+	return ok && baseline.Hash == state.Hash && baseline.Owner == state.Owner
+}
+
+// displayedRevisions returns a copy of the revisions the displayed snapshot
+// consumed, so a local reconciliation can carry them into the next snapshot.
+func (w *workspaceWatchInputs) displayedRevisions() map[string]watchedFileState {
+	if w == nil {
+		return nil
+	}
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	revisions := make(map[string]watchedFileState, len(w.baselines))
+	for path, state := range w.baselines {
+		revisions[path] = state
+	}
+	return revisions
 }
 
 type watchedWorkspaceChangeMsg struct {

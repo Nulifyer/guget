@@ -172,6 +172,7 @@ func (m *App) startMutation(verb, packageID, version string, targets []mutationT
 	generation := m.workspaceGeneration
 	previous := &workspaceSnapshot{
 		ProjectDir:     m.projectDir,
+		FileRevisions:  m.watchInputs.displayedRevisions(),
 		InputRevisions: m.sourceInputRevisions,
 		ParsedProjects: append([]*ParsedProject(nil), m.ctx.ParsedProjects...),
 		PropsProjects:  append([]*ParsedProject(nil), m.ctx.PropsProjects...),
@@ -406,6 +407,17 @@ func reconcileMutationSnapshot(previous *workspaceSnapshot, changed []string, pa
 	if len(before) != len(after) {
 		return nil, nil, fmt.Errorf("project inputs appeared during local reconciliation")
 	}
+	// The new snapshot displays the post-write revisions it read; record them
+	// so the watcher compares disk changes against what is shown, not against
+	// revisions an earlier save already replaced.
+	revisions := make(map[string]watchedFileState, len(previous.FileRevisions)+len(after))
+	for path, state := range previous.FileRevisions {
+		revisions[path] = state
+	}
+	for path, state := range after {
+		revisions[path] = state
+	}
+	next.FileRevisions = revisions
 	return &next, after, nil
 }
 
