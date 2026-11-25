@@ -71,16 +71,71 @@ func TestWorkspaceScanRetriesSharedOwnerChangeBetweenProjectParses(t *testing.T)
 }
 
 func TestWorkspaceScanTracksNewExternalInputBeforePublishing(t *testing.T) {
-	root, _ := sharedCoherenceFixture(t)
+	root, owner := sharedCoherenceFixture(t)
 	parses := 0
 	snapshot, err := scanWorkspaceWithParser(root, workspaceScanOptions{}, func(file string) (*ParsedProject, error) { parses++; return ParseCsproj(file) })
 	if err != nil {
 		t.Fatal(err)
 	}
-	if parses != 4 {
-		t.Fatalf("new external dependency must receive a guarded second scan, parses=%d", parses)
+	// Parsing discovers the import. Its consumed revision proves the disk
+	// view, so the scan must not parse the workspace a second time.
+	if parses != 2 {
+		t.Fatalf("discovered import cost another scan: parses=%d, want 2", parses)
 	}
 	assertCoherentVersion(t, snapshot, "1.0.0")
+	state, exists, err := readWatchedFileState(owner)
+	if err != nil || !exists {
+		t.Fatalf("read owner: exists=%v err=%v", exists, err)
+	}
+	if tracked, ok := snapshot.FileRevisions[owner]; !ok || tracked.Hash != state.Hash {
+		t.Fatalf("discovered import is not tracked at its current revision: %v", snapshot.FileRevisions)
+	}
+}
+
+func TestWorkspaceScanRetriesDiscoveredImportEditedAfterParsing(t *testing.T) {
+	root, owner := sharedCoherenceFixture(t)
+	parses := 0
+	snapshot, err := scanWorkspaceWithParser(root, workspaceScanOptions{}, func(file string) (*ParsedProject, error) {
+		parsed, err := ParseCsproj(file)
+		parses++
+		if parses == 2 && err == nil {
+			// Both projects consumed 1.0.0. The import changes before the
+			// scan's closing read, so the consumed revision is stale.
+			err = UpdatePackageVersion(owner, "A", "2.0.0")
+		}
+		return parsed, err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parses != 4 {
+		t.Fatalf("edit of a discovered import after parsing was not retried: parses=%d, want 4", parses)
+	}
+	assertCoherentVersion(t, snapshot, "2.0.0")
+}
+
+func TestConsistentWorkspaceInputRevisions(t *testing.T) {
+	state := func(b byte) watchedFileState { return watchedFileState{Hash: [32]byte{b}, Owner: "o"} }
+	known := map[string]watchedFileState{"p": state(1)}
+	cases := []struct {
+		name     string
+		after    map[string]watchedFileState
+		consumed workspaceRevisionLedger
+		want     bool
+	}{
+		{"unchanged", map[string]watchedFileState{"p": state(1)}, nil, true},
+		{"known input changed", map[string]watchedFileState{"p": state(2)}, nil, false},
+		{"known input removed", map[string]watchedFileState{}, nil, false},
+		{"discovered at consumed revision", map[string]watchedFileState{"p": state(1), "i": state(3)}, workspaceRevisionLedger{"i": {3}}, true},
+		{"discovered then changed", map[string]watchedFileState{"p": state(1), "i": state(4)}, workspaceRevisionLedger{"i": {3}}, false},
+		{"discovered then removed", map[string]watchedFileState{"p": state(1)}, workspaceRevisionLedger{"i": {3}}, false},
+		{"new input nothing consumed", map[string]watchedFileState{"p": state(1), "n": state(5)}, nil, false},
+	}
+	for _, c := range cases {
+		if got := consistentWorkspaceInputRevisions(known, c.after, c.consumed); got != c.want {
+			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
+		}
+	}
 }
 
 func TestWorkspaceScanContinuousExternalChangesReturnUnstableError(t *testing.T) {

@@ -89,8 +89,10 @@ func scanWorkspaceWith(projectDir string, opts workspaceScanOptions) (*workspace
 
 // Validate a whole disk view, including external owners discovered during parsing.
 // Generations order requests; these revisions detect changes within one request.
-// Each attempt lists the workspace once. The before and after revisions re-read
-// the files that walk found, so a slow filesystem pays for one directory walk.
+// Each attempt lists the workspace once and reads its known inputs before and
+// after parsing. Parsing records the exact bytes it consumed, so an input first
+// discovered through an import is validated against that consumed revision
+// instead of costing another full scan.
 func scanWorkspaceWithParser(projectDir string, opts workspaceScanOptions, parse func(string) (*ParsedProject, error)) (*workspaceSnapshot, error) {
 	fullProjectPath, err := filepath.Abs(projectDir)
 	if err != nil {
@@ -107,7 +109,7 @@ func scanWorkspaceWithParser(projectDir string, opts workspaceScanOptions, parse
 		if err != nil {
 			return nil, fmt.Errorf("reading workspace input revisions: %w", err)
 		}
-		snapshot, err := scanWorkspaceOnce(fullProjectPath, tree, parse, before)
+		snapshot, consumed, err := scanWorkspaceOnce(fullProjectPath, tree, parse, before)
 		if errors.Is(err, errWorkspaceInputsChanged) {
 			continue
 		}
@@ -119,12 +121,64 @@ func scanWorkspaceWithParser(projectDir string, opts workspaceScanOptions, parse
 		if err != nil {
 			return nil, fmt.Errorf("validating workspace input revisions: %w", err)
 		}
-		if sameWorkspaceInputRevisions(before, after) {
+		if consistentWorkspaceInputRevisions(before, after, consumed) {
 			snapshot.FileRevisions = after
 			return snapshot, nil
 		}
 	}
 	return nil, fmt.Errorf("workspace inputs changed during %d consecutive scans; wait for saves to finish and reload", maxAttempts)
+}
+
+// consistentWorkspaceInputRevisions reports whether the inputs read after
+// parsing prove one disk view. Inputs known before parsing must be unchanged.
+// An input that parsing discovered, such as an import outside the walked
+// tree, must still hold the exact revision parsing consumed. A new input that
+// nothing consumed has no proven revision, so it needs another attempt.
+func consistentWorkspaceInputRevisions(before, after map[string]watchedFileState, consumed map[string][sha256.Size]byte) bool {
+	for path, prior := range before {
+		current, ok := after[path]
+		if !ok || current.Hash != prior.Hash || current.Owner != prior.Owner {
+			return false
+		}
+	}
+	for path, current := range after {
+		if _, known := before[path]; known {
+			continue
+		}
+		digest, read := consumed[path]
+		if !read || digest != current.Hash {
+			return false
+		}
+	}
+	for path := range consumed {
+		_, known := before[path]
+		if _, exists := after[path]; !known && !exists {
+			return false // consumed, then removed
+		}
+	}
+	return true
+}
+
+// workspaceRevisionLedger collects the revisions every project, props view,
+// and NuGet configuration consumed in one scan attempt. Two parses that read
+// different bytes of the same file prove the file changed during the scan.
+type workspaceRevisionLedger map[string][sha256.Size]byte
+
+func (l workspaceRevisionLedger) record(path string, digest [sha256.Size]byte) error {
+	if prior, seen := l[path]; seen && prior != digest {
+		return fmt.Errorf("%w: %s was read at different revisions", errWorkspaceInputsChanged, path)
+	}
+	l[path] = digest
+	return nil
+}
+
+func (l workspaceRevisionLedger) recordAll(revisions map[string][sha256.Size]byte) error {
+	for path, digest := range revisions {
+		if err := l.record(path, digest); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func validateWorkspaceSnapshot(snapshot *workspaceSnapshot) error {
@@ -166,7 +220,7 @@ func sameWorkspaceInputRevisions(before, after map[string]watchedFileState) bool
 
 var errWorkspaceInputsChanged = errors.New("workspace inputs changed while scanning")
 
-func scanWorkspaceOnce(fullProjectPath string, tree *workspaceTree, parse func(string) (*ParsedProject, error), revisions map[string]watchedFileState) (*workspaceSnapshot, error) {
+func scanWorkspaceOnce(fullProjectPath string, tree *workspaceTree, parse func(string) (*ParsedProject, error), revisions map[string]watchedFileState) (*workspaceSnapshot, workspaceRevisionLedger, error) {
 	logInfo("Scanning workspace: %s", fullProjectPath)
 
 	projectFiles := tree.ProjectFiles
@@ -175,29 +229,30 @@ func scanWorkspaceOnce(fullProjectPath string, tree *workspaceTree, parse func(s
 		logInfo("Skipped %d path(s) excluded by .gitignore; use --%s to search them", tree.GitIgnored, includeIgnoredFlag)
 	}
 
+	consumed := make(workspaceRevisionLedger)
 	var parsedProjects []*ParsedProject
 	for _, file := range projectFiles {
 		project, err := parse(file)
 		if err != nil {
-			return nil, fmt.Errorf("incomplete workspace discovery: project %s could not be parsed: %w", file, err)
+			return nil, nil, fmt.Errorf("incomplete workspace discovery: project %s could not be parsed: %w", file, err)
 		}
-		if err := validateProjectInputRevisions(project, revisions); err != nil {
-			return nil, err
+		if err := validateConsumedInputRevisions(project, revisions, consumed); err != nil {
+			return nil, nil, err
 		}
 		parsedProjects = append(parsedProjects, project)
 	}
 
 	if len(parsedProjects) == 0 {
 		if tree.GitIgnored > 0 {
-			return nil, fmt.Errorf("no parseable .csproj, .fsproj, or .vbproj files found in: %s (%d path(s) excluded by .gitignore were not searched; use --%s to search them)", fullProjectPath, tree.GitIgnored, includeIgnoredFlag)
+			return nil, nil, fmt.Errorf("no parseable .csproj, .fsproj, or .vbproj files found in: %s (%d path(s) excluded by .gitignore were not searched; use --%s to search them)", fullProjectPath, tree.GitIgnored, includeIgnoredFlag)
 		}
-		return nil, fmt.Errorf("no parseable .csproj, .fsproj, or .vbproj files found in: %s", fullProjectPath)
+		return nil, nil, fmt.Errorf("no parseable .csproj, .fsproj, or .vbproj files found in: %s", fullProjectPath)
 	}
 
 	propsProjects := collectPropsProjects(parsedProjects)
 	for _, project := range propsProjects {
-		if err := validateProjectInputRevisions(project, revisions); err != nil {
-			return nil, err
+		if err := validateConsumedInputRevisions(project, revisions, consumed); err != nil {
+			return nil, nil, err
 		}
 	}
 	logInfo("Found %d .props file(s) with packages", len(propsProjects))
@@ -209,11 +264,14 @@ func scanWorkspaceOnce(fullProjectPath string, tree *workspaceTree, parse func(s
 	detected, err := resolveWorkspaceSources(parsedProjects)
 	for path, actual := range detected.InputRevisions {
 		if expected, known := revisions[path]; known && expected.Hash != actual {
-			return nil, fmt.Errorf("%w: source configuration %s consumed a different revision", errWorkspaceInputsChanged, path)
+			return nil, nil, fmt.Errorf("%w: source configuration %s consumed a different revision", errWorkspaceInputsChanged, path)
+		}
+		if recordErr := consumed.record(path, actual); recordErr != nil {
+			return nil, nil, recordErr
 		}
 	}
 	if err != nil {
-		return nil, fmt.Errorf("incomplete source configuration: %w", err)
+		return nil, nil, fmt.Errorf("incomplete source configuration: %w", err)
 	}
 	sources := detected.Sources
 	sourceMapping := detected.Mapping
@@ -222,7 +280,7 @@ func scanWorkspaceOnce(fullProjectPath string, tree *workspaceTree, parse func(s
 		logInfo("Package source mapping is configured")
 	}
 
-	return &workspaceSnapshot{
+	snapshot := &workspaceSnapshot{
 		ProjectDir:     fullProjectPath,
 		InputRevisions: detected.InputRevisions,
 		ParsedProjects: parsedProjects,
@@ -231,7 +289,21 @@ func scanWorkspaceOnce(fullProjectPath string, tree *workspaceTree, parse func(s
 		SourceMapping:  sourceMapping,
 		Unsupported:    unsupported,
 		SolutionFiles:  tree.SolutionFiles,
-	}, nil
+	}
+	return snapshot, consumed, nil
+}
+
+// validateConsumedInputRevisions checks the bytes a scan parse consumed against
+// the revisions read before parsing and against every other parse in the same
+// attempt. The scan reads all inputs again after parsing, so this does not
+// reread files per project.
+func validateConsumedInputRevisions(project *ParsedProject, baseline map[string]watchedFileState, consumed workspaceRevisionLedger) error {
+	for path, actual := range project.InputRevisions {
+		if expected, known := baseline[path]; known && expected.Hash != actual {
+			return fmt.Errorf("%w: %s consumed a different revision", errWorkspaceInputsChanged, path)
+		}
+	}
+	return consumed.recordAll(project.InputRevisions)
 }
 
 // Compare the exact bytes consumed and current bytes with the baseline. A later
