@@ -157,8 +157,10 @@ JSON output:
 guget list --project ./src --format json
 ```
 
-Confirm that the SDK required by the project is installed. Restore the selected
-project and inspect again:
+A project that has not been restored, or whose restore is out of date, gets a
+warning that quotes `dotnet` and names the `guget restore` command for that
+project. Confirm that the SDK required by the project is installed. Restore the
+selected project and inspect again:
 
 ```bash
 guget restore --project ./src --file App/App.csproj

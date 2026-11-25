@@ -2,6 +2,7 @@ package packageops
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -42,5 +43,31 @@ func TestNuGetGraphInspectorUsesLegacyOrderingBeforeDotnet10(t *testing.T) {
 	}
 	if got := strings.Join(packageArgs[:3], " "); got != "list App.csproj package" {
 		t.Fatalf("args = %v", packageArgs)
+	}
+}
+
+func TestNuGetGraphInspectorReportsWhyTheGraphIsUnavailable(t *testing.T) {
+	const missing = "No assets file was found for `App.csproj`. Please run restore before running this command."
+	for _, test := range []struct {
+		name, output string
+		notRestored  bool
+		want         string
+	}{
+		{"problems in the JSON output", `{"version":1,"problems":[{"project":"App.csproj","level":"error","text":"` + strings.ReplaceAll(missing, "`", "\\u0060") + `"}],"projects":[{"path":"App.csproj"}]}`, true, missing},
+		{"no output", "", false, "exit status 1"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			runner := fakeRunner(func(_ context.Context, _ string, args ...string) ([]byte, error) {
+				if len(args) == 1 && args[0] == "--version" {
+					return []byte("10.0.111"), nil
+				}
+				return []byte(test.output), errors.New("exit status 1")
+			})
+			_, err := (NuGetGraphInspector{Runner: runner}).ResolveProject(context.Background(), "App.csproj", false)
+			var notRestored *NotRestoredError
+			if err == nil || errors.As(err, &notRestored) != test.notRestored || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error = %v", err)
+			}
+		})
 	}
 }

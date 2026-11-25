@@ -665,6 +665,16 @@ func (row *cliPackageRow) setOwners(reference, version string) {
 	row.OwnerPath = row.VersionOwner
 }
 
+// restoreCommand is the guget command that restores one project of the
+// workspace at root.
+func restoreCommand(root, project string) string {
+	file := project
+	if rel, err := filepath.Rel(root, project); err == nil {
+		file = rel
+	}
+	return "guget restore --project " + quoteShellArg(root) + " --file " + quoteShellArg(file)
+}
+
 // packageRows inspects each project with MSBuild and the restored package
 // graph, falling back to declared references when evaluation is unavailable.
 // partial reports that some requested data could not be produced.
@@ -775,7 +785,15 @@ func (r *cliRuntime) packageRows(ctx context.Context, snapshot *workspaceSnapsho
 		}
 		if graphErr != nil && (len(rows) > before || includeTransitive && onlyPackage == "") {
 			partial = true
-			warnings = append(warnings, fmt.Sprintf("%s: resolved graph unavailable or stale: %v", project.FileName, graphErr))
+			warning := fmt.Sprintf("%s: resolved versions unavailable: %v", project.FileName, graphErr)
+			var notRestored *packageops.NotRestoredError
+			if errors.As(graphErr, &notRestored) {
+				if !strings.HasSuffix(warning, ".") {
+					warning += "."
+				}
+				warning += " Restore it with: " + restoreCommand(snapshot.ProjectDir, project.FilePath)
+			}
+			warnings = append(warnings, warning)
 		}
 		if includeTransitive && graphErr == nil {
 			for _, use := range resolved {

@@ -26,11 +26,13 @@ func (ExecRunner) Run(ctx context.Context, name string, args ...string) ([]byte,
 	if err == nil {
 		return output, nil
 	}
+	// Stdout is returned with the error: dotnet reports some failures there,
+	// such as package-list problems in JSON.
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) && len(exitErr.Stderr) > 0 {
-		return nil, fmt.Errorf("%s: %w", strings.TrimSpace(string(exitErr.Stderr)), err)
+		return output, fmt.Errorf("%s: %w", strings.TrimSpace(string(exitErr.Stderr)), err)
 	}
-	return nil, err
+	return output, err
 }
 
 type MSBuildInspector struct {

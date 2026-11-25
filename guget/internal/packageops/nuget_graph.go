@@ -7,12 +7,23 @@ import (
 	"strings"
 )
 
+// NotRestoredError reports a project whose restored package graph dotnet
+// could not read, usually because the project was never restored or its
+// restore is out of date. Its text is dotnet's explanation.
+type NotRestoredError struct{ Problems string }
+
+func (e *NotRestoredError) Error() string { return e.Problems }
+
 type NuGetGraphInspector struct {
 	Runner ProcessRunner
 }
 
 type graphDocument struct {
 	Version  int `json:"version"`
+	Problems []struct {
+		Level string `json:"level"`
+		Text  string `json:"text"`
+	} `json:"problems"`
 	Projects []struct {
 		Path       string `json:"path"`
 		Frameworks []struct {
@@ -58,6 +69,9 @@ func (i NuGetGraphInspector) ResolveProject(ctx context.Context, projectPath str
 	}
 	data, err := i.Runner.Run(ctx, "dotnet", args...)
 	if err != nil {
+		if problems := graphProblems(data); problems != "" {
+			return nil, &NotRestoredError{Problems: problems}
+		}
 		return nil, fmt.Errorf("read restored package graph: %w", err)
 	}
 	var document graphDocument
@@ -81,4 +95,20 @@ func (i NuGetGraphInspector) ResolveProject(ctx context.Context, projectPath str
 		}
 	}
 	return uses, nil
+}
+
+// graphProblems returns the problems a failed package list reported in its
+// JSON output, such as a missing assets file, or "" when it reported none.
+func graphProblems(output []byte) string {
+	var document graphDocument
+	if len(output) == 0 || decodeCommandJSON(output, &document) != nil {
+		return ""
+	}
+	var texts []string
+	for _, problem := range document.Problems {
+		if text := strings.TrimSpace(problem.Text); text != "" {
+			texts = append(texts, text)
+		}
+	}
+	return strings.Join(texts, "; ")
 }
