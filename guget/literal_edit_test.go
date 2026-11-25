@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nulifyer/guget/internal/msbuildstatic"
 	ui "github.com/nulifyer/guget/internal/ui"
 )
 
@@ -104,6 +105,12 @@ func TestLiteralUpdateRetainsEvaluationForUncertainOwnership(t *testing.T) {
 		{"directory targets", reference, "", `<Project><ItemGroup><PackageReference Update="A" Version="9.0.0"/></ItemGroup></Project>`},
 		{"custom targets path", `<PropertyGroup><DirectoryBuildTargetsPath>Custom.targets</DirectoryBuildTargetsPath></PropertyGroup>` + reference, "", ""},
 		{"custom restore output", `<PropertyGroup><BaseIntermediateOutputPath>custom-obj/</BaseIntermediateOutputPath></PropertyGroup>` + reference, "", ""},
+		// MSBuild item types and metadata names ignore case.
+		{"update in another case", reference + `<ItemGroup><packageReference Update="A" Version="9.0.0"/></ItemGroup>`, "", ""},
+		{"remove in another case", reference + `<ItemGroup><packagereference Remove="A"/></ItemGroup>`, "", ""},
+		{"version attribute in another case", `<ItemGroup><PackageReference Include="A" version="1.0.0"/></ItemGroup>`, "", ""},
+		{"version element in another case", `<ItemGroup><PackageReference Include="A"><VERSION>1.0.0</VERSION></PackageReference></ItemGroup>`, "", ""},
+		{"imported update in another case", reference + `<Import Project="Shared.props"/>`, `<ItemGroup><PACKAGEREFERENCE Update="A" Version="9.0.0"/></ItemGroup>`, ""},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			root := t.TempDir()
@@ -238,6 +245,49 @@ func TestCentralLiteralUpdateRejectsAmbiguousDeclarations(t *testing.T) {
 		if canEditLiteralDeclaration(project, "A") {
 			t.Fatalf("ambiguous CPM accepted: %s", extra)
 		}
+	}
+}
+
+// An Update or Remove spelled in another case still applies in MSBuild and in
+// static evaluation, which match item types ignoring case. The literal check
+// must not miss it and edit the shadowed VersionOverride.
+func TestVersionOverrideWithItemInAnotherCaseKeepsEvaluation(t *testing.T) {
+	for name, items := range map[string]string{
+		"update": `<PackageReference Include="A" VersionOverride="2.0.0"/></ItemGroup><ItemGroup><packageReference Update="A" VersionOverride="5.0.0"/>`,
+		"remove": `<PackageReference Include="A" VersionOverride="2.0.0"/></ItemGroup><ItemGroup><packageReference Remove="A"/>`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			mustWriteFile(t, filepath.Join(root, "Directory.Packages.props"), `<Project><PropertyGroup><ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally></PropertyGroup><ItemGroup><PackageVersion Include="A" Version="1.0.0"/></ItemGroup></Project>`)
+			path := filepath.Join(root, "App", "App.csproj")
+			before := `<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup><ItemGroup>` + items + `</ItemGroup></Project>`
+			mustWriteFile(t, path, before)
+			project, err := ParseCsproj(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if name == "update" {
+				if declaration := project.Declarations["a"]; declaration.VersionSource != msbuildstatic.VersionOverride {
+					t.Fatalf("static evaluation missed the update: %+v", declaration)
+				}
+				for ref := range project.Packages {
+					if ref.Requested != "5.0.0" {
+						t.Fatalf("static evaluation did not apply the update: %+v", ref)
+					}
+				}
+			}
+			if canEditLiteralDeclaration(project, "A") {
+				t.Fatal("the literal check missed an item in another case")
+			}
+			t.Setenv("PATH", t.TempDir())
+			_, _, _, err = planPackageMutation("update", "A", "6.0.0", []mutationTarget{{project: project}}, mutationOptions{staticOwnership: true})
+			if err == nil || !strings.Contains(err.Error(), "requires MSBuild evaluation") {
+				t.Fatalf("did not retain evaluation: %v", err)
+			}
+			if readFile(t, path) != before {
+				t.Fatal("refused update changed source")
+			}
+		})
 	}
 }
 

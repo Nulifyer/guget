@@ -158,8 +158,34 @@ func canEditLiteralDeclaration(project *ParsedProject, packageID string) bool {
 	return versions == 1 && references == 1
 }
 
+// literalModelNames are the element and attribute names the declared Project
+// model and simpleLiteralUpdateInput read, by lowercase name. The model
+// matches them exactly, but MSBuild item types and metadata names ignore case,
+// so <packageReference Update="..."> is an Update the model would not see.
+var literalModelNames = func() map[string]string {
+	names := map[string]string{}
+	for _, name := range []string{
+		"Project", "PropertyGroup", "ItemGroup", "Import", "ImportGroup", "Choose", "Sdk",
+		"PackageReference", "PackageVersion", "GlobalPackageReference",
+		"Include", "Update", "Remove", "Condition", "Version", "VersionOverride", "IsImplicitlyDefined",
+	} {
+		names[strings.ToLower(name)] = name
+	}
+	return names
+}()
+
+// literalModelName reports whether name, spelled as written, is how the
+// declared model reads it: a model name in its own spelling, or a name the
+// model does not read.
+func literalModelName(name string) bool {
+	canonical, modeled := literalModelNames[strings.ToLower(name)]
+	return !modeled || canonical == name
+}
+
 // Reject constructs that the declared Project model does not represent, rather
 // than interpreting an omitted Choose, ImportGroup, or item removal as harmless.
+// A model name spelled in another case, such as <packageReference>, needs
+// MSBuild evaluation too.
 func simpleLiteralUpdateInput(data []byte) bool {
 	decoder := xml.NewDecoder(bytes.NewReader(data))
 	depth := 0
@@ -173,6 +199,9 @@ func simpleLiteralUpdateInput(data []byte) bool {
 		}
 		switch token := token.(type) {
 		case xml.StartElement:
+			if !literalModelName(token.Name.Local) {
+				return false
+			}
 			if token.Name.Local == "IsImplicitlyDefined" {
 				return false
 			}
@@ -184,6 +213,9 @@ func simpleLiteralUpdateInput(data []byte) bool {
 				}
 			}
 			for _, attr := range token.Attr {
+				if !literalModelName(attr.Name.Local) {
+					return false
+				}
 				if attr.Name.Local == "IsImplicitlyDefined" {
 					return false
 				}
@@ -193,7 +225,7 @@ func simpleLiteralUpdateInput(data []byte) bool {
 				if token.Name.Local == "Import" && attr.Name.Local == "Sdk" {
 					return false
 				}
-				if (token.Name.Local == "PackageReference" || token.Name.Local == "PackageVersion") &&
+				if (token.Name.Local == "PackageReference" || token.Name.Local == "PackageVersion" || token.Name.Local == "GlobalPackageReference") &&
 					(attr.Name.Local == "Remove" || attr.Name.Local == "Update") {
 					return false
 				}
