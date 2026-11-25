@@ -140,11 +140,15 @@ When the package already has a central version, Guget never writes a second
 `PackageVersion`; restore would ignore it. If you request that same version,
 Guget adds only the reference. If you request a different version, Guget
 refuses with exit 4. The message shows the command that changes the shared
-version for every consumer, with the project's full path:
+version for every consumer. Its `--project` is the directory of the central
+file, so the command works from any directory:
 
 ```bash
-guget update Newtonsoft.Json --version 13.0.4 --file /path/to/src/App/App.csproj
+guget update Newtonsoft.Json --version 13.0.4 --all --project /path/to/src
 ```
+
+After that update, repeat the add. The central version now matches, so Guget
+adds only the reference.
 
 `dotnet add package` behaves differently. When the central version comes from
 an imported file, it refuses the add. Otherwise it changes the shared version

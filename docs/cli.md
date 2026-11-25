@@ -316,8 +316,9 @@ guget show Newtonsoft.Json --project ./src --format json
 In a CPM workspace, `add` writes a reference without a version, and a new
 `PackageVersion` goes to the central file the project imports. When the package
 already has a central version, request that version and `add` writes only the
-reference. A different version exits 4, and the message shows the `update`
-command that changes the shared version for every project. See
+reference. A different version exits 4. The message shows an `update --all`
+command that changes the shared version for every project, and tells you to
+repeat the add after it. See
 [add a package under CPM](project-support.md#add-a-package-under-cpm).
 The CLI does not offer the TUI's choice of add locations.
 
