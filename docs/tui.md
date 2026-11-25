@@ -44,8 +44,8 @@ Compatibility follows NuGet's framework rules, judged from the frameworks the
 source lists for each version. A .NET Framework-only package counts as
 compatible with .NET, .NET Core 2.0+, and .NET Standard 2.0+ projects because
 restore accepts it through AssetTargetFallback, with warning NU1701. Target
-frameworks that come from MSBuild properties guget cannot evaluate are skipped.
-Unlisted versions appear in the version list, but guget never chooses one as
+frameworks that come from MSBuild properties Guget cannot evaluate are skipped.
+Unlisted versions appear in the version list, but Guget never chooses one as
 the latest or default version.
 
 For quick updates from the package panel:
@@ -63,14 +63,15 @@ packages already at the target, a selected project's pinned reference (it
 needs your confirmation), and rows that need a decision, such as `[deps]`
 rows. A skipped `[deps]` row is updated later in the same hold, once the
 dependency it waits for has been updated. When nothing is left to update, the
-selection rests on the first row that still needs a decision, and the status
-line gives that row's reason.
+selection rests on the first row in the list that still needs a decision. The
+status line gives that row's reason.
 
 Every update starts from a key press, so releasing the key starts nothing
-more. guget counts three or more presses less than 125 ms apart as a hold;
-any other key or mouse action ends it. Separate presses act on the selected
-row only: a row that cannot be updated reports why, and the selection stays
-at the same list position after an update.
+more. Guget counts three or more presses less than 125 ms apart as a hold.
+Any other key or mouse action ends it. During a hold, a press that arrives
+while a save or reload runs is skipped, and the next press continues. Separate
+presses act on the selected row only: a row that cannot be updated reports
+why, and the selection stays at the same list position after an update.
 
 The update target follows the [`update-target` setting](settings.md#update-target).
 The default, `compatible-stable`, is the newest stable version every affected
@@ -149,7 +150,7 @@ A requested version marked `pin` is an explicit exact-version pin such as
 pins beside each affected project's version in the detail panel.
 
 The saved package state refreshes before the next change becomes available.
-The footer shows `saving...` only for a save that takes longer than 80 ms; a
+The footer shows `saving...` only for a save that takes longer than 80 ms. A
 shorter save shows just its result.
 You can continue navigating while saving, reloading, or fetching package information.
 
@@ -228,7 +229,8 @@ it. An edit stays pending until a restore that covers it succeeds, so pressing
 `r` again after a failure retries the same projects.
 
 Guget watches project files, loaded imports, and source configuration, including
-loaded files outside the opened directory. Use `Ctrl+R` to request a fresh scan.
+loaded files outside the opened directory. A change Guget saved itself does not
+cause a reload. Use `Ctrl+R` to request a fresh scan.
 If a reload fails while a file is being saved, you can keep browsing the previous
 view. Finish or repair the save, then reload successfully before making changes.
 After a restore failure, open logs with `l` and inspect the message before retrying. See [restore troubleshooting](troubleshooting.md#restore-failed-after-an-edit).
@@ -260,8 +262,8 @@ the pointer. Double-clicking is not a separate action.
 Click Requested, Available, or Source in the package header to sort. Click the
 bracketed sort mode to cycle modes, or its arrow to reverse direction. The
 Requested and Available sorts use publication dates. In `--sort-by` and the
-`sort` setting, these modes are named `requested` and `available`; `current` is
-still accepted for `requested`.
+`sort` setting, these modes are named `requested` and `available`. `current`
+is still accepted for `requested`.
 
 To leave mouse input to the terminal for text selection and native link handling:
 
