@@ -77,8 +77,10 @@ the configuration. NuGet expands `%NAME%` in every value on all platforms.
 ```
 
 An entry needs both a username and a password, or restore rejects the whole
-file. Guget does the same and reports the file. Encrypted `Password` values
-work only on Windows. Keep passwords and tokens out of command output you share.
+file. Guget does the same and reports the file. Encrypted `Password` values,
+which `dotnet nuget add source` writes on Windows, work only on Windows and
+only for the user who encrypted them. Keep passwords and tokens out of command
+output you share.
 
 Check metadata access separately from restore:
 

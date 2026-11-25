@@ -20,6 +20,10 @@ type cryptAPIBlob struct {
 	pbData *byte
 }
 
+// nugetEntropy is the optional DPAPI entropy NuGet's EncryptionUtility adds
+// when it encrypts a password. Decryption fails without it.
+var nugetEntropy = []byte("NuGet")
+
 // decryptPassword decodes a Base64-encoded DPAPI-encrypted NuGet.Config password
 // with the current user's key.
 func decryptPassword(b64 string) (string, error) {
@@ -34,10 +38,13 @@ func decryptPassword(b64 string) (string, error) {
 		inBlob.pbData = &encrypted[0]
 	}
 
+	entropy := cryptAPIBlob{cbData: uint32(len(nugetEntropy)), pbData: &nugetEntropy[0]}
 	var outBlob cryptAPIBlob
 	r, _, callErr := cryptUnprotectData.Call(
 		uintptr(unsafe.Pointer(&inBlob)),
-		0, 0, 0, 0, 0,
+		0,
+		uintptr(unsafe.Pointer(&entropy)),
+		0, 0, 0,
 		uintptr(unsafe.Pointer(&outBlob)),
 	)
 	if r == 0 {
