@@ -289,3 +289,14 @@ test("only explicitly set VS Code settings become guget flags", async () => {
     "-p", path.dirname(project.fsPath), "-v", "debug", "-t", "nord", "-o", "status:desc", "--no-mouse",
   ]);
 });
+
+test("the requested sort is passed as current so older guget binaries accept it", async () => {
+  const s = session({ settings: {
+    sortField: { scope: "globalValue", value: "requested" },
+  } });
+  await s.activate();
+  await s.commands.get("guget.manage")();
+  assert.deepEqual(s.terminals[0].options.shellArgs, [
+    "-p", path.dirname(project.fsPath), "-o", "current:asc",
+  ]);
+});

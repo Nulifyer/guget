@@ -151,7 +151,10 @@ async function launchGuget(context: vscode.ExtensionContext, targetFolder: strin
     args.push("-t", config.get<string>("theme", "auto"));
   }
   if (isExplicitlySet(config, "sortField") || isExplicitlySet(config, "sortDirection")) {
-    const sortField = config.get<string>("sortField", "status");
+    // guget releases before "requested" accept only the older name "current"
+    // for this sort; every release accepts "current".
+    const configuredField = config.get<string>("sortField", "status");
+    const sortField = configuredField === "requested" ? "current" : configuredField;
     const sortDirection = config.get<string>("sortDirection", "asc");
     args.push("-o", `${sortField}:${sortDirection}`);
   }
