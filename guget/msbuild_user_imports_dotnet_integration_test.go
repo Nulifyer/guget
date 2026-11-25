@@ -5,6 +5,7 @@ package main
 import (
 	"maps"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -35,6 +36,12 @@ func TestUnmodeledImportsMatchDotnet(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			outside := t.TempDir()
 			t.Setenv("XDG_DATA_HOME", outside) // .NET's LocalApplicationData on Linux
+			if runtime.GOOS == "windows" {
+				// Windows takes LocalApplicationData from the known-folder
+				// API, which ignores LOCALAPPDATA; both MSBuild and guget
+				// honor this override.
+				t.Setenv("MSBuildUserExtensionsPath", filepath.Join(outside, "Microsoft", "MSBuild"))
+			}
 			repo := oracle.workspace(t, map[string]string{
 				"App/App.csproj": oracleSDKProject(`<PackageReference Include="Oracle.A" Version="1.0.0" />`),
 			})

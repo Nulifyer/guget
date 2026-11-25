@@ -15,7 +15,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -181,21 +180,10 @@ type dotnetOutdated struct {
 // target to match `dotnet list package --outdated` and `dotnet package
 // update` for a stable and a prerelease reference.
 func TestUpdateTargetStableMatchesDotnet(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("machine-wide NuGet configuration can only be isolated on Linux")
-	}
-	if _, err := exec.LookPath("dotnet"); err != nil {
-		t.Skip("dotnet SDK is not installed")
-	}
+	requireIsolatedDotnet(t)
 	base := t.TempDir()
-	env := map[string]string{
-		"HOME":                          filepath.Join(base, "home"),
-		"DOTNET_CLI_HOME":               filepath.Join(base, "home"),
-		"NUGET_COMMON_APPLICATION_DATA": filepath.Join(base, "machine"),
-		"NUGET_PACKAGES":                filepath.Join(base, "packages"),
-		"NUGET_HTTP_CACHE_PATH":         filepath.Join(base, "http-cache"),
-		"GUGET_CONFIG":                  filepath.Join(base, "guget.toml"),
-	}
+	env := isolatedNuGetEnv(base)
+	env["GUGET_CONFIG"] = filepath.Join(base, "guget.toml")
 	mustWriteFile(t, filepath.Join(base, userConfigPath), oracleConfig(""))
 
 	// Feed a: Oracle.Stable 1.0.0, 2.0.0-beta.1, unlisted 3.0.0; Oracle.Pre

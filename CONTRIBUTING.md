@@ -50,8 +50,10 @@ test checks that Guget reaches the same result for NuGet configuration, package
 declarations, framework compatibility, or the stable update target. The tests
 give `dotnet` a temporary `HOME` and NuGet folders, and give Guget a temporary
 settings file, so your configuration and caches do not affect them. These
-tests need the .NET SDK on Linux. They skip on other systems or when `dotnet`
-is missing. Run them when you change one of those areas:
+tests need the .NET SDK on Linux or Windows. They skip on macOS, where NuGet's
+machine-wide folder cannot be moved, and when `dotnet` is missing. The
+encrypted-password case runs only on Windows. Run them when you change one of
+those areas:
 
 ```bash
 go test -tags=integration -run 'MatchesDotnet|MatchDotnet' -timeout=20m .

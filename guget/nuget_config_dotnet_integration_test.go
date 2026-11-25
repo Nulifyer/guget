@@ -69,9 +69,19 @@ type nugetOracleCase struct {
 	// Compare which sources restore asks for the probe package. Only cases
 	// where every source accepts the sent credentials can be compared.
 	mapping bool
+	// dotnet commands run in base before restore, and the only system they
+	// run on when set.
+	setup [][]string
+	goos  string
+	// Text repo/nuget.config must contain after setup.
+	setupWrote string
 }
 
-const oracleProject = `<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup><ItemGroup><PackageReference Include="Oracle.Probe" Version="1.0.0" /></ItemGroup></Project>`
+// The probe is the only package restore asks for: some SDK builds would also
+// download targeting packs from the feeds. SdkAnalysisLevel 8 makes an HTTP
+// source from RestoreSources a warning (NU1803) instead of error NU1302, so
+// restore still contacts it.
+const oracleProject = `<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework><EnableTargetingPackDownload>false</EnableTargetingPackDownload><NuGetAudit>false</NuGetAudit><SdkAnalysisLevel>8.0.100</SdkAnalysisLevel></PropertyGroup><ItemGroup><PackageReference Include="Oracle.Probe" Version="1.0.0" /></ItemGroup></Project>`
 
 func oracleConfig(body string) string {
 	return `<?xml version="1.0" encoding="utf-8"?><configuration>` + body + `</configuration>`
@@ -87,16 +97,41 @@ func oracleCredentials(source, user, password string) string {
 
 const userConfigPath = "home/.nuget/NuGet/NuGet.Config"
 
-// TestNuGetConfigurationMatchesDotnetRestore runs each configuration through
-// dotnet restore against a recording feed and through guget's resolver, and
-// requires both to agree on contacted sources, credentials, and mapping.
-func TestNuGetConfigurationMatchesDotnetRestore(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("machine-wide NuGet configuration can only be isolated on Linux")
+// requireIsolatedDotnet skips a test that compares guget with dotnet when
+// the SDK is missing or NuGet's folders cannot be redirected. macOS fixes the
+// machine-wide folder at /Library/Application Support/NuGet.
+func requireIsolatedDotnet(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "darwin" {
+		t.Skip("machine-wide NuGet configuration cannot be isolated on macOS")
 	}
 	if _, err := exec.LookPath("dotnet"); err != nil {
 		t.Skip("dotnet SDK is not installed")
 	}
+}
+
+// isolatedNuGetEnv points the NuGet folders dotnet and guget use at base.
+// NuGet finds the user and machine-wide folders from DOTNET_CLI_HOME and
+// NUGET_COMMON_APPLICATION_DATA on Linux, and from APPDATA and
+// ProgramFiles(x86) on Windows. Both put the user configuration at
+// userConfigPath and the machine-wide folder at machine/NuGet.
+func isolatedNuGetEnv(base string) map[string]string {
+	return map[string]string{
+		"HOME":                          filepath.Join(base, "home"),
+		"DOTNET_CLI_HOME":               filepath.Join(base, "home"),
+		"APPDATA":                       filepath.Join(base, "home", ".nuget"),
+		"NUGET_COMMON_APPLICATION_DATA": filepath.Join(base, "machine"),
+		"ProgramFiles(x86)":             filepath.Join(base, "machine"),
+		"NUGET_PACKAGES":                filepath.Join(base, "packages"),
+		"NUGET_HTTP_CACHE_PATH":         filepath.Join(base, "http-cache"),
+	}
+}
+
+// TestNuGetConfigurationMatchesDotnetRestore runs each configuration through
+// dotnet restore against a recording feed and through guget's resolver, and
+// requires both to agree on contacted sources, credentials, and mapping.
+func TestNuGetConfigurationMatchesDotnetRestore(t *testing.T) {
+	requireIsolatedDotnet(t)
 	empty := oracleConfig("")
 	cases := []nugetOracleCase{
 		{name: "percent variables expand in URLs and credentials", env: map[string]string{"FEED_PATH": "a", "FEED_USER": "user1", "FEED_TOKEN": "pass1"}, files: map[string]string{
@@ -207,10 +242,17 @@ func TestNuGetConfigurationMatchesDotnetRestore(t *testing.T) {
 		{name: "clear inside credentials is invalid", files: map[string]string{
 			"repo/nuget.config": oracleConfig(`<packageSources><clear/>` + oracleSource("feed", "x") + `</packageSources><packageSourceCredentials><clear/></packageSourceCredentials>`),
 		}},
+		// dotnet encrypts the password with DPAPI for the current user.
+		{name: "encrypted password", goos: "windows", files: map[string]string{
+			"repo/nuget.config": oracleConfig(`<packageSources><clear/>` + oracleSource("feed", "x") + `</packageSources>`),
+		}, setup: [][]string{{"nuget", "update", "source", "feed", "--username", "encu", "--password", "enc;p=w", "--configfile", "repo/nuget.config"}}, setupWrote: `key="Password"`},
 	}
 
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
+			if test.goos != "" && test.goos != runtime.GOOS {
+				t.Skipf("runs on %s only", test.goos)
+			}
 			base := t.TempDir()
 			feed := &recordingFeed{credentials: map[string]string{}, probed: map[string]bool{}}
 			server := httptest.NewServer(feed)
@@ -223,17 +265,21 @@ func TestNuGetConfigurationMatchesDotnetRestore(t *testing.T) {
 				content = strings.NewReplacer("{{F}}", server.URL, "{{PORT}}", serverPort(server.URL)).Replace(content)
 				mustWriteFile(t, filepath.Join(base, filepath.FromSlash(path)), content)
 			}
-			env := map[string]string{
-				"HOME":                          filepath.Join(base, "home"),
-				"DOTNET_CLI_HOME":               filepath.Join(base, "home"),
-				"NUGET_COMMON_APPLICATION_DATA": filepath.Join(base, "machine"),
-				"NUGET_PACKAGES":                filepath.Join(base, "packages"),
-				"NUGET_HTTP_CACHE_PATH":         filepath.Join(base, "http-cache"),
-			}
+			env := isolatedNuGetEnv(base)
 			for name, value := range test.env {
 				env[name] = strings.ReplaceAll(value, "{{BASE}}", base)
 			}
 			project := filepath.Join(base, "repo", "src", "App", "App.csproj")
+			for _, args := range test.setup {
+				if output, err := runDotnet(t, env, base, args...); err != nil {
+					t.Fatalf("dotnet %s: %v\n%s", strings.Join(args, " "), err, output)
+				}
+			}
+			if test.setupWrote != "" {
+				if data, err := os.ReadFile(filepath.Join(base, "repo", "nuget.config")); err != nil || !strings.Contains(string(data), test.setupWrote) {
+					t.Fatalf("setup did not write %s: %v\n%s", test.setupWrote, err, data)
+				}
+			}
 
 			restoreOutput := runOracleRestore(t, project, env)
 			restoreRejected := strings.Contains(restoreOutput, "Unable to parse config file")
@@ -259,12 +305,15 @@ func TestNuGetConfigurationMatchesDotnetRestore(t *testing.T) {
 					t.Fatalf("guget resolved a source restore cannot reach in this test: %+v", source)
 				}
 				name := strings.Split(path, "/")[0]
+				// With package source mapping, restore contacts only the
+				// sources mapped for the probe.
+				if !resolved.Mapping.Allows(source.Name, source.URL, "Oracle.Probe") {
+					continue
+				}
+				wantProbed[name] = true
 				wantCredentials[name] = ""
 				if source.Username != "" || source.Password != "" {
 					wantCredentials[name] = source.Username + ":" + source.Password
-				}
-				if resolved.Mapping.Allows(source.Name, source.URL, "Oracle.Probe") {
-					wantProbed[name] = true
 				}
 			}
 			if !reflect.DeepEqual(feed.credentials, wantCredentials) {
@@ -282,6 +331,7 @@ func runOracleRestore(t *testing.T, project string, env map[string]string) strin
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	command := exec.CommandContext(ctx, "dotnet", "restore", project, "--disable-parallel", "-nologo")
+	command.Dir = filepath.Dir(project)
 	command.Env = append(os.Environ(), "DOTNET_NOLOGO=1", "DOTNET_CLI_TELEMETRY_OPTOUT=1", "DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1")
 	for name, value := range env {
 		command.Env = append(command.Env, name+"="+value)

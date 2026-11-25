@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -25,25 +24,15 @@ type packageOracle struct {
 
 func newPackageOracle(t *testing.T) *packageOracle {
 	t.Helper()
-	if runtime.GOOS != "linux" {
-		t.Skip("machine-wide NuGet configuration can only be isolated on Linux")
-	}
-	if _, err := exec.LookPath("dotnet"); err != nil {
-		t.Skip("dotnet SDK is not installed")
-	}
+	requireIsolatedDotnet(t)
 	base := t.TempDir()
 	oracle := &packageOracle{base: base, feed: filepath.Join(base, "feed")}
-	for name, value := range map[string]string{
-		"HOME":                                      filepath.Join(base, "home"),
-		"DOTNET_CLI_HOME":                           filepath.Join(base, "home"),
-		"NUGET_PACKAGES":                            filepath.Join(base, "packages"),
-		"NUGET_HTTP_CACHE_PATH":                     filepath.Join(base, "http-cache"),
-		"NUGET_COMMON_APPLICATION_DATA":             filepath.Join(base, "machine"),
-		"DOTNET_NOLOGO":                             "1",
-		"DOTNET_CLI_TELEMETRY_OPTOUT":               "1",
-		"DOTNET_SKIP_FIRST_TIME_EXPERIENCE":         "1",
-		"DOTNET_CLI_WORKLOAD_UPDATE_NOTIFY_DISABLE": "1",
-	} {
+	env := isolatedNuGetEnv(base)
+	env["DOTNET_NOLOGO"] = "1"
+	env["DOTNET_CLI_TELEMETRY_OPTOUT"] = "1"
+	env["DOTNET_SKIP_FIRST_TIME_EXPERIENCE"] = "1"
+	env["DOTNET_CLI_WORKLOAD_UPDATE_NOTIFY_DISABLE"] = "1"
+	for name, value := range env {
 		t.Setenv(name, value)
 	}
 	for _, name := range []string{"ContinuousIntegrationBuild", "RestoreLockedMode", "ManagePackageVersionsCentrally", "DirectoryPackagesPropsPath"} {
@@ -124,7 +113,9 @@ func (o *packageOracle) evaluate(t *testing.T, project string) msbuildView {
 	}
 	view := msbuildView{CPM: strings.EqualFold(result.Properties["_CentralPackageVersionsEnabled"], "true"), Versions: map[string]string{}}
 	if view.CPM {
-		view.Central = result.Properties["DirectoryPackagesPropsPath"]
+		// MSBuild keeps the separators of the property text, such as
+		// repo\eng/Versions.props on Windows.
+		view.Central = filepath.Clean(result.Properties["DirectoryPackagesPropsPath"])
 	}
 	central := map[string]string{}
 	for _, item := range result.Items["PackageVersion"] {

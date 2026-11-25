@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -21,12 +20,7 @@ import (
 // guget's CompatibilityWith. Packages are written in-process and every NuGet
 // location is isolated, so the test needs no network.
 func TestFrameworkCompatibilityMatchesDotnetRestore(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("machine-wide NuGet configuration can only be isolated on Linux")
-	}
-	if _, err := exec.LookPath("dotnet"); err != nil {
-		t.Skip("dotnet SDK is not installed")
-	}
+	requireIsolatedDotnet(t)
 	cases := []struct{ project, pkg string }{
 		{"net48", "netstandard2.0"},
 		{"net461", "netstandard2.0"},
@@ -72,13 +66,7 @@ func TestFrameworkCompatibilityMatchesDotnetRestore(t *testing.T) {
 <EnableWindowsTargeting>true</EnableWindowsTargeting>
 <CheckEolTargetFramework>false</CheckEolTargetFramework>
 </PropertyGroup><ItemGroup><PackageReference Include="%s" Version="1.0.0" /></ItemGroup></Project>`, tc.project, probeID(i)))
-			output := runCompatibilityRestore(t, project, filepath.Join(base, "nuget.config"), map[string]string{
-				"HOME":                          filepath.Join(dir, "home"),
-				"DOTNET_CLI_HOME":               filepath.Join(dir, "home"),
-				"NUGET_COMMON_APPLICATION_DATA": filepath.Join(dir, "machine"),
-				"NUGET_PACKAGES":                filepath.Join(dir, "packages"),
-				"NUGET_HTTP_CACHE_PATH":         filepath.Join(dir, "http-cache"),
-			})
+			output := runCompatibilityRestore(t, project, filepath.Join(base, "nuget.config"), isolatedNuGetEnv(dir))
 			var restore FrameworkCompatibility
 			switch {
 			case strings.Contains(output, "error NU1202"):
@@ -140,6 +128,7 @@ func runCompatibilityRestore(t *testing.T, project, config string, env map[strin
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	command := exec.CommandContext(ctx, "dotnet", "restore", project, "--configfile", config, "-nologo")
+	command.Dir = filepath.Dir(project)
 	command.Env = append(os.Environ(), "DOTNET_NOLOGO=1", "DOTNET_CLI_TELEMETRY_OPTOUT=1", "DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1", "MSBUILDDISABLENODEREUSE=1")
 	for name, value := range env {
 		command.Env = append(command.Env, name+"="+value)
