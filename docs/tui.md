@@ -57,6 +57,21 @@ For quick updates from the package panel:
 | `a` | The `stable` target for the selected project: the newest stable version, whatever its frameworks. |
 | `A` | Apply the selected package's `stable` target across projects. |
 
+Hold one of these keys to update the whole list. Each key repeat updates one
+package and moves the selection to it. The hold skips rows it cannot update:
+packages already at the target, a selected project's pinned reference (it
+needs your confirmation), and rows that need a decision, such as `[deps]`
+rows. A skipped `[deps]` row is updated later in the same hold, once the
+dependency it waits for has been updated. When nothing is left to update, the
+selection rests on the first row that still needs a decision, and the status
+line gives that row's reason.
+
+Every update starts from a key press, so releasing the key starts nothing
+more. guget counts three or more presses less than 125 ms apart as a hold;
+any other key or mouse action ends it. Separate presses act on the selected
+row only: a row that cannot be updated reports why, and the selection stays
+at the same list position after an update.
+
 The update target follows the [`update-target` setting](settings.md#update-target).
 The default, `compatible-stable`, is the newest stable version every affected
 framework can use. `a` and `A` always choose what `dotnet package update`

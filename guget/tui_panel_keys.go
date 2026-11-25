@@ -38,14 +38,8 @@ func (p *packagePanel) HandleKey(k ui.KeyEvent) ui.Effect {
 		m.movePackageCursor(-1)
 	case "down":
 		m.movePackageCursor(1)
-	case "u":
-		return m.updatePackage(false, scopeSelected)
-	case "U":
-		return m.updatePackage(false, scopeAll)
-	case "a":
-		return m.updatePackage(true, scopeSelected)
-	case "A":
-		return m.updatePackage(true, scopeAll)
+	case "u", "U", "a", "A":
+		return m.pressUpdateKey(mainKey(k.String()))
 	case "v":
 		m.openVersionPicker()
 	case "n":

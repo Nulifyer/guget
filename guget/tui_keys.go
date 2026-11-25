@@ -25,6 +25,8 @@ var mainKeyBindings = []mainKeyBinding{
 	{"U", nil, "U", "update selected package to the update target (all projects)", "Package actions  (packages panel)"},
 	{"a", nil, "a", "update to latest stable, whatever the frameworks; keep row (selected project, or all from All Projects)", "Package actions  (packages panel)"},
 	{"A", nil, "A", "update selected package to latest stable, whatever the frameworks (all projects)", "Package actions  (packages panel)"},
+	// A help row only: holding is detected from the timing of the four keys above.
+	{"hold update key", nil, "hold u U a A", "update the whole list: each repeat updates the next package the key can update and skips the rest", "Package actions  (packages panel)"},
 	{"v", nil, "v", "pick a specific version from the list", "Package actions  (packages panel)"},
 	{"d", nil, "d", "remove selected reference (every project from All Projects; a props row must hold it)", "Package actions  (packages panel)"},
 	{"t", nil, "t", "show declared dependency tree for package", "Package actions  (packages panel)"},

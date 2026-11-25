@@ -88,6 +88,8 @@ type App struct {
 	pendingRestoreChanges []string
 	// restoringProjects is how many projects the running restore covers.
 	restoringProjects int
+	// held is the update key the user keeps pressed, if any.
+	held heldUpdate
 	// savingSince is when the latest save started.
 	savingSince time.Time
 	// clock replaces time.Now in tests of time-dependent behavior.
@@ -482,6 +484,7 @@ func (m *App) HandleEvent(msg ui.Event) ui.Effect {
 		m.depTree.vp.SetContent(m.depTree.buildContent())
 
 	case mouseInputMsg:
+		m.endHeldUpdate()
 		cmds = append(cmds, m.handleMouse(msg))
 
 	case ui.KeyRelease:
@@ -499,6 +502,7 @@ func (m *App) HandleEvent(msg ui.Event) ui.Effect {
 			return nil
 		}
 		if o := m.activeOverlay(); o != nil {
+			m.endHeldUpdate()
 			// Reconcile before dispatch as a prior event may have opened a dialog.
 			footer := m.renderFooter()
 			m.host.Reconcile(m.componentNodes(footer, style.Height(footer)))
@@ -557,6 +561,9 @@ func (m *App) saveFailureText(err error) string {
 func (m *App) handleKey(msg ui.KeyEvent) ui.Effect {
 	if _, pressed := msg.(ui.KeyPress); !pressed {
 		return nil
+	}
+	if m.focus != focusPackages || mainKey(msg.String()) != m.held.key {
+		m.endHeldUpdate()
 	}
 	switch mainKey(msg.String()) {
 	case "ctrl+x":
